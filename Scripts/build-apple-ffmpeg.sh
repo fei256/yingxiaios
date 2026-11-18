@@ -60,12 +60,25 @@ trap 'rmdir "$CACHE/lock"' EXIT
 mkdir -p "$WORK"
 
 # RECIPE
+clone_with_retry() {
+  local clone_url=$1 clone_branch=$2 clone_destination=$3 clone_attempt
+  for clone_attempt in 1 2 3; do
+    rm -rf "$clone_destination"
+    if git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$clone_branch" "$clone_url" "$clone_destination"; then
+      return 0
+    fi
+    [ "$clone_attempt" -eq 3 ] && break
+    echo "Dependency clone failed; retrying in $((clone_attempt * 5)) seconds." >&2
+    sleep "$((clone_attempt * 5))"
+  done
+  return 1
+}
 VERSION=8.1.3
 COMMIT=1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7
 SOURCE="$WORK/FFmpeg-n$VERSION"
 if [ ! -f "$SOURCE/configure" ]; then
   rm -rf "$SOURCE.download"
-  git -c advice.detachedHead=false clone --quiet --depth 1 --branch "n$VERSION" https://github.com/FFmpeg/FFmpeg.git "$SOURCE.download"
+  clone_with_retry https://github.com/FFmpeg/FFmpeg.git "n$VERSION" "$SOURCE.download"
   test "$(git -C "$SOURCE.download" rev-parse HEAD)" = "$COMMIT"
   rm -rf "$SOURCE"; mv "$SOURCE.download" "$SOURCE"
 fi
@@ -77,7 +90,7 @@ DAV1D_COMMIT=54706fc6bc0cdecab7e9593974a4039cc038fca7
 DAV1D="$WORK/dav1d-$DAV1D_VERSION"
 if [ ! -f "$DAV1D/meson.build" ]; then
   rm -rf "$DAV1D.download"
-  git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$DAV1D_VERSION" https://code.videolan.org/videolan/dav1d.git "$DAV1D.download"
+  clone_with_retry https://code.videolan.org/videolan/dav1d.git "$DAV1D_VERSION" "$DAV1D.download"
   test "$(git -C "$DAV1D.download" rev-parse HEAD)" = "$DAV1D_COMMIT"
   rm -rf "$DAV1D"; mv "$DAV1D.download" "$DAV1D"
 fi

@@ -98,6 +98,7 @@ jobs:
           from pathlib import Path
           import subprocess
           import sys
+          import time
           lock = json.loads(Path('Vendor/AV3A/SOURCE-INVENTORY.json').read_text())
           archive = Path('build/downloads/av3a-' + lock['commit'] + '.tar.gz')
           archive.parent.mkdir(parents=True, exist_ok=True)
@@ -105,8 +106,16 @@ jobs:
               url = lock['repository'].replace('https://github.com/', 'https://codeload.github.com/') + '/tar.gz/' + lock['commit']
               subprocess.run(['curl', '--fail', '--location', '--retry', '3', '--connect-timeout', '30',
                               '--max-time', '1800', '--output', str(archive), url], check=True)
-          subprocess.run([sys.executable, 'Scripts/prepare-ios-dependencies.py',
-                          '--av3a-archive', str(archive)], check=True)
+          command = [sys.executable, 'Scripts/prepare-ios-dependencies.py',
+                     '--av3a-archive', str(archive), '--skip-package-resolution']
+          for attempt in range(1, 4):
+              result = subprocess.run(command)
+              if result.returncode == 0:
+                  break
+              if attempt == 3:
+                  raise SystemExit(result.returncode)
+              print(f'Dependency preparation failed; retrying attempt {attempt + 1}/3.', flush=True)
+              time.sleep(15)
           PY
 
       - name: Save native dependencies
@@ -132,6 +141,18 @@ jobs:
             Vendor/AVSNative/sources
             Vendor/DiscNative/sources
 
+      - name: Resolve pinned Swift packages
+        run: |
+          for ci_attempt in 1 2 3; do
+            if xcodebuild -resolvePackageDependencies -project Yingxia-iOS.xcodeproj \
+              -scheme TVBox-iOS -clonedSourcePackagesDirPath build/SourcePackages \
+              -onlyUsePackageVersionsFromResolvedFile 2>&1 | tee build/ci/swift-packages.log; then
+              break
+            fi
+            test "$ci_attempt" -lt 3 || exit 1
+            sleep 15
+          done
+
       - name: Build and validate unsigned IPA
         run: |
           python3 Scripts/build-ios-ipa.py --check --build-number "$CI_BUILD_NUMBER" --jobs "$JOBS"
@@ -144,6 +165,7 @@ jobs:
           name: Yingxia-iOS-build${{ env.CI_BUILD_NUMBER }}-unsigned
           path: artifacts/latest/
           if-no-files-found: error
+          overwrite: true
           compression-level: 0
           retention-days: 30
 

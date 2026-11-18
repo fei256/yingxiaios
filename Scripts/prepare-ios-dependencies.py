@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prepare the pinned dependencies and Swift packages needed for the iOS IPA build."""
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--av3a-archive', type=Path, help='Locally obtained AV3A reference archive, according to its terms.')
+    parser.add_argument('--skip-package-resolution', action='store_true', help='Prepare native dependencies and the project; resolve Swift packages separately.')
     args = parser.parse_args()
     if sys.version_info < (3, 10):
         raise SystemExit('Python 3.10 or newer is required.')
@@ -34,8 +36,19 @@ def main():
         if node.exists() or node.is_symlink():
             raise SystemExit('Incomplete Node dependency exists; inspect ' + str(node))
         node.symlink_to((ROOT / 'build/NodeMobile').resolve(), target_is_directory=True)
-    if not (ROOT / 'build/ApplePython/iphoneos/Frameworks/Python.framework/Python').is_file():
+    python_inputs = ['Scripts/build-apple-python.sh', 'Scripts/build-apple-python-wheels.sh',
+                     'Scripts/build-apple-python-cryptography.sh', 'Scripts/fetch-build-python.sh',
+                     'Runtime/PythonHost/requirements.txt', 'Config/Python/PrivacyInfo.xcprivacy']
+    signature = hashlib.sha256()
+    for name in python_inputs:
+        signature.update(name.encode())
+        signature.update((ROOT / name).read_bytes())
+    python_stamp = ROOT / 'build/ApplePython/iphoneos/.prepared'
+    python_ready = ((ROOT / 'build/ApplePython/iphoneos/Frameworks/Python.framework/Python').is_file()
+                    and python_stamp.is_file() and python_stamp.read_text() == signature.hexdigest())
+    if not python_ready:
         subprocess.run(['bash', 'Scripts/build-apple-python.sh', 'ios'], cwd=ROOT, check=True)
+        python_stamp.write_text(signature.hexdigest())
     env = dict(os.environ, TVBOX_FFMPEG_SLICES='ios', TVBOX_FFMPEG_CACHE=str(ROOT / 'build/FFmpeg/cache'))
     subprocess.run(['bash', 'Scripts/build-ios-disc.sh'], cwd=ROOT, env=env, check=True)
     subprocess.run(['bash', 'Scripts/build-apple-ffmpeg.sh'], cwd=ROOT, env=env, check=True)
@@ -47,6 +60,9 @@ def main():
     resolved = ROOT / 'Yingxia-iOS.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved'
     resolved.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / 'Package.resolved', resolved)
+    if args.skip_package_resolution:
+        print('Native dependencies and project prepared; Swift package resolution was skipped.')
+        return
     subprocess.run(['xcodebuild', '-resolvePackageDependencies', '-project', 'Yingxia-iOS.xcodeproj',
                     '-scheme', 'TVBox-iOS', '-clonedSourcePackagesDirPath', 'build/SourcePackages',
                     '-onlyUsePackageVersionsFromResolvedFile'], cwd=ROOT, check=True)
