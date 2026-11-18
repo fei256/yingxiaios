@@ -46,6 +46,16 @@ python3 Scripts/prepare-ios-dependencies.py --av3a-archive /path/to/av3a-pinned-
 
 ## 构建 IPA
 
+### 在 Windows 上通过 GitHub Actions 构建
+
+打开仓库的 **Actions → Build iOS IPA → Run workflow**，选择 `main` 后运行。`Build number` 留空时采用 Actions 运行编号，也可以填写一个正整数。推送到 `main` 的应用、运行时、原生依赖或构建脚本修改也会自动触发构建；仅修改网站、服务或说明文档不会触发。
+
+工作流使用 `macos-15-intel` 和 Xcode 16.1，下载固定版本依赖并校验 SHA-256，再调用下方相同的工程生成、归档和 IPA 检查脚本。AV3A 参考归档从 `Vendor/AV3A/SOURCE-INVENTORY.json` 记录的上游仓库及固定提交下载，源码不提交到本仓库；其原始条款仍适用，见 `Vendor/AV3A/UPSTREAM.md`。首次构建需要编译原生依赖，后续运行会尝试复用缓存。
+
+构建成功后，从运行页面的 **Artifacts** 下载 `Yingxia-iOS-build…-unsigned`，解压得到 IPA、`SHA256SUMS.txt` 和检查报告。IPA 保留 30 天，诊断日志保留 14 天。输出面向 iPhone/iPad、最低 iOS 16.2，安装前需自行签名。此流程不需要 Apple 签名证书或开发者账号，也不会自动发布 Release。
+
+### 在 macOS 上本地构建
+
 ```sh
 python3 Scripts/build-ios-ipa.py --check --build-number 1
 python3 Scripts/build-ios-ipa.py --build-number 1
