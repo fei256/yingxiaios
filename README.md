@@ -1,8 +1,6 @@
 # 映匣 Yingxia · iOS
 
-映匣的独立 iOS 源码，面向 iPhone / iPad，最低 iOS 16.2。当前版本为 **1.8.13 / build01**，支持 Python、Node、QuickJS、FFmpeg、KSPlayer、原盘读取和离线语音字幕；iOS 不执行 JVM、JAR 或 DEX。
-
-本快照以 2026-11-17 的本地源码和 build01 为基础，包含最新的 Python 自动弹幕、首页轮播后台更新、HTML/Python 列表拖动排序，以及订阅配置网页导出到“文件”的修复。
+映匣的独立 iOS 源码，面向 iPhone / iPad，最低 iOS 16。当前版本为 **1.8.13 **，支持 Python、Node、QuickJS、FFmpeg、KSPlayer、原盘读取和离线语音字幕；iOS 不执行 JVM、JAR 或 DEX。
 
 ## 内容
 
