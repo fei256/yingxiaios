@@ -734,6 +734,7 @@ struct MobilePlayerView: View {
         }
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
+        .environment(\.playerControlMinimum, playerSize.width < 350 ? 44 : 48)
     }
 
     // MARK: Top row
