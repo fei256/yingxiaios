@@ -1,4 +1,7 @@
 import pathlib, subprocess, plistlib, json, re, importlib.metadata as metadata, hashlib, sys
+from build_validation import require_validation_enabled
+
+require_validation_enabled()
 repo=pathlib.Path.cwd(); out=pathlib.Path(sys.argv[2]); out.mkdir(parents=True, exist_ok=True); app=pathlib.Path(sys.argv[1]); source=repo/'build/ApplePython/iphoneos'
 def command(*args):return subprocess.check_output(args,text=True)
 def version(s):return tuple(map(int,s.split('.')))+(0,)*(3-len(s.split('.')))
@@ -43,6 +46,8 @@ executable=app/info['CFBundleExecutable']
 report['app_info']={k:info.get(k) for k in ['CFBundleIdentifier','CFBundleExecutable','CFBundleShortVersionString','CFBundleVersion','MinimumOSVersion','UIDeviceFamily']}
 app_build=command('xcrun','vtool','-show-build',str(executable))
 report['app_build']=app_build
+report['app_platforms']=re.findall(r'\bplatform\s+(\S+)',app_build)
+if report['app_platforms']!=['IOS']:errors.append('App Mach-O platform is not IOS: '+str(report['app_platforms']))
 report['app_archs']=command('lipo','-archs',str(executable)).strip().split()
 if report['app_archs']!=['arm64']:errors.append('App architecture mismatch')
 if info.get('MinimumOSVersion')!='16.2':errors.append('App plist minimum not16.2')
@@ -66,6 +71,8 @@ for binary in app.rglob('*'):
  native_build=command('xcrun','vtool','-show-build',str(binary))
  native_archs=command('lipo','-archs',str(binary)).strip().split()
  native_min=re.findall(r'\bminos\s+(\S+)',native_build)
+ native_platforms=re.findall(r'\bplatform\s+(\S+)',native_build)
+ if native_platforms!=['IOS']:errors.append(str(binary.relative_to(app))+': platform '+str(native_platforms))
  if native_archs!=['arm64']:errors.append(str(binary.relative_to(app))+': architecture '+str(native_archs))
  if not native_min or any(version(v)>version('16.2') for v in native_min):errors.append(str(binary.relative_to(app))+': minimum '+str(native_min))
  native_deps=[]
@@ -77,11 +84,11 @@ for binary in app.rglob('*'):
    if dep.startswith(prefix):resolved=(base/dep[len(prefix):]).is_file()
   native_deps.append({'name':dep,'resolved':resolved})
   if not resolved:errors.append(str(binary.relative_to(app))+': unresolved '+dep)
- all_native.append({'path':str(binary.relative_to(app)),'archs':native_archs,'minos':native_min,'dependencies':native_deps})
+ all_native.append({'path':str(binary.relative_to(app)),'archs':native_archs,'minos':native_min,'platforms':native_platforms,'dependencies':native_deps})
 report['all_native']=all_native
 report['all_native_count']=len(all_native)
 report['app_sha256']=hashlib.sha256(executable.read_bytes()).hexdigest()
 report['errors']=errors
 (out/'ipa-validation.json').write_text(json.dumps(report,indent=2))
 print(json.dumps({k:v for k,v in report.items() if k!='frameworks'},indent=2))
-assert not errors, errors
+if errors:raise SystemExit('IPA validation failed: '+str(errors))

@@ -4,19 +4,16 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
-import subprocess
 import tarfile
-import tempfile
+
+from build_validation import sha256
+from verified_download import download_verified
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def digest(path):
-    value = hashlib.sha256()
-    with path.open('rb') as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b''):
-            value.update(block)
-    return value.hexdigest()
+    return sha256(path)
 
 
 def prepare_av3a(archive):
@@ -47,8 +44,15 @@ def prepare_av3a(archive):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--av3a-archive', type=Path, help='Locally obtained pinned AV3A archive; see its upstream terms.')
+    av3a = parser.add_mutually_exclusive_group()
+    av3a.add_argument('--av3a-archive', type=Path, help='Locally obtained pinned AV3A archive; see its upstream terms.')
+    av3a.add_argument('--fetch-av3a', action='store_true', help='Fetch the pinned AV3A archive from its recorded upstream; its terms apply.')
     args = parser.parse_args()
+    if args.fetch_av3a:
+        inventory = json.loads((ROOT / 'Vendor/AV3A/SOURCE-INVENTORY.json').read_text())
+        url = inventory['repository'].replace('https://github.com/', 'https://codeload.github.com/') + '/tar.gz/' + inventory['commit']
+        args.av3a_archive = download_verified(url, inventory['archive_sha256'],
+                                            ROOT / 'build/downloads' / ('av3a-' + inventory['commit'] + '.tar.gz'))
     prepare_av3a(args.av3a_archive)
     lock = json.loads((ROOT / 'Vendor/dependency-downloads.json').read_text())
     for item in lock['archives']:
@@ -58,14 +62,7 @@ def main():
         if target.is_file() and digest(target) == item['sha256']:
             print('Ready: ' + item['path'])
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix='.dependency-', dir=target.parent) as directory:
-            temporary = Path(directory) / 'download'
-            subprocess.run(['curl', '--fail', '--location', '--retry', '3', '--connect-timeout', '30',
-                            '--max-time', '1800', '--output', str(temporary), item['url']], check=True)
-            if digest(temporary) != item['sha256']:
-                raise SystemExit('Dependency SHA-256 mismatch: ' + item['path'])
-            temporary.replace(target)
+        download_verified(item['url'], item['sha256'], target)
         print('Prepared: ' + item['path'])
 
 

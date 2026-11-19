@@ -26,7 +26,7 @@ case "$FAMILY" in
   iOS) MINIMUM_OS=16.2 ;;
   tvOS) MINIMUM_OS=17.0 ;;
 esac
-WORK="$PWD/build/apple-python"
+WORK="${APPLE_PYTHON_WORK:-$PWD/build/apple-python}"
 XCFRAMEWORK="$WORK/$FAMILY-$VERSION-$SUPPORT/Python.xcframework"
 [ -d "$XCFRAMEWORK" ] || { echo "Missing $XCFRAMEWORK: run Scripts/build-apple-python.sh $TARGET." >&2; exit 1; }
 WHEELS="$WORK/wheels/$PLATFORM/$MINIMUM_OS"
@@ -52,10 +52,7 @@ fi
 
 fetch() {  # url sha256 -> the unpacked folder in $WORK/sources
   local archive="$WORK/sources/$(basename "$1")"
-  if [ ! -f "$archive" ]; then
-    curl -fL --retry 2 "$1" -o "$archive.download"
-    mv "$archive.download" "$archive"
-  fi
+  python3 Scripts/verified_download.py --url "$1" --sha256 "$2" --output "$archive"
   echo "$2  $archive" | shasum -a 256 -c - >/dev/null
   [ -d "${archive%.tar.xz}" ] || tar -xJf "$archive" -C "$WORK/sources"
 }

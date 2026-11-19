@@ -15,11 +15,11 @@ if [ ! -x "$DEST/python/bin/python3.14" ]; then
   mkdir -p "$PWD/build/tools"
   TMP=$(mktemp -d "$PWD/build/tools/.python.XXXXXX")
   trap 'rm -rf "$TMP"' EXIT
-  curl -fsSL --retry 3 "https://github.com/astral-sh/python-build-standalone/releases/download/$RELEASE/cpython-$VERSION%2B$RELEASE-$ARCH-apple-darwin-install_only.tar.gz" -o "$TMP/python.tar.gz"
+  python3 Scripts/verified_download.py --url "https://github.com/astral-sh/python-build-standalone/releases/download/$RELEASE/cpython-$VERSION%2B$RELEASE-$ARCH-apple-darwin-install_only.tar.gz" --sha256 "$SHA256" --output "$TMP/python.tar.gz"
   echo "$SHA256  $TMP/python.tar.gz" | shasum -a 256 -c - >&2
   mkdir "$TMP/release"
   tar -xzf "$TMP/python.tar.gz" -C "$TMP/release"
   mv "$TMP/release" "$DEST"
 fi
-"$DEST/python/bin/python3.14" -c 'import sys; assert sys.version_info[:2] == (3, 14)'
+"$DEST/python/bin/python3.14" -c 'import sys; sys.version_info[:2] == (3, 14) or sys.exit("Build interpreter must be Python 3.14")'
 echo "$DEST/python/bin/python3.14"

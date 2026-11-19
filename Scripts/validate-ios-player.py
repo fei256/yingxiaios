@@ -7,6 +7,10 @@ import plistlib
 import re
 import sys
 
+from build_validation import require_validation_enabled
+
+require_validation_enabled()
+
 repo = Path(__file__).resolve().parent.parent
 app, output = map(Path, sys.argv[1:3])
 info = plistlib.loads((app / 'Info.plist').read_bytes())

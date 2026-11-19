@@ -19,6 +19,7 @@ case "${1:-${PLATFORM_NAME:-iphoneos}}" in
     ARCHIVE_SHA256=dc7f0c6687510d8afcef7fa704a527dc802c9d1bbd095bbdff10d5ee41d9fbc7
     LICENSE_SHA256=1f15e76a631ad6b7d120ed4516865751b916b43061a22a34f0e17dcbdf49a705
     LICENSE_IN_ARCHIVE=yes
+    DEVICE_SLICE=ios-arm64
     ;;
   tvos|tvos-simulator|appletvos|appletvsimulator)
     VERSION=26.13.0
@@ -28,12 +29,20 @@ case "${1:-${PLATFORM_NAME:-iphoneos}}" in
     ARCHIVE_SHA256=a84ac23e389f186dc64a78e2350b747b6e3f6cf56db12c9e1c3561db156b6440
     LICENSE_SHA256=12d632aa78f637d8c899f19d4549538c477b6df3836fe86731cd821f750abac8
     LICENSE_IN_ARCHIVE=no
+    DEVICE_SLICE=tvos-arm64
     ;;
   *) echo "Unsupported Node mobile platform: $1" >&2; exit 2 ;;
 esac
 OUT=build/NodeMobile
 CACHE_ROOT="${TVBOX_CACHE:-$HOME/Library/Caches}/tvbox-nodejs-mobile"
 CACHE="$CACHE_ROOT/$RELEASE"
+
+cache_ready() {
+  [ "$(cat "$CACHE/VERSION" 2>/dev/null)" = "$RELEASE" ] || return 1
+  [ -f "$CACHE/NodeMobile.xcframework/$DEVICE_SLICE/NodeMobile.framework/NodeMobile" ] || return 1
+  [ -f "$CACHE/LICENSE.node" ] || return 1
+  [ "$(shasum -a 256 "$CACHE/LICENSE.node" | awk '{print $1}')" = "$LICENSE_SHA256" ]
+}
 
 # Points build/NodeMobile at a folder; two builds (iOS and tvOS) may race to do it.
 link() {
@@ -51,18 +60,18 @@ if [ -n "${NODE_MOBILE_DIR:-}" ]; then
   exit 0
 fi
 
-if [ "$(cat "$CACHE/VERSION" 2>/dev/null)" != "$RELEASE" ]; then
+if ! cache_ready; then
   echo "nodejs-mobile: downloading the prebuilt $RELEASE (about 80 MB, once per Mac)"
   mkdir -p "$CACHE_ROOT"
   TMP=$(mktemp -d "$CACHE_ROOT/.download.XXXXXX")
   trap 'rm -rf "$TMP"' EXIT
-  curl -fsSL --retry 3 -o "$TMP/apple.zip" "$BASE/$ARCHIVE_NAME"
+  python3 Scripts/verified_download.py --url "$BASE/$ARCHIVE_NAME" --sha256 "$ARCHIVE_SHA256" --output "$TMP/apple.zip"
   echo "$ARCHIVE_SHA256  $TMP/apple.zip" | shasum -a 256 -c - > /dev/null
   # Node.js's LICENSE covers Node.js and the dependencies built into the framework.
   if [ "$LICENSE_IN_ARCHIVE" = yes ]; then
     unzip -p "$TMP/apple.zip" LICENSE > "$TMP/LICENSE"
   else
-    curl -fsSL --retry 3 -o "$TMP/LICENSE" "$BASE/LICENSE"
+    python3 Scripts/verified_download.py --url "$BASE/LICENSE" --sha256 "$LICENSE_SHA256" --output "$TMP/LICENSE"
   fi
   echo "$LICENSE_SHA256  $TMP/LICENSE" | shasum -a 256 -c - > /dev/null
   mkdir "$TMP/release"
@@ -71,8 +80,8 @@ if [ "$(cat "$CACHE/VERSION" 2>/dev/null)" != "$RELEASE" ]; then
   echo "$RELEASE" > "$TMP/release/VERSION"
   # A complete folder appears in one rename (rename(2), which unlike mv never moves it into a folder already
   # there); when another build got there first, its copy is the same.
-  [ -f "$CACHE/VERSION" ] || rm -rf "$CACHE"
-  perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' "$TMP/release" "$CACHE" || [ "$(cat "$CACHE/VERSION" 2>/dev/null)" = "$RELEASE" ]
+  cache_ready || rm -rf "$CACHE"
+  perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' "$TMP/release" "$CACHE" || cache_ready
 fi
 link "$CACHE"
 echo "nodejs-mobile $RELEASE is in $OUT"

@@ -30,14 +30,11 @@ esac
 HOST_PYTHON="${HOST_PYTHON:-$(command -v python$VERSION || true)}"
 if [ ! -x "$HOST_PYTHON" ]; then HOST_PYTHON="$(bash Scripts/fetch-build-python.sh)"; fi
 export HOST_PYTHON
-"$HOST_PYTHON" -c 'import sys; assert sys.version_info[:2] == (3, 14), "HOST_PYTHON must be Python 3.14"'
-WORK="$PWD/build/apple-python"
+"$HOST_PYTHON" -c 'import sys; sys.version_info[:2] == (3, 14) or sys.exit("HOST_PYTHON must be Python 3.14")'
+WORK="${APPLE_PYTHON_WORK:-$PWD/build/apple-python}"
 ARCHIVE="$WORK/Python-$VERSION-$FAMILY-support.$SUPPORT.tar.gz"
 mkdir -p "$WORK"
-if [ ! -f "$ARCHIVE" ]; then
-  curl -fL --retry 2 "https://github.com/beeware/Python-Apple-support/releases/download/$VERSION-$SUPPORT/$(basename "$ARCHIVE")" -o "$ARCHIVE.download"
-  mv "$ARCHIVE.download" "$ARCHIVE"
-fi
+python3 Scripts/verified_download.py --url "https://github.com/beeware/Python-Apple-support/releases/download/$VERSION-$SUPPORT/$(basename "$ARCHIVE")" --sha256 "$SHA256" --output "$ARCHIVE"
 echo "$SHA256  $ARCHIVE" | shasum -a 256 -c -
 SUPPORT_DIR="$WORK/$FAMILY-$VERSION-$SUPPORT"
 if [ ! -d "$SUPPORT_DIR" ]; then
@@ -90,7 +87,8 @@ path = sys.argv[1]
 source = open(path, encoding='utf-8').read()
 anchor = '''            full_name = pycryptodome_filename(dir_comps, filename)
 '''
-assert source.count(anchor) == 1, 'pycryptodome changed: update the .fwork patch'
+if source.count(anchor) != 1:
+    raise SystemExit('pycryptodome changed: update the .fwork patch')
 open(path, 'w', encoding='utf-8').write(source.replace(anchor, anchor + '''            fwork = full_name[:-len(".so")] + ".fwork"
             if full_name.endswith(".so") and os.path.isfile(fwork):
                 with open(fwork) as stream:

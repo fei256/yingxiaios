@@ -16,6 +16,8 @@ import shutil
 import subprocess
 import tarfile
 
+from build_validation import ensure_directory_link
+
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / 'Vendor/NativeASR'
 OUTPUT = ROOT / 'build/NativeASR'
@@ -105,6 +107,7 @@ def main():
         if previous.get('signature') == fingerprint and all(
             (OUTPUT / path).is_file() and digest(OUTPUT / path) == sha for path, sha in previous.get('outputs', {}).items()
         ) and previous.get('outputs'):
+            ensure_directory_link(VENDOR / 'TVASR.xcframework', '../../build/NativeASR/TVASR.xcframework')
             print('Native offline ASR is up to date: ' + str(OUTPUT / 'TVASR.xcframework'), flush=True)
             return
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -164,11 +167,7 @@ def main():
     run(['xcodebuild', '-create-xcframework', '-library', combined, '-headers', VENDOR / 'include', '-output', framework], work / 'xcframework.log')
     target = OUTPUT / 'TVASR.xcframework'
     shutil.rmtree(target, ignore_errors=True); shutil.move(framework, target)
-    link = VENDOR / 'TVASR.xcframework'
-    if not link.is_symlink():
-        if link.exists():
-            raise RuntimeError('Refusing to replace a real vendor directory: ' + str(link))
-        link.symlink_to('../../build/NativeASR/TVASR.xcframework')
+    ensure_directory_link(VENDOR / 'TVASR.xcframework', '../../build/NativeASR/TVASR.xcframework')
     outputs = {str(path.relative_to(OUTPUT)): digest(path) for path in sorted(target.rglob('*')) if path.is_file()}
     manifest.write_text(json.dumps({'signature': fingerprint, 'sherpaVersion': '1.13.4', 'onnxRuntimeVersion': '1.27.0',
                                    'platform': 'IOS', 'architecture': 'arm64', 'minimumOS': '16.2',

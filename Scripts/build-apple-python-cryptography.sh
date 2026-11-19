@@ -13,7 +13,7 @@ case "$TARGET" in
   *) echo "Usage: $0 [ios|ios-simulator]" >&2; exit 2 ;;
 esac
 VERSION=3.14; SUPPORT=b13; MINIMUM_OS=16.2
-WORK="$PWD/build/apple-python"
+WORK="${APPLE_PYTHON_WORK:-$PWD/build/apple-python}"
 WHEELS="$WORK/wheels/$PLATFORM/$MINIMUM_OS"
 XCFRAMEWORK="$WORK/iOS-$VERSION-$SUPPORT/Python.xcframework"
 CROSS_VENV="$WORK/venv-$PLATFORM-$MINIMUM_OS"
@@ -45,10 +45,7 @@ esac
 RUST="$PWD/build/tools/rust-$RUST_VERSION-$RUST_HOST"
 download() {
   local url="$1" checksum="$2" archive="$3"
-  if [ ! -f "$archive" ]; then
-    curl -fsSL --retry 3 "$url" -o "$archive.download"
-    mv "$archive.download" "$archive"
-  fi
+  python3 Scripts/verified_download.py --url "$url" --sha256 "$checksum" --output "$archive"
   echo "$checksum  $archive" | shasum -a 256 -c - >&2
 }
 install_rust() {
@@ -105,7 +102,8 @@ import pathlib, sys
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
 anchor = 'target.contains("apple") && openssl_static'
-assert source.count(anchor) == 1, 'cryptography changed: update the iOS compiler-runtime patch'
+if source.count(anchor) != 1:
+    raise SystemExit('cryptography changed: update the iOS compiler-runtime patch')
 path.write_text(source.replace(anchor, 'target.ends_with("apple-darwin") && openssl_static'))
 PATCH
 fi

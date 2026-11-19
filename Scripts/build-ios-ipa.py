@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Build the current local source as an unsigned iOS device IPA."""
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +9,12 @@ import shutil
 import subprocess
 import sys
 import time
+
+from build_validation import archive_failure_excerpt, require_validation_enabled
+from source_layout import check_source_layout
+from source_snapshot import native_checksums, source_checksums
+
+require_validation_enabled()
 
 root = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description=__doc__)
@@ -39,6 +44,9 @@ previous = json.loads(latest.read_text()) if latest.exists() else {'build': '0'}
 number = args.build_number if args.build_number is not None else int(previous['build']) + 1
 if number < 1:
     parser.error('--build-number must be positive')
+layout = check_source_layout(root)
+if layout['errors']:
+    raise SystemExit('\n'.join(layout['errors']))
 required = [
     'build/ApplePython/iphoneos/Frameworks/Python.framework/Python',
     'build/FFmpeg/FFmpeg.xcframework/ios-arm64/libFFmpeg.a',
@@ -70,6 +78,9 @@ command = [
     f'LOCAL_SWIFT_JOBS={jobs}',
 ]
 config = {'cwd': str(root), 'command': command, 'build_number': number,
+          'source_commit': os.environ.get('GITHUB_SHA'),
+          'workflow_run_url': (f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+                               if os.environ.get('GITHUB_RUN_ID') else None),
           'node_mobile_dir': str(root / 'build/RuntimeDependencies/NodeMobile'),
           'build_optimization': {
               'device_architecture': 'arm64', 'host_architecture': host_arch,
@@ -97,17 +108,9 @@ if out.is_symlink():
 if out.exists():
     shutil.rmtree(out)
 out.mkdir(parents=True)
-from source_snapshot import source_paths
-paths = source_paths(root)
-snapshot = {p: hashlib.sha256((root / p).read_bytes()).hexdigest()
-            for p in sorted(set(paths)) if p and (root / p).is_file()}
+snapshot = source_checksums(root)
 (out / 'source-sha256-before.json').write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + '\n')
-native_inputs = {}
-for directory in ['build/FFmpeg/FFmpeg.xcframework', 'Vendor/DiscNative/DiscNative.xcframework',
-                  'Vendor/NativeASR/TVASR.xcframework']:
-    for path in sorted((root / directory).rglob('*')):
-        if path.is_file():
-            native_inputs[str(path.relative_to(root))] = hashlib.sha256(path.read_bytes()).hexdigest()
+native_inputs = native_checksums(root)
 if not native_inputs:
     raise SystemExit('Prepared native playback dependencies are missing')
 (out / 'native-sha256-before.json').write_text(json.dumps(native_inputs, indent=2) + '\n')
@@ -122,6 +125,6 @@ with (out / 'archive.log').open('w') as log:
     'log': str(out / 'archive.log'),
 }, indent=2) + '\n')
 if result.returncode:
-    print((out / 'archive.log').read_text(errors='replace')[-8000:], file=sys.stderr)
+    print(archive_failure_excerpt((out / 'archive.log').read_text(errors='replace')), file=sys.stderr)
     sys.exit(result.returncode)
 subprocess.run([sys.executable, str(root / 'Scripts/package-ios-ipa.py'), str(out)], cwd=root, check=True)

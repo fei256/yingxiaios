@@ -54,6 +54,10 @@ python3 Scripts/prepare-ios-dependencies.py --av3a-archive /path/to/av3a-pinned-
 
 构建成功后，从运行页面的 **Artifacts** 下载 `Yingxia-iOS-build…-unsigned`，解压得到 IPA、`SHA256SUMS.txt` 和检查报告。IPA 保留 30 天，诊断日志保留 14 天。输出面向 iPhone/iPad、最低 iOS 16.2，安装前需自行签名。此流程不需要 Apple 签名证书或开发者账号，也不会自动发布 Release。
 
+IPA 下载附件只包含安装包和小型检查报告；完整编译日志及链接图在单独的 `iOS-build…-logs-…` 附件。build06 的 IPA 实际约 103 MB，旧的约 197 MB 下载附件还含有大日志。历史失败原因、已补强的检查与真机验证边界见 [构建流程审计](docs/build-pipeline-audit.md)。
+
+在 Windows 推送前可执行 `python Scripts/preflight-ios-source.py` 和 `python -m unittest discover -s Tests/BuildPipeline -v`，先检查 Git 链接、脚本权限和故障处理分支。工作流会在耗时的依赖准备前执行相同预检；修改构建脚本或原生配方会使缓存失效，属于预期行为。
+
 ### 在 macOS 上本地构建
 
 ```sh

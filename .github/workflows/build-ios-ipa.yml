@@ -17,6 +17,7 @@ on:
       - 'Packages/**'
       - 'Runtime/**'
       - 'Scripts/**'
+      - 'Tests/BuildPipeline/**'
       - 'Sources/**'
       - 'Vendor/**'
       - 'Package.swift'
@@ -44,9 +45,15 @@ jobs:
       CI_BUILD_NUMBER: ${{ inputs.build_number || github.run_number }}
     steps:
       - name: Check out source
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
         with:
           persist-credentials: false
+
+      - name: Check source layout and regression cases
+        run: |
+          mkdir -p build/ci
+          python3 Scripts/preflight-ios-source.py --report build/ci/source-preflight.json
+          python3 -m unittest discover -s Tests/BuildPipeline -v 2>&1 | tee build/ci/pipeline-tests.log
 
       - name: Check build environment
         run: |
@@ -65,62 +72,49 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           brew install xcodegen ripgrep pkgconf
+          xcodegen --version
+
+      - name: Type-check native drag provider
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('App/LocalSettingsReorderRow.swift').read_text()
+          marker = 'private struct LocalSettingsRowFrames:'
+          if source.count(marker) != 1 or 'enum LocalSettingsReorderProvider' not in source:
+              raise SystemExit('Drag provider preflight needs updating for the current source layout.')
+          provider = source.split(marker, 1)[0].replace('import TVCore\n', '')
+          Path('build/ci/reorder-provider.swift').write_text(provider)
+          PY
+          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
+            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" build/ci/reorder-provider.swift
 
       - name: Restore iOS 18.1 platform package
         id: platform-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
         with:
-          key: ios-platform-18.1-${{ runner.os }}-${{ runner.arch }}-v1
+          key: ios-platform-18.1-${{ runner.os }}-${{ runner.arch }}-v2
+          restore-keys: ios-platform-18.1-${{ runner.os }}-${{ runner.arch }}-v1
           path: build/ios-platform-cache
 
       - name: Install iOS 18.1 platform
         id: ios-platform
         run: |
-          python3 - <<'PY' 2>&1 | tee build/ci/ios-platform.log
-          import json
-          import os
-          from pathlib import Path
-          import subprocess
-          import time
-          runtimes = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'runtimes', '--json']))['runtimes']
-          if any(runtime.get('version') == '18.1' and runtime.get('isAvailable')
-                 and 'iOS' in runtime.get('name', '') for runtime in runtimes):
-              print('iOS 18.1 platform is already installed.')
-              raise SystemExit(0)
-          folder = Path('build/ios-platform-cache')
-          folder.mkdir(parents=True, exist_ok=True)
-          archives = list(folder.rglob('*.dmg'))
-          if not archives:
-              command = ['xcodebuild', '-downloadPlatform', 'iOS', '-buildVersion', '18.1',
-                         '-exportPath', str(folder.resolve())]
-              for attempt in range(1, 4):
-                  result = subprocess.run(command)
-                  if result.returncode == 0:
-                      break
-                  if attempt == 3:
-                      raise SystemExit(result.returncode)
-                  time.sleep(15)
-              archives = list(folder.rglob('*.dmg'))
-          if len(archives) != 1:
-              raise SystemExit('Expected exactly one iOS 18.1 platform package.')
-          subprocess.run(['xcodebuild', '-importPlatform', str(archives[0].resolve())], check=True)
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('cacheable=true\n')
-          PY
+          python3 Scripts/prepare-ios-platform.py --version 18.1 --report build/ci/platform-check.json \
+            2>&1 | tee build/ci/ios-platform.log
 
       - name: Save iOS 18.1 platform package
         if: steps.platform-cache.outputs.cache-hit != 'true' && steps.ios-platform.outputs.cacheable == 'true'
         continue-on-error: true
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
         with:
           key: ${{ steps.platform-cache.outputs.cache-primary-key }}
           path: build/ios-platform-cache
 
       - name: Restore native dependencies
         id: native-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
         with:
-          key: ios-native-v1-${{ runner.os }}-${{ runner.arch }}-xcode16.1-${{ hashFiles('Scripts/**', 'Vendor/**', 'Runtime/PythonHost/**', 'Config/Python/**', 'Package.resolved') }}
+          key: ios-native-v2-${{ runner.os }}-${{ runner.arch }}-xcode16.1-${{ hashFiles('Scripts/**', 'Vendor/**', 'Runtime/PythonHost/**', 'Config/Python/**', 'Package.resolved') }}
           path: |
             build/tools
             build/download-cache
@@ -132,7 +126,6 @@ jobs:
             build/Disc
             build/FFmpeg
             build/NativeASR
-            build/SourcePackages
             Vendor/NativeASR/sources
             Vendor/NativeASR/TVASR.xcframework
             Vendor/AVSNative/sources
@@ -146,20 +139,11 @@ jobs:
       - name: Prepare pinned iOS dependencies
         run: |
           python3 - <<'PY' 2>&1 | tee build/ci/dependencies.log
-          import json
-          from pathlib import Path
           import subprocess
           import sys
           import time
-          lock = json.loads(Path('Vendor/AV3A/SOURCE-INVENTORY.json').read_text())
-          archive = Path('build/downloads/av3a-' + lock['commit'] + '.tar.gz')
-          archive.parent.mkdir(parents=True, exist_ok=True)
-          if not archive.is_file():
-              url = lock['repository'].replace('https://github.com/', 'https://codeload.github.com/') + '/tar.gz/' + lock['commit']
-              subprocess.run(['curl', '--fail', '--location', '--retry', '3', '--connect-timeout', '30',
-                              '--max-time', '1800', '--output', str(archive), url], check=True)
           command = [sys.executable, 'Scripts/prepare-ios-dependencies.py',
-                     '--av3a-archive', str(archive), '--skip-package-resolution']
+                     '--fetch-av3a', '--skip-package-resolution']
           for attempt in range(1, 4):
               result = subprocess.run(command)
               if result.returncode == 0:
@@ -173,7 +157,7 @@ jobs:
       - name: Save native dependencies
         if: steps.native-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
         with:
           key: ${{ steps.native-cache.outputs.cache-primary-key }}
           path: |
@@ -187,11 +171,17 @@ jobs:
             build/Disc
             build/FFmpeg
             build/NativeASR
-            build/SourcePackages
             Vendor/NativeASR/sources
             Vendor/NativeASR/TVASR.xcframework
             Vendor/AVSNative/sources
             Vendor/DiscNative/sources
+
+      - name: Restore pinned Swift packages
+        id: swift-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
+        with:
+          key: ios-swift-v1-${{ runner.os }}-${{ runner.arch }}-xcode16.1-${{ hashFiles('Package.resolved') }}
+          path: build/SourcePackages
 
       - name: Resolve pinned Swift packages
         run: |
@@ -205,16 +195,13 @@ jobs:
             sleep 15
           done
 
-      - name: Type-check native drag provider
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          source = Path('App/LocalSettingsReorderRow.swift').read_text()
-          provider = source.split('private struct LocalSettingsRowFrames:', 1)[0].replace('import TVCore\n', '')
-          Path('build/ci/reorder-provider.swift').write_text(provider)
-          PY
-          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
-            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" build/ci/reorder-provider.swift
+      - name: Save pinned Swift packages
+        if: steps.swift-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
+        with:
+          key: ${{ steps.swift-cache.outputs.cache-primary-key }}
+          path: build/SourcePackages
 
       - name: Build and validate unsigned IPA
         run: |
@@ -223,10 +210,15 @@ jobs:
 
       - name: Upload IPA and validation reports
         id: ipa-artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
         with:
           name: Yingxia-iOS-build${{ env.CI_BUILD_NUMBER }}-unsigned
-          path: artifacts/latest/
+          path: |
+            artifacts/latest/*.ipa
+            artifacts/latest/SHA256SUMS.txt
+            artifacts/latest/ipa-delivery.json
+            artifacts/latest/ipa-validation.json
+            artifacts/latest/player-validation.json
           if-no-files-found: error
           overwrite: true
           compression-level: 0
@@ -244,6 +236,8 @@ jobs:
           text = (f"## Yingxia {report['version']} / build {report['build']}\n\n"
                   f"[Download IPA and validation reports]({os.environ['IPA_ARTIFACT_URL']})\n\n"
                   f"Minimum iOS: {report['minimum_ios']}. The IPA is unsigned; sign it before installation.\n\n"
+                  f"IPA size: {report['bytes'] / 1024**2:.1f} MiB. Large compiler logs are in the separate diagnostics artifact.\n\n"
+                  f"Source commit: `{report['source_commit']}`. Validation covers linked binaries; device playback still needs testing.\n\n"
                   f"SHA-256: `{report['sha256']}`\n")
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write(text)
@@ -251,11 +245,12 @@ jobs:
 
       - name: Upload build diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
         with:
           name: iOS-build${{ env.CI_BUILD_NUMBER }}-logs-${{ github.run_attempt }}
           path: |
             build/ci/*.log
+            build/ci/*.json
             build/ipa/*.log
             build/ipa/*.json
             build/ipa/*.txt
@@ -267,3 +262,4 @@ jobs:
             build/NativeASR/**/*.log
           if-no-files-found: ignore
           retention-days: 14
+          compression-level: 6

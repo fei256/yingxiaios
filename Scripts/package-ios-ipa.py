@@ -9,6 +9,11 @@ import sys
 import zipfile
 import argparse
 
+from build_validation import require_validation_enabled
+from source_snapshot import changed_inputs, native_checksums, source_checksums
+
+require_validation_enabled()
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('output', type=Path)
 parser.add_argument('--revalidate-tools', action='store_true',
@@ -22,14 +27,9 @@ archive_result = json.loads((out / 'archive-result.json').read_text())
 assert archive_result['exit_code'] == 0, archive_result
 assert '** ARCHIVE SUCCEEDED **' in (out / 'archive.log').read_text()
 
-from source_snapshot import source_paths
-paths = source_paths(repo)
-after = {
-    p: hashlib.sha256((repo / p).read_bytes()).hexdigest()
-    for p in sorted(set(paths)) if p and (repo / p).is_file()
-}
+after = source_checksums(repo)
 before = json.loads((out / 'source-sha256-before.json').read_text())
-changed = [p for p in sorted(before.keys() | after.keys()) if before.get(p) != after.get(p)]
+changed = changed_inputs(before, after)
 tool_updates = []
 if args.revalidate_tools:
     # Keep the completed archive's original before/after evidence intact. Only
@@ -52,9 +52,10 @@ else:
     (out / 'source-changes-during-build.json').write_text(json.dumps(changed, ensure_ascii=False, indent=2) + '\n')
     assert not changed, f'Source changed during build: {changed}'
 native_before = json.loads((out / 'native-sha256-before.json').read_text())
-native_changed = [name for name, digest in native_before.items()
-                  if not (repo / name).is_file()
-                  or hashlib.sha256((repo / name).read_bytes()).hexdigest() != digest]
+native_after = native_checksums(repo)
+native_changed = changed_inputs(native_before, native_after)
+(out / 'native-sha256-after.json').write_text(json.dumps(native_after, indent=2) + '\n')
+(out / 'native-changes-during-build.json').write_text(json.dumps(native_changed, indent=2) + '\n')
 assert not native_changed, f'Native dependencies changed during build: {native_changed}'
 
 archive = out / 'Yingxia-local-iOS16.2.xcarchive'
@@ -119,7 +120,9 @@ report = {
     'zip_integrity': 'passed', 'app': str(app), 'signed': False,
     'version': info['CFBundleShortVersionString'], 'build': str(info['CFBundleVersion']),
     'minimum_ios': info['MinimumOSVersion'], 'device_families': info['UIDeviceFamily'],
-    'source_file_count': len(after), 'source_changes_during_build': changed,
+    'source_file_count': sum(not name.startswith('@mode/') for name in after),
+    'source_fingerprint_count': len(after), 'source_changes_during_build': changed,
+    'source_commit': config.get('source_commit'), 'workflow_run_url': config.get('workflow_run_url'),
     'current_runtime_source': runtime_checks,
     'all_native_count': validation['all_native_count'],
     'framework_count': validation['framework_count'],
