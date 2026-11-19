@@ -205,6 +205,17 @@ jobs:
             sleep 15
           done
 
+      - name: Type-check native drag provider
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('App/LocalSettingsReorderRow.swift').read_text()
+          provider = source.split('private struct LocalSettingsRowFrames:', 1)[0].replace('import TVCore\n', '')
+          Path('build/ci/reorder-provider.swift').write_text(provider)
+          PY
+          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
+            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" build/ci/reorder-provider.swift
+
       - name: Build and validate unsigned IPA
         run: |
           python3 Scripts/build-ios-ipa.py --check --build-number "$CI_BUILD_NUMBER" --jobs "$JOBS"

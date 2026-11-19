@@ -7,7 +7,9 @@ enum LocalSettingsReorderProvider {
     static func make(_ data: Data) -> NSItemProvider {
         let provider = NSItemProvider()
         provider.registerDataRepresentation(forTypeIdentifier: UTType.data.identifier, visibility: .ownProcess) { completion in
-            completion(data, nil)
+            Task { @MainActor in
+                completion(data, nil)
+            }
             return nil
         }
         return provider
