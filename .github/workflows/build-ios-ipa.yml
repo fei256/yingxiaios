@@ -4,6 +4,12 @@ run-name: Build unsigned iOS IPA ${{ inputs.build_number || github.run_number }}
 on:
   workflow_dispatch:
     inputs:
+      test_runner:
+        description: 'Runner for native interface checks'
+        required: false
+        default: macos-15
+        type: choice
+        options: [macos-15, macos-15-intel]
       build_ipa:
         description: 'Build IPA as well as native interface checks'
         required: false
@@ -38,7 +44,7 @@ concurrency:
 
 jobs:
   native-tests:
-    runs-on: macos-15
+    runs-on: ${{ inputs.test_runner || 'macos-15' }}
     timeout-minutes: 30
     defaults:
       run:
