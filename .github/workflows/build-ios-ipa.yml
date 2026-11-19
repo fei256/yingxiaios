@@ -133,7 +133,7 @@ jobs:
           mkdir -p build/ci/search-input
           xcodegen generate --spec Tests/SearchInput/project.yml --project build/ci/search-input
           python3 - <<'PY'
-          import json, os, subprocess
+          import json, os, plistlib, subprocess
           runtimes = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'runtimes', '--json']))['runtimes']
           runtime = next(x for x in runtimes if x.get('isAvailable') and x.get('version') == '18.1')
           types = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devicetypes', '--json']))['devicetypes']
@@ -143,6 +143,19 @@ jobs:
               output.write('SEARCH_INPUT_SIMULATOR=' + identifier + '\n')
           with open('build/ci/search-input/simulator-id.txt', 'w') as output:
               output.write(identifier + '\n')
+          with open('build/ci/search-input/Info.plist', 'wb') as output:
+              plistlib.dump({
+                  'CFBundleIdentifier': '$(PRODUCT_BUNDLE_IDENTIFIER)',
+                  'CFBundleExecutable': '$(EXECUTABLE_NAME)',
+                  'CFBundleName': '$(PRODUCT_NAME)',
+                  'CFBundlePackageType': 'APPL',
+                  'CFBundleVersion': '1',
+                  'CFBundleShortVersionString': '1.0',
+                  'UIDeviceFamily': [1, 2],
+                  'UILaunchScreen': {},
+                  'UIApplicationSceneManifest': {'UIApplicationSupportsMultipleScenes': False, 'UISceneConfigurations': {}},
+                  'UISupportedInterfaceOrientations': ['UIInterfaceOrientationPortrait', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight'],
+              }, output)
           PY
           read -r SEARCH_INPUT_SIMULATOR < build/ci/search-input/simulator-id.txt
           test -n "$SEARCH_INPUT_SIMULATOR"

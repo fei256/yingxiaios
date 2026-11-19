@@ -20,11 +20,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yingxia.search-input-checks
         TARGETED_DEVICE_FAMILY: '1,2'
-    info:
-      path: ../../build/ci/search-input/Info.plist
-      properties:
-        UILaunchScreen: {}
-        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        GENERATE_INFOPLIST_FILE: 'NO'
+        INFOPLIST_FILE: Info.plist
   SearchInputTests:
     type: bundle.unit-test
     platform: iOS
