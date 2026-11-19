@@ -131,7 +131,18 @@ jobs:
       - name: Test native search input and control hit areas
         run: |
           mkdir -p build/ci/search-input
-          xcodegen generate --spec Tests/SearchInput/project.yml --project build/ci/search-input
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, re
+          base = Path('Tests/SearchInput').resolve()
+          source = (base / 'project.yml').read_text()
+          def absolute(match):
+              path = (base / match.group(2).strip()).resolve(strict=True)
+              return match.group(1) + json.dumps(str(path))
+          source = re.sub(r'(?m)^([ ]*- path: )(.+)$', absolute, source)
+          Path('build/ci/search-input/project.yml').write_text(source)
+          PY
+          xcodegen generate --spec build/ci/search-input/project.yml --project build/ci/search-input
           python3 - <<'PY'
           import json, os, plistlib, subprocess
           runtimes = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'runtimes', '--json']))['runtimes']
