@@ -39,6 +39,17 @@ private struct ControlHarness: View {
             VStack(spacing: 30) {
                 Text("\(last):\(events)").accessibilityIdentifier("control.last")
                 controls("top")
+                HStack(spacing: 6) {
+                    Button { record("reference") } label: {
+                        Text("R").frame(width: 48, height: 48).background(Color.gray).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityIdentifier("reference")
+                    Button { record("plain") } label: {
+                        Image(systemName: "play.fill").playerControlTarget()
+                    }.buttonStyle(.plain).accessibilityIdentifier("plain")
+                    Button { record("styled.rectangle") } label: {
+                        Color.gray.frame(width: 48, height: 48).contentShape(Rectangle())
+                    }.buttonStyle(PlayerToolbarButtonStyle()).accessibilityIdentifier("styled.rectangle")
+                }
                 Spacer()
                 controls("bottom")
                 HStack(spacing: 0) {

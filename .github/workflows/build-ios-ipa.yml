@@ -4,6 +4,11 @@ run-name: Build unsigned iOS IPA ${{ inputs.build_number || github.run_number }}
 on:
   workflow_dispatch:
     inputs:
+      build_ipa:
+        description: 'Build IPA as well as native interface checks'
+        required: false
+        default: true
+        type: boolean
       build_number:
         description: 'Build number (leave empty to use the workflow run number)'
         required: false
@@ -140,6 +145,7 @@ jobs:
           compression-level: 6
 
   build:
+    if: github.event_name != 'workflow_dispatch' || inputs.build_ipa
     runs-on: macos-15-intel
     timeout-minutes: 360
     defaults:

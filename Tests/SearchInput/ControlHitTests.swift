@@ -1,6 +1,24 @@
 import XCTest
 
 final class ControlHitTests: XCTestCase {
+    @MainActor func testReferenceControlCorners() {
+        let app = XCUIApplication()
+        app.launchArguments = ["controls"]
+        app.launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let result = app.staticTexts["control.last"]
+        var events = 0
+        for id in ["reference", "plain", "styled.rectangle"] {
+            let button = app.buttons[id]
+            XCTAssertTrue(button.waitForExistence(timeout: 5))
+            print("Reference bounds \(id): \(button.frame)")
+            for point in [CGVector(dx: 0.04, dy: 0.04), CGVector(dx: 0.96, dy: 0.04), CGVector(dx: 0.5, dy: 0.5), CGVector(dx: 0.04, dy: 0.96), CGVector(dx: 0.96, dy: 0.96)] {
+                button.coordinate(withNormalizedOffset: point).tap()
+                events += 1
+                XCTAssertEqual(result.label, "\(id):\(events)")
+            }
+        }
+    }
     @MainActor func testVisibleControlCornersTriggerTheirOwnAction() {
         let app = XCUIApplication()
         app.launchArguments = ["controls"]
