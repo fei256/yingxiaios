@@ -33,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ios-ipa-${{ github.ref }}
+  group: ios-ipa-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.build_ipa == false && 'interface-only' || 'full' }}
   cancel-in-progress: false
 
 jobs:
