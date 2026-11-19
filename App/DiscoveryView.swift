@@ -98,7 +98,11 @@ struct GlobalSearchView: View {
     #if os(iOS)
     @Environment(\.isLocalPageActive) private var localPageActive
     #endif
+    #if os(iOS)
+    @State private var inputFocused = false
+    #else
     @FocusState private var inputFocused: Bool
+    #endif
     @State private var showFailures = false
     @State private var showsSearchSettings = false
     /// The sources being searched right now, under the summary; folded away unless asked for.
@@ -112,6 +116,9 @@ struct GlobalSearchView: View {
     @AppStorage("searchResultsAsList") private var showsList = false
     #endif
     @AppStorage("videoSearchHistory") private var historyData = Data()
+    #if os(iOS)
+    @State private var suggestionState = SearchSuggestionState()
+    #endif
     #if os(tvOS)
     /// Titles iQiyi suggests for the draft, and 360kan's chart for an empty field (`SearchSuggestions`).
     @State private var suggested: [String] = []
@@ -182,7 +189,18 @@ struct GlobalSearchView: View {
                 .onDisappear { if !entering { endVisible = false; model.suspend() } }
             #else
             searchResultLayout
-                .topBar(hardEdge: true) { WithPerceptionTracking { if let config = store.subscription, showsHeader { searchHeader(config) } } }
+                .topBar(hardEdge: true) {
+                    WithPerceptionTracking {
+                        #if os(iOS)
+                        VStack(spacing: 0) {
+                            globalSearchField
+                            if let config = store.subscription, showsHeader { searchHeader(config) }
+                        }
+                        #else
+                        if let config = store.subscription, showsHeader { searchHeader(config) }
+                        #endif
+                    }
+                }
                 .screenBackdrop()
                 .screenTitle(L10n.text("Global Search"))
                 #if os(iOS)
@@ -197,17 +215,21 @@ struct GlobalSearchView: View {
                     if active, let config = store.subscription {
                         model.resumeSuspended(config: config)
                         requestNextPage(config: config)
-                    } else { model.suspend() }
+                    } else {
+                        inputFocused = false; suggestionState.cancel(); model.suspend()
+                    }
                 }
                 #else
                 .toolbar { ToolbarItem(placement: .primaryAction) { searchSettingsButton } }
                 .sheet(isPresented: $showsSearchSettings) { if let config = store.subscription { LocalSearchSettingsView(config: config) } }
                 #endif
-                // The system search field, as on Sources and Live TV: under the title on iPhone and iPad, in the toolbar on
-                // the Mac. Only Return or the keyboard's Search key searches; clearing the field goes back to the recent searches.
+                #if os(iOS)
+                .task(id: suggestionRequest) { await loadSearchSuggestions(suggestionRequest) }
+                #else
                 .catalogSearchable(text: $model.draft, prompt: L10n.text("Search videos"))
                 .searchFieldFocused($inputFocused)
                 .onSubmit(of: .search) { if let config = store.subscription { submit(config) } }
+                #endif
                 .appOnChange(of: model.draft) { _, draft in if draft.isEmpty && !model.keyword.isEmpty { model.reset() } }
                 #if os(iOS)
                 .scrollDismissesKeyboard(.interactively)
@@ -224,10 +246,102 @@ struct GlobalSearchView: View {
                         requestNextPage(config: config)
                     }
                 }
-                .onDisappear { endVisible = false; model.suspend() }
+                .onDisappear {
+                    endVisible = false; model.suspend()
+                    #if os(iOS)
+                    suggestionState.cancel()
+                    #endif
+                }
             #endif
         }
     }
+
+    #if os(iOS)
+    private var showsSuggestions: Bool {
+        inputFocused && !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+    private var suggestionRequest: String { localPageActive ? model.draft : "" }
+
+    private var globalSearchField: some View {
+        @AppBindable var model = model
+        return HStack(spacing: 8) {
+            HStack(spacing: 12) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                GlobalSearchInput(text: $model.draft, focused: $inputFocused) {
+                    if let config = store.subscription { submit(config) }
+                }.frame(height: 44)
+                if !model.draft.isEmpty {
+                    Button { model.draft = ""; inputFocused = true } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityLabel("清空搜索")
+                }
+            }
+            .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 4)
+            .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            Button { if let config = store.subscription { submit(config) } } label: {
+                Image(systemName: "arrow.right").font(.system(size: 20))
+                    .frame(width: 48, height: 52).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).accessibilityLabel("搜索")
+            .disabled(store.subscription == nil || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal, Layout.gutter).padding(.top, 6).padding(.bottom, 10)
+    }
+
+    private var searchCompletions: some View {
+        let query = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let online = suggestionState.query == query ? suggestionState.titles : []
+        let past = SearchSuggestions.matchingTitles(for: query, in: history)
+        let titles = Array((online + past.filter { !online.contains($0) }).prefix(SearchSuggestions.limit))
+        return Group {
+            ForEach(Array(titles.enumerated()), id: \.element) { index, title in
+                HStack(spacing: 0) {
+                    Button { useHistory(title) } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).frame(width: 24)
+                            Text(title).foregroundStyle(.primary).multilineTextAlignment(.leading).lineLimit(2)
+                            Spacer(minLength: 8)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("搜索：\(title)")
+                    Button { model.draft = title } label: {
+                        Image(systemName: "arrow.up.left").foregroundStyle(.secondary)
+                            .frame(width: 44, height: 52).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("填入搜索框：\(title)")
+                }
+                if index < titles.count - 1 { Divider() }
+            }
+            if !query.isEmpty && titles.isEmpty {
+                if suggestionState.query != query || suggestionState.isLoading {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                        Text("正在查找相关片名…").foregroundStyle(.secondary)
+                    }.frame(minHeight: 52)
+                } else {
+                    Text("暂无联想，按搜索键搜索当前内容")
+                        .font(.subheadline).foregroundStyle(.secondary).frame(minHeight: 52)
+                }
+            }
+        }
+    }
+
+    private func loadSearchSuggestions(_ draft: String) async {
+        let revision = suggestionState.begin(draft)
+        let query = suggestionState.query
+        guard !query.isEmpty else { return }
+        do { try await Task.sleep(for: .milliseconds(250)) }
+        catch { suggestionState.complete([], revision: revision); return }
+        guard !Task.isCancelled else { suggestionState.complete([], revision: revision); return }
+        let titles = await SearchSuggestions.titles(for: query)
+        suggestionState.complete(Task.isCancelled ? [] : titles, revision: revision)
+    }
+    #endif
 
     private var searchSettingsButton: some View {
         WithPerceptionTracking {
@@ -253,31 +367,45 @@ struct GlobalSearchView: View {
     }
 
 
-    /// The search field is the system's, so the bar below it waits for a search.
-    private var showsHeader: Bool { !model.keyword.isEmpty }
+    /// Keep source filters and progress beneath the field after a search is submitted.
+    private var showsHeader: Bool {
+        #if os(iOS)
+        !model.keyword.isEmpty && !showsSuggestions
+        #else
+        !model.keyword.isEmpty
+        #endif
+    }
 
     /// Result-bearing sources form a vertical list on phones and iPad split views too.
     @ViewBuilder private var searchResultLayout: some View {
         #if os(iOS)
-        GeometryReader { geometry in
-            WithPerceptionTracking {
-                let rail = !model.keyword.isEmpty && store.subscription != nil
-                let railWidth = min(208, max(104, geometry.size.width * (geometry.size.width < 600 ? 0.30 : 0.24)))
-                HStack(alignment: .top, spacing: 0) {
-                    if rail {
-                        SearchSiteRail(items: sourceItems, selection: model.selectedSource ?? "", waiting: model.busy,
-                                       compact: geometry.size.width < 600) { id in
-                            model.select(id.isEmpty ? nil : id)
-                        }
-                        .frame(width: railWidth)
-                        .padding(.leading, geometry.size.width < 600 ? 8 : Layout.gutter)
-                        .padding(.vertical, Layout.gutter)
-                    }
-                    positionedSearchResults(usesSiteRail: rail)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        if showsSuggestions {
+            ScrollView {
+                WithPerceptionTracking {
+                    LazyVStack(alignment: .leading, spacing: 0) { searchCompletions }.pageContainer()
                 }
-                .frame(maxWidth: Layout.maxWidth, maxHeight: .infinity)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }.accessibilityIdentifier("search.suggestions")
+        } else {
+            GeometryReader { geometry in
+                WithPerceptionTracking {
+                    let rail = !model.keyword.isEmpty && store.subscription != nil
+                    let railWidth = min(208, max(104, geometry.size.width * (geometry.size.width < 600 ? 0.30 : 0.24)))
+                    HStack(alignment: .top, spacing: 0) {
+                        if rail {
+                            SearchSiteRail(items: sourceItems, selection: model.selectedSource ?? "", waiting: model.busy,
+                                           compact: geometry.size.width < 600) { id in
+                                model.select(id.isEmpty ? nil : id)
+                            }
+                            .frame(width: railWidth)
+                            .padding(.leading, geometry.size.width < 600 ? 8 : Layout.gutter)
+                            .padding(.vertical, Layout.gutter)
+                        }
+                        positionedSearchResults(usesSiteRail: rail)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    .frame(maxWidth: Layout.maxWidth, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         #else
@@ -1075,6 +1203,10 @@ struct GlobalSearchView: View {
         guard !keyword.isEmpty else { return }
         rememberQuery(keyword)
         inputFocused = false
+        #if os(iOS)
+        suggestionState.cancel()
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #endif
         #if os(tvOS)
         entering = false
         #endif

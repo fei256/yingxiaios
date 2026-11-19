@@ -98,6 +98,14 @@ jobs:
           xcrun swiftc -frontend -parse -swift-version 6 -target arm64-apple-ios16.2 \
             -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" App/*.swift
 
+      - name: Check search suggestions and input
+        run: |
+          xcrun swiftc -swift-version 6 -parse-as-library Sources/TVCore/SearchSuggestions.swift \
+            Tests/SearchSuggestions/checks.swift -o build/ci/search-suggestion-checks
+          build/ci/search-suggestion-checks
+          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
+            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" App/GlobalSearchInput.swift
+
       - name: Restore iOS 18.1 platform package
         id: platform-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
