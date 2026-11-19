@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Layout values shared by the dock and accessories whose container may extend
 /// beyond the dock's safe area (HTML) or start inside a navigation stack (actors).
