@@ -497,7 +497,9 @@ struct LocalAppNavigation: View {
             }
             .frame(width: width, height: dockControlHeight)
             .foregroundStyle(Color.primary.opacity(selected ? 1 : 0.55))
-            .background(selected ? Color.primary.opacity(0.12) : .clear, in: Capsule())
+            .background {
+                Capsule().fill(selected ? Color.primary.opacity(0.12) : .clear).allowsHitTesting(false)
+            }
             .localDockControlTarget(width: width, height: LocalDockLayout.height(controlHeight: dockControlHeight))
         }
         .buttonStyle(.plain).accessibilityLabel(entry.title)

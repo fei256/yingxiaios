@@ -17,6 +17,7 @@ targets:
       - path: ../../App/PlayerPictureGestures.swift
       - path: ../../Sources/TVCore/PictureTaps.swift
       - path: ../../App/LocalControlTargets.swift
+      - path: ../../App/LocalSettingsAppearance.swift
       - path: Harness.swift
     settings:
       base:

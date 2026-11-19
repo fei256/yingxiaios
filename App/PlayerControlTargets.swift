@@ -19,8 +19,11 @@ struct PlayerToolbarButtonStyle: ButtonStyle {
             .font(.system(size: 16, weight: .medium))
             .frame(minWidth: minimum, minHeight: minimum)
             .foregroundStyle(.white.opacity(enabled ? 0.96 : 0.3))
-            .background(selected ? Color.accentColor.opacity(0.2) : Color.white.opacity(configuration.isPressed ? 0.12 : 0),
-                        in: RoundedRectangle(cornerRadius: 7))
+            .background {
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(selected ? Color.accentColor.opacity(0.2) : Color.white.opacity(configuration.isPressed ? 0.12 : 0))
+                    .allowsHitTesting(false)
+            }
             .contentShape(Rectangle())
     }
 }

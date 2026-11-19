@@ -49,7 +49,7 @@ private struct ControlHarness: View {
                                 .localDockControlTarget(width: 88, height: 64)
                         }.buttonStyle(.plain).accessibilityIdentifier("dock.\(index)")
                     }
-                }.padding(.horizontal, 4).background(Color.gray.opacity(0.25), in: Capsule()).localDockTouchSurface()
+                }.padding(.horizontal, 4).localSettingsSurface(cornerRadius: 32, navigation: true).localDockTouchSurface()
             }.padding(24)
         }.foregroundStyle(.white)
     }
@@ -62,7 +62,7 @@ private struct ControlHarness: View {
             ForEach(0..<3) { index in
                 Button { record("\(prefix).\(index)") } label: {
                     Image(systemName: "play.fill").playerControlTarget()
-                }.buttonStyle(PlayerToolbarButtonStyle()).accessibilityIdentifier("\(prefix).\(index)")
+                }.buttonStyle(PlayerToolbarButtonStyle(selected: last == "\(prefix).\(index)")).accessibilityIdentifier("\(prefix).\(index)")
             }
         }
     }
