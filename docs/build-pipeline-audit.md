@@ -13,16 +13,17 @@
 | 环节 / 记录 | 确认的问题与原因 | 已实施的处理与防复发措施 |
 | --- | --- | --- |
 | Windows 导入；[build01](https://github.com/fei256/yingxiaios/actions/runs/44346168232) | `Packages/TVCore/Package.swift` 被解压成只写着路径的普通文本文件。Swift 读不到真正的 manifest 首行，于是报告不再支持 tools 3.1。不是应用本身要求 Swift 3.1。 | 三个包内别名恢复为 Git `120000` 链接，shell 和带 shebang 的 Python 脚本恢复为 `100755`。新增最先执行的源码预检，核对索引中的链接类型、目标、工作目录内容、脚本权限、LF 和 Swift 6.0 首行。 |
-| GitHub 上传 | 此前出现 schannel / OpenSSL EOF、RPC 不能回绕等连接错误。改变单次 Git 的代理或 HTTP / TLS 后端参数后上传成功；现有证据不能唯一确定是本地代理、连接中断还是远端临时故障。 | 后续通过 OpenSSL / HTTP 1.1 配置完成 fetch / push，未关闭 TLS 验证。将这类连接问题与源码或构建错误分开诊断；有限重试不等于网络永远可用。 |
+| GitHub 上传 | 此前出现 schannel / OpenSSL EOF、RPC 不能回绕等连接错误。本次 OpenSSL / HTTP 1.1 推送也再现 EOF；直接连接推送成功后，另一次只读检查出现 TLS packet-length 错误，随后 Schannel 检查成功。现有证据不能唯一确定代理、传输链路或远端临时故障的责任。 | 保留 TLS 验证，有限重试并以远端实际提交 SHA 判断是否成功。曾同时出现失败退出码与 `Everything up-to-date`，不能只相信最后一句文字。改变连接参数是恢复手段，不能宣称网络已永久修好。 |
 | Git 同步 | 远端 README 被修改，直接推送被 `fetch first` 拒绝。 | 先获取远端，再整理未发布的本地提交，保留远端修改；未强推覆盖。之后推送前检查两端差异。 |
 | 浏览器创建仓库 | 原拟名称中的连字符没有保留，最终实际名称为 `yingxiaios`。 | 当前 Git remote、README 与 Actions 链接均指向实际仓库。名称差异不影响构建。 |
 | 依赖下载；[build02](https://github.com/fei256/yingxiaios/actions/runs/44354189085) | FFmpeg Git clone 报 `Could not resolve host: github.com`，当时没有 clone 重试。诊断附件上传也出现过超时，服务自身重试后成功。 | FFmpeg / dav1d clone、依赖准备与 Swift 解析都有有限重试，仍核对固定提交。归档下载统一写临时文件并校验 SHA-256，成功后才替换正式文件；已损坏的缓存会重新下载。 |
 | 平台组件；[build03](https://github.com/fei256/yingxiaios/actions/runs/44359199322)、[build04](https://github.com/fei256/yingxiaios/actions/runs/44432592899) | 能找到 iPhoneOS SDK 18.1，但归档仍提示 `iOS 18.1 is not installed`。仅切换 Xcode 或初始化 simctl 没有解决本次 runner 的平台状态问题，第四次仍失败。 | 明确选择 Xcode 16.1，并安装 / 导入对应平台组件。新增 SDK、DMG 完整性、缓存收据和实际可用 runtime 版本检查；损坏缓存或导入失败会尝试重新下载，不只相信命令退出码。 |
 | Swift 编译；[build05](https://github.com/fei256/yingxiaios/actions/runs/44433777070) | 完整 archive.log 在 `App/LocalSettingsReorderRow.swift:10:13` 报 `call to main actor-isolated parameter 'completion' in a synchronous nonisolated context`。Swift 6 不允许从该同步回调直接调用受主线程隔离的 completion。 | 用 `Task { @MainActor in ... }` 调用 completion，build06 已编译通过。独立类型检查移到平台和原生依赖准备之前；失败摘要同时显示前面的编译错误与日志尾部，避免错误被大量 note 淹没。 |
 | 下载交付 | Actions 显示约 197 MB，容易被当成 IPA 体积。它还包含约 80 MB 链接图和约 23 MB 编译日志，且外层压缩为 0。 | IPA 与小型校验报告使用明确文件清单上传；完整日志另存为压缩等级 6 的诊断附件。 |
+| 本次整改复验；[build07](https://github.com/fei256/yingxiaios/actions/runs/44463555002) | 新增检查把 `hdiutil verify` 的 `has no checksum` 非零退出误判为损坏，导致三次导出合法的 Apple DMG 后仍失败。这是校验实现错误，不能归因于下载损坏。 | 有内置 checksum 的镜像必须通过 verify；仅明确没有 checksum 时，进一步验证 imageinfo 可读，再由 Xcode 导入与可用 runtime 版本检查确认，之后记录完整文件 SHA-256。新增四个测试，分别覆盖有 checksum、合法无 checksum、实际 checksum 错误及不可读镜像。 |
 | 本地清理 | 组合式递归清理命令曾被自动审批审查拒绝。 | 改为核对明确目录后逐文件和空目录清理；保留原有用途不明的文件。审计采集脚本和临时工具不作为项目源码提交。 |
 
-本次最主要的流程缺陷是没有在昂贵的依赖准备前检查源码结构与编译环境，且一次失败时只输出日志尾部。结果是多个问题需要等到后半段才暴露。现在这些可以独立检查的条件已前置；应用完整编译仍不可省略。
+最主要的原流程缺陷是没有在昂贵的依赖准备前检查源码结构与编译环境，且一次失败时只输出日志尾部。结果是多个问题需要等到后半段才暴露。build07 还说明：检查本身也可能误判，模拟测试必须覆盖实际文件格式，并由真实云端运行补充验证。现在能独立检查的条件已前置；应用完整编译仍不可省略。
 
 ## 审计中发现并补强的隐患
 
@@ -39,7 +40,7 @@
 
 ## 验证记录
 
-- Windows：34 个回归测试全部通过，包含链接丢失、索引目标错误、脚本模式、CRLF、中断下载、错误哈希、缓存配方 / 工具链改变、损坏收据、原生文件新增、优化模式和错误 Mach-O 平台。
+- Windows：38 个回归测试全部通过，包含链接丢失、索引目标错误、脚本模式、CRLF、中断下载、错误哈希、缓存配方 / 工具链改变、损坏收据、原生文件新增、优化模式、错误 Mach-O 平台，以及 Apple DMG 的合法无 checksum 格式。
 - Python 文件、工作流内嵌 Python 与 Bash 脚本语法检查通过。
 - actionlint 1.7.12 工作流检查通过；测试工具归档按官方 release 的 SHA-256 校验，临时工具在审计结束时清理。
 - 已跟踪文件中未发现 `.p12`、`.p8`、`.mobileprovision`、`.ipa` 或本项目列出的个人配置文件。此检查针对明确文件类型，不等于任意形式秘密的全局证明。

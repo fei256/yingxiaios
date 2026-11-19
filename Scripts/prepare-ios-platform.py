@@ -4,6 +4,8 @@ import argparse
 import json
 import os
 from pathlib import Path
+import plistlib
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,7 +21,29 @@ def installed(version):
 
 
 def verify_dmg(archive):
-    return subprocess.run(['hdiutil', 'verify', str(archive)]).returncode == 0
+    result = subprocess.run(['hdiutil', 'verify', str(archive)], text=True, capture_output=True,
+                            env=dict(os.environ, LC_ALL='C'))
+    message = (result.stdout or '') + (result.stderr or '')
+    if message:
+        print(message.rstrip(), flush=True)
+    if result.returncode == 0:
+        return True
+    # Xcode exports valid runtime DMGs without an embedded UDIF checksum. A
+    # checksum mismatch still fails; only this explicit absence permits the
+    # readable-image check, followed by Xcode import and runtime verification.
+    if not re.search(r'has no checksum\.\s*$', message):
+        return False
+    info = subprocess.run(['hdiutil', 'imageinfo', '-plist', str(archive)], text=True, capture_output=True)
+    if info.returncode != 0:
+        return False
+    try:
+        readable = isinstance(plistlib.loads(info.stdout.encode()), dict)
+    except (ValueError, plistlib.InvalidFileException):
+        return False
+    if readable:
+        print('Platform DMG has no embedded checksum; image metadata is readable. '
+              'Xcode import, runtime version and the cache SHA-256 are checked separately.', flush=True)
+    return readable
 
 
 def cached_archive(folder, version):

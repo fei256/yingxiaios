@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -109,6 +110,41 @@ class PlatformTests(unittest.TestCase):
             platform.install_platform(self.root)
         self.assertEqual(self.downloads, [])
         self.assertEqual(self.imports, [])
+
+
+class DmgValidationTests(unittest.TestCase):
+    def verify(self, results):
+        with mock.patch.object(platform.subprocess, 'run', side_effect=results) as command, \
+             contextlib.redirect_stdout(io.StringIO()):
+            valid = platform.verify_dmg(Path('runtime.dmg'))
+        return valid, command.call_count
+
+    def test_checksum_bearing_image_must_pass_verify(self):
+        valid, calls = self.verify([subprocess.CompletedProcess([], 0, stdout='verified', stderr='')])
+        self.assertTrue(valid)
+        self.assertEqual(calls, 1)
+
+    def test_apple_export_without_embedded_checksum_accepts_readable_image_metadata(self):
+        image = plistlib.dumps({'Format': 'UDRO', 'Properties': {'Checksummed': False}}).decode()
+        valid, calls = self.verify([
+            subprocess.CompletedProcess([], 1, stdout='', stderr='hdiutil: verify: "runtime.dmg" has no checksum.\n'),
+            subprocess.CompletedProcess([], 0, stdout=image, stderr=''),
+        ])
+        self.assertTrue(valid)
+        self.assertEqual(calls, 2)
+
+    def test_actual_checksum_failure_cannot_fall_back_to_metadata_only(self):
+        valid, calls = self.verify([subprocess.CompletedProcess([], 1, stdout='', stderr='hdiutil: verify: checksum mismatch\n')])
+        self.assertFalse(valid)
+        self.assertEqual(calls, 1)
+
+    def test_no_checksum_with_unreadable_metadata_is_rejected(self):
+        valid, calls = self.verify([
+            subprocess.CompletedProcess([], 1, stdout='', stderr='hdiutil: verify: "runtime.dmg" has no checksum.\n'),
+            subprocess.CompletedProcess([], 0, stdout='not an image plist', stderr=''),
+        ])
+        self.assertFalse(valid)
+        self.assertEqual(calls, 2)
 
 
 if __name__ == '__main__':
