@@ -66,6 +66,56 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-version
           brew install xcodegen ripgrep pkgconf
 
+      - name: Restore iOS 18.1 platform package
+        id: platform-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          key: ios-platform-18.1-${{ runner.os }}-${{ runner.arch }}-v1
+          path: build/ios-platform-cache
+
+      - name: Install iOS 18.1 platform
+        id: ios-platform
+        run: |
+          python3 - <<'PY' 2>&1 | tee build/ci/ios-platform.log
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+          import time
+          runtimes = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'runtimes', '--json']))['runtimes']
+          if any(runtime.get('version') == '18.1' and runtime.get('isAvailable')
+                 and 'iOS' in runtime.get('name', '') for runtime in runtimes):
+              print('iOS 18.1 platform is already installed.')
+              raise SystemExit(0)
+          folder = Path('build/ios-platform-cache')
+          folder.mkdir(parents=True, exist_ok=True)
+          archives = list(folder.rglob('*.dmg'))
+          if not archives:
+              command = ['xcodebuild', '-downloadPlatform', 'iOS', '-buildVersion', '18.1',
+                         '-exportPath', str(folder.resolve())]
+              for attempt in range(1, 4):
+                  result = subprocess.run(command)
+                  if result.returncode == 0:
+                      break
+                  if attempt == 3:
+                      raise SystemExit(result.returncode)
+                  time.sleep(15)
+              archives = list(folder.rglob('*.dmg'))
+          if len(archives) != 1:
+              raise SystemExit('Expected exactly one iOS 18.1 platform package.')
+          subprocess.run(['xcodebuild', '-importPlatform', str(archives[0].resolve())], check=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('cacheable=true\n')
+          PY
+
+      - name: Save iOS 18.1 platform package
+        if: steps.platform-cache.outputs.cache-hit != 'true' && steps.ios-platform.outputs.cacheable == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          key: ${{ steps.platform-cache.outputs.cache-primary-key }}
+          path: build/ios-platform-cache
+
       - name: Restore native dependencies
         id: native-cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
