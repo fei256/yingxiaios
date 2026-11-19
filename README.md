@@ -1,6 +1,6 @@
 # 映匣 Yingxia · iOS
 
-映匣的独立 iOS 源码，面向 iPhone / iPad，最低 iOS 16。当前版本为 **1.8.13 **，支持 Python、Node、QuickJS、FFmpeg、KSPlayer、原盘读取和离线语音字幕；iOS 不执行 JVM、JAR 或 DEX。
+映匣的独立 iOS 源码，面向 iPhone / iPad，最低 iOS 16.2。当前版本为 **1.8.13**，支持 Python、Node、QuickJS、FFmpeg、KSPlayer、原盘读取和离线语音字幕；iOS 不执行 JVM、JAR 或 DEX。
 
 ## 内容
 
@@ -10,7 +10,7 @@
 - `Vendor/`：本地适配、固定版本信息、补丁、许可证及依赖下载清单。
 - `Scripts/`：依赖准备、iOS 工程生成、IPA 构建及包体完整性检查。
 - `Services/`、`website/`：可选服务和介绍网站；不参与 iOS IPA 编译。
-- `SOURCE-MANIFEST.json`：本次源码清单与 SHA-256。
+- `SOURCE-MANIFEST.json`：最初源码包附带的清单与 SHA-256；后续版本以 Git 提交和每次构建的源码校验报告为准。
 
 当前包不携带个人订阅、账号数据、API 凭据、签名证书、Git 历史、已编译 App 或大型依赖归档。先准备依赖，再编译 IPA；它不是开箱即编译的离线依赖全集。
 
@@ -42,7 +42,7 @@ python3 Scripts/prepare-ios-dependencies.py --av3a-archive /path/to/av3a-pinned-
 
 该命令准备原生源码归档、Python、NodeMobile、原盘库、FFmpeg、离线语音库及 Swift Package 缓存，并生成 `Yingxia-iOS.xcodeproj`。后续依赖已齐备时可不带 `--av3a-archive`。下载和编译所需时间取决于网络与机器性能。
 
-本包固定了构建所需版本，但未在全新机器上重新执行完整依赖下载和构建。准备脚本会在缺少工具、下载失败或哈希不匹配时停止；请依据输出处理。
+已在 GitHub Actions 的 macOS 构建机完成完整依赖准备、应用归档和未签名 IPA 校验，首次成功记录见 [build06](https://github.com/fei256/yingxiaios/actions/runs/44439647067)，对应源码提交 `b11852e`。准备脚本会在缺少工具、下载失败或哈希不匹配时停止；请依据输出处理。
 
 ## 构建 IPA
 
