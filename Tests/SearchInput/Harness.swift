@@ -32,7 +32,9 @@ private struct ControlHarness: View {
     @State private var last = "none"
     var body: some View {
         ZStack {
-            Color.black.contentShape(Rectangle()).onTapGesture { last = "picture" }
+            Color.black.allowsHitTesting(false)
+            PictureGestures(tap: { _, _ in last = "picture" }, hold: { _ in last = "hold" }, swipe: { _ in last = "swipe" }) { _ in last = "pinch" }
+                .ignoresSafeArea()
             VStack(spacing: 30) {
                 Text(last).accessibilityIdentifier("control.last")
                 controls("top")

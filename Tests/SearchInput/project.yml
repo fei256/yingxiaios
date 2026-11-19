@@ -14,6 +14,8 @@ targets:
     sources:
       - path: ../../App/GlobalSearchInput.swift
       - path: ../../App/PlayerControlTargets.swift
+      - path: ../../App/PlayerPictureGestures.swift
+      - path: ../../Sources/TVCore/PictureTaps.swift
       - path: ../../App/LocalControlTargets.swift
       - path: Harness.swift
     settings:
