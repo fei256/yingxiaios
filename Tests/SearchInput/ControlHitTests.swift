@@ -6,6 +6,7 @@ final class ControlHitTests: XCTestCase {
         app.launchArguments = ["controls"]
         app.launch()
         XCUIDevice.shared.orientation = .landscapeLeft
+        print("Reference application/window bounds: \(app.frame), \(app.windows.firstMatch.frame)")
         let result = app.staticTexts["control.last"]
         var events = 0
         for id in ["reference", "plain", "styled.rectangle"] {
@@ -24,6 +25,7 @@ final class ControlHitTests: XCTestCase {
         app.launchArguments = ["controls"]
         app.launch()
         XCUIDevice.shared.orientation = .landscapeLeft
+        print("Control application/window bounds: \(app.frame), \(app.windows.firstMatch.frame)")
         XCTAssertTrue(app.buttons["top.0"].waitForExistence(timeout: 5))
         let layout = XCTAttachment(screenshot: app.screenshot())
         layout.lifetime = .keepAlways
