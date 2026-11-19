@@ -386,32 +386,34 @@ struct GlobalSearchView: View {
     @ViewBuilder private var searchResultLayout: some View {
         #if os(iOS)
         GlobalSearchSurface {
-            if showsSuggestions {
-                ScrollView {
-                    WithPerceptionTracking {
-                        LazyVStack(alignment: .leading, spacing: 0) { searchCompletions }.pageContainer()
-                    }
-                }.accessibilityIdentifier("search.suggestions")
-            } else {
-                GeometryReader { geometry in
-                    WithPerceptionTracking {
-                        let rail = !model.keyword.isEmpty && store.subscription != nil
-                        let railWidth = min(208, max(104, geometry.size.width * (geometry.size.width < 600 ? 0.30 : 0.24)))
-                        HStack(alignment: .top, spacing: 0) {
-                            if rail {
-                                SearchSiteRail(items: sourceItems, selection: model.selectedSource ?? "", waiting: model.busy,
-                                               compact: geometry.size.width < 600) { id in
-                                    model.select(id.isEmpty ? nil : id)
-                                }
-                                .frame(width: railWidth)
-                                .padding(.leading, geometry.size.width < 600 ? 8 : Layout.gutter)
-                                .padding(.vertical, Layout.gutter)
-                            }
-                            positionedSearchResults(usesSiteRail: rail)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            WithPerceptionTracking {
+                if showsSuggestions {
+                    ScrollView {
+                        WithPerceptionTracking {
+                            LazyVStack(alignment: .leading, spacing: 0) { searchCompletions }.pageContainer()
                         }
-                        .frame(maxWidth: Layout.maxWidth, maxHeight: .infinity)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }.accessibilityIdentifier("search.suggestions")
+                } else {
+                    GeometryReader { geometry in
+                        WithPerceptionTracking {
+                            let rail = !model.keyword.isEmpty && store.subscription != nil
+                            let railWidth = min(208, max(104, geometry.size.width * (geometry.size.width < 600 ? 0.30 : 0.24)))
+                            HStack(alignment: .top, spacing: 0) {
+                                if rail {
+                                    SearchSiteRail(items: sourceItems, selection: model.selectedSource ?? "", waiting: model.busy,
+                                                   compact: geometry.size.width < 600) { id in
+                                        model.select(id.isEmpty ? nil : id)
+                                    }
+                                    .frame(width: railWidth)
+                                    .padding(.leading, geometry.size.width < 600 ? 8 : Layout.gutter)
+                                    .padding(.vertical, Layout.gutter)
+                                }
+                                positionedSearchResults(usesSiteRail: rail)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            }
+                            .frame(maxWidth: Layout.maxWidth, maxHeight: .infinity)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     }
                 }
             }
