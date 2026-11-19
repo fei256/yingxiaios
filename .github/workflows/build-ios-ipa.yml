@@ -38,7 +38,6 @@ jobs:
       run:
         shell: bash
     env:
-      DEVELOPER_DIR: /Applications/Xcode_16.1.app/Contents/Developer
       HOMEBREW_NO_AUTO_UPDATE: '1'
       JOBS: '2'
       TVBOX_CACHE: ${{ github.workspace }}/build/download-cache
@@ -52,7 +51,10 @@ jobs:
       - name: Check build environment
         run: |
           mkdir -p build/ci
-          test -d "$DEVELOPER_DIR" || { echo 'Xcode 16.1 is missing from this runner image.' >&2; exit 1; }
+          ci_xcode_path=/Applications/Xcode_16.1.app/Contents/Developer
+          test -d "$ci_xcode_path" || { echo 'Xcode 16.1 is missing from this runner image.' >&2; exit 1; }
+          sudo xcode-select --switch "$ci_xcode_path"
+          xcrun simctl list > /dev/null
           python3 - <<'PY'
           import os
           import re
