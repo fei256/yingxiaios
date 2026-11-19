@@ -36,10 +36,13 @@ private struct ControlHarness: View {
             Color.black.allowsHitTesting(false)
             PictureGestures(tap: { _, _ in record("picture") }, hold: { _ in record("hold") }, swipe: { _ in record("swipe") }) { _ in record("pinch") }
                 .ignoresSafeArea()
+                .allowsHitTesting(!ProcessInfo.processInfo.arguments.contains("no-picture"))
             VStack(spacing: 30) {
                 Text("\(last):\(events)").accessibilityIdentifier("control.last")
                 controls("top")
                 HStack(spacing: 6) {
+                    ControlTouchProxy(pressed: .constant(false), enabled: true, action: { record("native.reference") }, accessibilityIdentifier: "native.reference")
+                        .frame(width: 48, height: 48).background(Color.gray)
                     Button { record("reference") } label: {
                         Text("R").frame(width: 48, height: 48).background(Color.gray).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityIdentifier("reference")

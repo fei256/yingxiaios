@@ -18,6 +18,7 @@ targets:
       - path: ../../Sources/TVCore/PictureTaps.swift
       - path: ../../App/LocalControlTargets.swift
       - path: ../../App/LocalSettingsAppearance.swift
+      - path: ../../App/ControlTouchProxy.swift
       - path: Harness.swift
     settings:
       base:

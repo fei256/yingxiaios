@@ -2,14 +2,23 @@ import XCTest
 
 final class ControlHitTests: XCTestCase {
     @MainActor func testReferenceControlCorners() {
+        checkReferences(arguments: ["controls"], ids: ["reference", "plain", "styled.rectangle"])
+    }
+    @MainActor func testReferenceControlCornersWithoutPictureLayer() {
+        checkReferences(arguments: ["controls", "no-picture"], ids: ["reference", "plain", "styled.rectangle"])
+    }
+    @MainActor func testNativeReferenceControlCorners() {
+        checkReferences(arguments: ["controls"], ids: ["native.reference"])
+    }
+    @MainActor private func checkReferences(arguments: [String], ids: [String]) {
         let app = XCUIApplication()
-        app.launchArguments = ["controls"]
+        app.launchArguments = arguments
         app.launch()
         XCUIDevice.shared.orientation = .landscapeLeft
         print("Reference application/window bounds: \(app.frame), \(app.windows.firstMatch.frame)")
         let result = app.staticTexts["control.last"]
         var events = 0
-        for id in ["reference", "plain", "styled.rectangle"] {
+        for id in ids {
             let button = app.buttons[id]
             XCTAssertTrue(button.waitForExistence(timeout: 5))
             print("Reference bounds \(id): \(button.frame)")
