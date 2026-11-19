@@ -129,7 +129,7 @@ jobs:
           path: build/ios-platform-cache
 
       - name: Test native search input and control hit areas
-        timeout-minutes: 20
+        timeout-minutes: 45
         run: |
           mkdir -p build/ci/search-input
           python3 - <<'PY'
@@ -149,7 +149,7 @@ jobs:
           runtimes = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'runtimes', '--json']))['runtimes']
           runtime = next(x for x in runtimes if x.get('isAvailable') and x.get('version') == '18.1')
           types = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devicetypes', '--json']))['devicetypes']
-          device = next(x for x in types if x['name'].startswith('iPad Pro') and 'M4' in x['name'])
+          device = next(x for x in types if x['name'] == 'iPad (10th generation)')
           identifier = subprocess.check_output(['xcrun', 'simctl', 'create', 'Yingxia Input Checks', device['identifier'], runtime['identifier']], text=True).strip()
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('SEARCH_INPUT_SIMULATOR=' + identifier + '\n')
@@ -178,7 +178,7 @@ jobs:
               identifier = open('build/ci/search-input/simulator-id.txt').read().strip()
           print('Booting input test simulator', flush=True)
           subprocess.run(['xcrun', 'simctl', 'boot', identifier], check=True, timeout=60)
-          subprocess.run(['xcrun', 'simctl', 'bootstatus', identifier, '-b'], check=True, timeout=300)
+          subprocess.run(['xcrun', 'simctl', 'bootstatus', identifier, '-b'], check=True, timeout=1500)
           print('Input test simulator booted', flush=True)
           PY
           xcodebuild test -project build/ci/search-input/SearchInputChecks.xcodeproj -scheme SearchInputChecks \
