@@ -1,6 +1,15 @@
 import XCTest
 
 final class ControlHitTests: XCTestCase {
+    @MainActor func testPictureRemainsInteractiveOutsideControlFrames() {
+        let app = XCUIApplication()
+        app.launchArguments = ["controls"]
+        app.launch()
+        XCUIDevice.shared.orientation = .landscapeLeft
+        XCTAssertTrue(app.buttons["top.0"].waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["control.last"].label.hasPrefix("picture:"))
+    }
     @MainActor func testReferenceControlCorners() {
         checkReferences(arguments: ["controls"], ids: ["reference", "plain", "styled.rectangle"])
     }

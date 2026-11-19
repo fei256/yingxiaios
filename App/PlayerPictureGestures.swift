@@ -18,13 +18,14 @@ struct PictureGestures: UIViewRepresentable {
     let swipe: (Swipe) -> Void
     /// Whether slides up or down set the brightness and the volume.
     var levels = true
+    var excludedHitRegions: [CGRect] = []
     /// Pinched out (true) or in, as in YouTube: fill the screen or fit the picture.
     let pinch: (Bool) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeUIView(context: Context) -> UIView {
-        let view = UIView()
+        let view = PictureGestureSurface()
         let press = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pressed(_:)))
         press.minimumPressDuration = 0.35
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
@@ -39,7 +40,19 @@ struct PictureGestures: UIViewRepresentable {
         return view
     }
 
-    func updateUIView(_ view: UIView, context: Context) { context.coordinator.parent = self }
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.parent = self
+        (view as? PictureGestureSurface)?.excludedHitRegions = excludedHitRegions.filter { !$0.isEmpty && !$0.isInfinite && !$0.isNull }
+    }
+
+    private final class PictureGestureSurface: UIView {
+        var excludedHitRegions: [CGRect] = []
+        override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+            guard super.point(inside: point, with: event), let window else { return false }
+            let location = convert(point, to: window)
+            return !excludedHitRegions.contains { $0.contains(location) }
+        }
+    }
 
     @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var parent: PictureGestures?

@@ -4,4 +4,6 @@ This small iOS test app compiles the production search input, stable search surf
 
 Hosted UIKit tests check that the first input and IME updates keep the same text field and first responder, explicit focus requests still work, and the caret is vertically centered. UI tests tap the centers and corners of player and navigation buttons above the actual native gesture layer and check which action actually fires.
 
+Control labels and bands publish their window frames. The production picture gesture view excludes those frames from native hit testing, so visible controls own their touches. Checks cover an ordinary UIKit button, SwiftUI reference buttons with and without the picture layer, 60 player/dock taps, and a picture tap outside the controls.
+
 The workflow runs these checks in an independent macOS job on the installed iOS 18.5 iPad simulator. The IPA job retains Xcode 16.1 and iOS 16.2 compatibility checks; simulator startup does not block archive creation. Both jobs must be reviewed for delivery validation. They verify the shared components in a controlled host; they do not run the full player or replace physical iPad validation.

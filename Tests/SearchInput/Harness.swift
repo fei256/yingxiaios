@@ -31,17 +31,18 @@ struct SearchInputHarness: View {
 private struct ControlHarness: View {
     @State private var last = "none"
     @State private var events = 0
+    @State private var controlFrames: [CGRect] = []
     var body: some View {
         ZStack {
             Color.black.allowsHitTesting(false)
-            PictureGestures(tap: { _, _ in record("picture") }, hold: { _ in record("hold") }, swipe: { _ in record("swipe") }) { _ in record("pinch") }
+            PictureGestures(tap: { _, _ in record("picture") }, hold: { _ in record("hold") }, swipe: { _ in record("swipe") }, excludedHitRegions: controlFrames) { _ in record("pinch") }
                 .ignoresSafeArea()
                 .allowsHitTesting(!ProcessInfo.processInfo.arguments.contains("no-picture"))
             VStack(spacing: 30) {
                 Text("\(last):\(events)").accessibilityIdentifier("control.last")
                 controls("top")
                 HStack(spacing: 6) {
-                    ControlTouchProxy(pressed: .constant(false), enabled: true, action: { record("native.reference") }, accessibilityIdentifier: "native.reference")
+                    NativeReferenceButton { record("native.reference") }
                         .frame(width: 48, height: 48).background(Color.gray)
                     Button { record("reference") } label: {
                         Text("R").frame(width: 48, height: 48).background(Color.gray).contentShape(Rectangle())
@@ -52,7 +53,7 @@ private struct ControlHarness: View {
                     Button { record("styled.rectangle") } label: {
                         Color.gray.frame(width: 48, height: 48).contentShape(Rectangle())
                     }.buttonStyle(PlayerToolbarButtonStyle()).accessibilityIdentifier("styled.rectangle")
-                }
+                }.playerControlHitRegion()
                 Spacer()
                 controls("bottom")
                 HStack(spacing: 0) {
@@ -66,6 +67,7 @@ private struct ControlHarness: View {
                 }.padding(.horizontal, 4).localSettingsSurface(cornerRadius: 32, navigation: true).localDockTouchSurface()
             }.padding(24)
         }.foregroundStyle(.white)
+            .onPreferenceChange(PlayerControlHitFrames.self) { controlFrames = $0 }
     }
     private func record(_ action: String) {
         last = action
@@ -78,7 +80,7 @@ private struct ControlHarness: View {
                     Image(systemName: "play.fill").playerControlTarget()
                 }.buttonStyle(PlayerToolbarButtonStyle(selected: last == "\(prefix).\(index)")).accessibilityIdentifier("\(prefix).\(index)")
             }
-        }
+        }.playerControlHitRegion()
     }
 }
 

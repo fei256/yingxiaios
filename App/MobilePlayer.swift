@@ -54,6 +54,7 @@ struct MobilePlayerView: View {
     @AppStorage(DanmakuArea.key) private var danmakuArea = DanmakuArea.standard
     @State private var localPanel: LocalPlayerPanel?
     @State private var playerSize = CGSize.zero
+    @State private var pictureControlFrames: [CGRect] = []
     @State private var keyboardTop: CGFloat?
     @State private var subtitleTab = "轨道"
     @State private var subtitleTarget = SubtitleTrackSelection.Target.primary
@@ -110,15 +111,18 @@ struct MobilePlayerView: View {
                     playbackInformationOverlay
                     controls.opacity(chromeVisible && !locked ? 1 : 0)
                         .allowsHitTesting(chromeVisible && !locked)
+                        .environment(\.playerControlsTouchActive, chromeVisible && !locked)
                     playbackNotices
-                    localPopup
+                    localPopup.playerControlHitRegion()
                         .opacity(chromeVisible && !locked ? 1 : 0)
                         .allowsHitTesting(chromeVisible && !locked && localPanel != nil)
-                    if !inline { lockButton }
+                        .environment(\.playerControlsTouchActive, chromeVisible && !locked && localPanel != nil)
+                    if !inline { lockButton.environment(\.playerControlsTouchActive, locked ? showsLock : chromeVisible) }
                 }
                 // The screen proposes the viewport. A previous landscape control width must
                 // never enlarge the portrait player and become its next measured size.
                 .frame(width: viewport.size.width, height: viewport.size.height)
+                .onPreferenceChange(PlayerControlHitFrames.self) { pictureControlFrames = $0 }
                 .onAppear { playerSize = viewport.size }
                 .appOnChange(of: viewport.size) { _, size in playerSize = size }
             }
@@ -186,7 +190,7 @@ struct MobilePlayerView: View {
             ZStack {
                 // A tap on the picture shows or hides the controls; a tap on a control keeps them up (see `rows`).
                 // Two taps on a side skip, touching and holding plays faster, and sliding sideways seeks.
-                PictureGestures(tap: tapped, hold: held, swipe: swiped, levels: slidesLevels && !inline) { wider in
+                PictureGestures(tap: tapped, hold: held, swipe: swiped, levels: slidesLevels && !inline, excludedHitRegions: pictureControlFrames) { wider in
                     guard !locked else { return }
                     withAnimation(.easeInOut(duration: 0.25)) { fillsScreen = wider }
                 }
@@ -725,6 +729,7 @@ struct MobilePlayerView: View {
                         bottomRow
                         localBottomControls
                     }
+                    .playerControlHitRegion()
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                         if abs(bottomControlsHeight - height) > 0.5 { bottomControlsHeight = height }
                     }
@@ -794,6 +799,7 @@ struct MobilePlayerView: View {
             }
         }
         .background { Color.black.opacity(0.001).contentShape(Rectangle()).onTapGesture { poke() } }
+        .playerControlHitRegion()
         .simultaneousGesture(TapGesture().onEnded { poke() })
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { topRowHeight = $0 }
     }
