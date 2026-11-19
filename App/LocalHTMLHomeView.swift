@@ -60,7 +60,11 @@ struct LocalHTMLHomeContent<Content: View>: View {
     }
     private func choose(_ id: String) {
         var next = store; next.select(id)
-        do { try next.save(); failure = "" } catch { failure = error.localizedDescription }
+        do {
+            try next.save()
+            try (next.active.map { LocalHomeTarget.html($0.id) } ?? .builtin).save()
+            failure = ""
+        } catch { failure = error.localizedDescription }
     }
 }
 

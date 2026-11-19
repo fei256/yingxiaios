@@ -7,7 +7,7 @@ import UIKit
 private struct LocalDockKey: EnvironmentKey { static let defaultValue = false }
 private struct LocalDockInsetKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 private struct LocalDockTopKey: EnvironmentKey { static let defaultValue: CGFloat? = nil }
-private struct LocalHTMLDockClearanceKey: EnvironmentKey { static let defaultValue: CGFloat = 68 }
+private struct LocalHTMLDockClearanceKey: EnvironmentKey { static let defaultValue = LocalDockLayout.inset(showsMusic: false) }
 private struct LocalDockVisibleKey: EnvironmentKey { static let defaultValue = true }
 private struct LocalHTMLDockHiddenKey: EnvironmentKey { static let defaultValue = Binding.constant(false) }
 private struct LocalDockScrollEnabledKey: EnvironmentKey { static let defaultValue = false }
@@ -76,10 +76,17 @@ struct LocalAppNavigation: View {
     @State private var preparedHomeSource = false
     @State private var homeRevision = 0
     @State private var homeResetID: UUID?
+    @State private var selectedHome = LocalHomeTarget.load()
+    @State private var homeTaps = LocalHomeTapState()
+    @State private var pendingHomeNavigation = false
+    @State private var homeNotice: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @ScaledMetric(relativeTo: .caption2) private var dockLabelSize: CGFloat = 11
     @AppStorage(LocalHTMLHomeStore.key) private var htmlHomeData = Data()
+    @AppStorage(LocalHomeTarget.storageKey) private var homeSelectionData = Data()
     let page: (AppSection) -> AnyView
-    private let entries: [AppSection] = [.home, .history, .music, .settings]
+    private let entries: [AppSection] = [.home, .history, .music, .settings, .search, .push]
     private var current: AppSection {
         switch store.section {
         case .discover, .live: .home
@@ -127,9 +134,10 @@ struct LocalAppNavigation: View {
                     .overlay(alignment: .bottom) {
                         WithPerceptionTracking {
                             if dockVisible {
+                                let metrics = LocalDockLayout.metrics(availableWidth: viewport.size.width - 2 * LocalDockLayout.horizontalPadding)
                                 VStack(spacing: LocalDockLayout.musicSpacing) {
                                     if store.music.showsStrip(videoPlaying: store.playing != nil) {
-                                        MusicMiniPlayer().frame(height: LocalDockLayout.musicHeight)
+                                        MusicMiniPlayer().frame(width: metrics.width, height: LocalDockLayout.musicHeight)
                                             .localGlassSurface(cornerRadius: 28)
                                     }
                                     dock(availableWidth: viewport.size.width - 2 * LocalDockLayout.horizontalPadding)
@@ -137,11 +145,18 @@ struct LocalAppNavigation: View {
                                 .padding(.horizontal, LocalDockLayout.horizontalPadding)
                                 .padding(.top, LocalDockLayout.topPadding).padding(.bottom, LocalDockLayout.bottomPadding)
                                 .localDockHitRegions(frames: LocalDockLayout.touchFrames(containerWidth: viewport.size.width,
-                                    showsMusic: store.music.showsStrip(videoPlaying: store.playing != nil)))
+                                    showsMusic: store.music.showsStrip(videoPlaying: store.playing != nil), controlHeight: dockControlHeight))
                                 .disabled(sourcePanelBlocksInput)
                                 .allowsHitTesting(!sourcePanelBlocksInput)
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                             }
+                        }
+                    }
+                    .overlay(alignment: .top) {
+                        if let homeNotice {
+                            Text(homeNotice).font(.footnote).padding(12)
+                                .background(.regularMaterial, in: Capsule()).padding(.top, 12)
+                                .allowsHitTesting(false)
                         }
                     }
                 }
@@ -155,10 +170,22 @@ struct LocalAppNavigation: View {
             .environment(\.openLocalHomeSources, { openHomeSources() })
             .onAppear { prepareHomeDestination(); visited.insert(current); revealDock() }
             .task(id: sourceRevision) { prepareHomeDestination(); synchronizeSources() }
-            .appOnChange(of: store.section) { _, _ in
+            .appOnChange(of: store.section) { _, section in
+                if section != .home && section != .sites && section != .python {
+                    homeTaps.reset(); pendingHomeNavigation = false
+                }
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 visited.insert(current)
                 revealDock()
+            }
+            .appOnChange(of: scenePhase) { _, phase in
+                if phase != .active { homeTaps.reset(); pendingHomeNavigation = false }
+            }
+            .appOnChange(of: homeSelectionData) { _, _ in
+                let target = LocalHomeTarget.load()
+                if target != selectedHome {
+                    selectedHome = target; pendingHomeNavigation = false; homeTaps.reset()
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in keyboardVisible = true }
             // Keep the dock out of the keyboard's shrinking safe area until dismissal finishes.
@@ -167,18 +194,23 @@ struct LocalAppNavigation: View {
                 metadataRevision = TMDBServiceSettings.identity
             }
             .localGlassDialog(isPresented: Binding(get: { sourcePanel != nil }, set: { if !$0 { sourcePanel = nil } }), title: "",
-                              maxWidth: 440, maxHeight: 520, layout: .centered,
-                              onDismiss: { sourcePanelBlocksInput = false }) {
+                              maxWidth: LocalSettingsAppearance.maximumWidth, layout: .homePicker,
+                              onDismiss: { sourcePanelBlocksInput = false; homeTaps.reset() }) {
                 RouteStack {
                     WithPerceptionTracking {
-                        LocalHomeSourcePanel(initialKind: sourcePanel ?? .sites, pickedSites: pickedSites, homeSelected: current == .home,
-                                             pick: select, home: selectHome)
+                        LocalHomeSourcePanel(initialKind: sourcePanel ?? .sites, selectedHome: homeTarget,
+                                             pick: select, home: selectHome, close: { sourcePanel = nil })
                     }
                 }
                 .environment(store)
                 .toolbarBackground(.hidden, for: .navigationBar)
             }
             .onDisappear { revealDock() }
+            .task(id: homeNotice) {
+                guard homeNotice != nil else { return }
+                do { try await Task.sleep(for: .seconds(4)) } catch { return }
+                homeNotice = nil
+            }
             .fullScreenCover(isPresented: Binding(get: { store.music.presentsPlayer }, set: { store.music.presentsPlayer = $0 })) {
                 MusicNowPlayingScreen().environment(store)
             }
@@ -210,8 +242,8 @@ struct LocalAppNavigation: View {
         let readiness = store.subscriptions.map { entry in
             "\(entry.address)|\(entry.enabled)|\(store.documents[entry.address] != nil)|\(store.subscriptionErrors[entry.address] != nil)"
         }.joined(separator: "\n")
-        guard let config = store.subscription else { return "empty|\(store.importing)|" + readiness }
-        return config.importedAt.description + "|\(store.importing)|" + readiness + "|" + config.sites.map {
+        guard let config = store.subscription else { return "empty|\(store.importing)|\(store.restoringBackup)|" + readiness }
+        return config.importedAt.description + "|\(store.importing)|\(store.restoringBackup)|" + readiness + "|" + config.sites.map {
             $0.key + "|" + $0.origin(or: config.origin).absoluteString
         }.joined(separator: "\n")
     }
@@ -244,11 +276,15 @@ struct LocalAppNavigation: View {
                 pickedSites[section] = sites.first { selection(for: $0, origin: config.origin) == remembered }
             }
         } else { pickedSites = [:] }
-        guard !restoredDestination else { return }
+        if restoredDestination {
+            if pendingHomeNavigation && !sourcePanelBlocksInput { returnToSelectedHome() }
+            return
+        }
         let preference = defaults.string(forKey: "local.home.defaultDestination") ?? "home"
         guard current == .home, preference == "lastSite" || preference == "lastPython",
               LocalHomeSourceSelection.saved(python: preference == "lastPython", defaults: defaults) != nil else {
             restoredDestination = true
+            migrateHomeSelection()
             return
         }
         let desired = store.subscription.flatMap { config in
@@ -263,39 +299,58 @@ struct LocalAppNavigation: View {
         }) { return }
         restoredDestination = true
         guard let config = store.subscription, let desired,
-              let site = sites.first(where: { selection(for: $0, origin: config.origin) == desired }) else { return }
-        select(site)
+              let site = sites.first(where: { selection(for: $0, origin: config.origin) == desired }) else { migrateHomeSelection(); return }
+        navigate(to: site)
+        migrateHomeSelection()
     }
 
     private func select(_ site: Site) {
+        guard let config = store.subscription,
+              rememberHome(.source(selection(for: site, origin: config.origin))) else { return }
+        navigate(to: site)
+        sourcePanel = nil
+    }
+
+    private func navigate(to site: Site) {
         store.cancelResume()
         let section: AppSection = store.localSourceGroup(for: site) == .python ? .python : .sites
         pickedSites[section] = site
         if let config = store.subscription { selection(for: site, origin: config.origin).save() }
         store.section = section
         visited.insert(section)
-        sourcePanel = nil
     }
 
     private func selectHome() {
+        let home = LocalHTMLHomeStore.load()
+        let target: LocalHomeTarget = home.active.map { .html($0.id) } ?? .builtin
+        let changed = target != selectedHome
+        guard rememberHome(target) else { return }
+        if changed {
+            homeResetID = UUID()
+            if target == .builtin { homeRevision += 1 }
+        }
         store.cancelResume()
-        // HTML selection has already been saved by the selector. Its source.id
-        // controls actual source changes; returning to it preserves web history.
-        // Explicit native Home still resets a pushed native detail stack.
-        if LocalHTMLHomeStore.load().active == nil { homeRevision += 1 }
-        homeResetID = UUID()
         store.section = .home
         visited.insert(.home)
         sourcePanel = nil
     }
 
     private func openHomeSources() {
+        homeTaps.reset(); pendingHomeNavigation = false; homeNotice = nil
         restoredDestination = true
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-        presentSources(current == .python ? .python : htmlHomeSelected ? .html : .sites)
+        let kind: LocalHomeSourceKind
+        switch homeTarget {
+        case .source(let source): kind = source.python ? .python : .sites
+        case .html: kind = .html
+        case .builtin: kind = .sites
+        }
+        presentSources(kind)
     }
 
     private func presentSources(_ kind: LocalHomeSourceKind) {
+        guard sourcePanel == nil && !sourcePanelBlocksInput else { return }
+        homeTaps.reset()
         store.cancelResume()
         // Remain blocked after a selection sets sourcePanel to nil. UIKit's
         // dismissal completion owns re-enabling the underlying retained page.
@@ -303,9 +358,108 @@ struct LocalAppNavigation: View {
         sourcePanel = kind
     }
 
-    private var dockInset: CGFloat {
-        LocalDockLayout.inset(showsMusic: store.music.showsStrip(videoPlaying: store.playing != nil))
+    private var currentHomeTarget: LocalHomeTarget? {
+        if current == .home {
+            return LocalHTMLHomeStore.load().active.map { .html($0.id) } ?? .builtin
+        }
+        if let site = pickedSites[current], let config = store.subscription {
+            return .source(selection(for: site, origin: config.origin))
+        }
+        return nil
     }
+
+    private var homeTarget: LocalHomeTarget {
+        if let selectedHome { return selectedHome }
+        let preference = LocalHomeDestination(rawValue: UserDefaults.standard.string(forKey: LocalHomeDestination.key) ?? "") ?? .home
+        if preference == .lastSite || preference == .lastPython,
+           let source = LocalHomeSourceSelection.saved(python: preference == .lastPython) { return .source(source) }
+        if preference == .lastHTML, let id = LocalHTMLHomeStore.load().lastHTMLID { return .html(id) }
+        return currentHomeTarget ?? .builtin
+    }
+
+    @discardableResult private func rememberHome(_ target: LocalHomeTarget) -> Bool {
+        do { try target.save(); selectedHome = target; return true }
+        catch { homeNotice = "无法保存首页选择，请稍后重试"; return false }
+    }
+
+    private func migrateHomeSelection() {
+        if selectedHome == nil, let target = currentHomeTarget { rememberHome(target) }
+    }
+
+    private func homeTapped() {
+        switch homeTaps.tap(at: ProcessInfo.processInfo.systemUptime, blocked: sourcePanelBlocksInput) {
+        case .showHome:
+            restoredDestination = true
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            returnToSelectedHome()
+        case .chooseHome: openHomeSources()
+        case .ignored: break
+        }
+    }
+
+    private func showBuiltinHome() {
+        var home = LocalHTMLHomeStore.load()
+        if home.activeID != "builtin" {
+            home.select("builtin")
+            do { try home.save() } catch { homeNotice = "无法切换首页，请稍后重试" }
+        }
+        store.section = .home
+        visited.insert(.home)
+    }
+
+    private func returnToSelectedHome() {
+        guard !sourcePanelBlocksInput else { return }
+        store.cancelResume()
+        let target = homeTarget
+        let homes = LocalHTMLHomeStore.load()
+        let config = store.subscription
+        let sites = config.map { store.orderedSites($0).filter { !$0.isBuiltIn } } ?? []
+        let sources = config.map { config in sites.map { selection(for: $0, origin: config.origin) } } ?? []
+        var loadingGroups: Set<Bool> = []
+        for entry in store.subscriptions where entry.enabled {
+            if store.importing || (store.documents[entry.address] == nil && store.subscriptionErrors[entry.address] == nil) {
+                loadingGroups.insert((store.localSourceGroups[entry.address] ?? .subscription) == .python)
+            }
+        }
+        if store.restoringBackup { loadingGroups = [false, true] }
+        switch target.resolve(sources: sources, htmlIDs: Set(homes.sources.map(\.id)), loadingGroups: loadingGroups) {
+        case .waiting:
+            pendingHomeNavigation = true
+            showBuiltinHome()
+            homeNotice = "正在恢复所选首页…"
+        case .unavailable:
+            pendingHomeNavigation = false
+            showBuiltinHome()
+            homeNotice = "所选首页暂不可用，已返回默认首页"
+        case .available:
+            pendingHomeNavigation = false
+            homeNotice = nil
+            switch target {
+            case .builtin: showBuiltinHome()
+            case .source(let desired):
+                if let config, let site = sites.first(where: { selection(for: $0, origin: config.origin) == desired }) { navigate(to: site) }
+            case .html(let id):
+                guard let source = homes.sources.first(where: { $0.id == id }) else { return }
+                var next = homes
+                do {
+                    if source.isFile { _ = try homes.html(for: source) }
+                    next.select(id)
+                    if next != homes { try next.save() }
+                    store.section = .home; visited.insert(.home)
+                } catch {
+                    showBuiltinHome(); homeNotice = "首页文件不可用，请重新导入"
+                    return
+                }
+            }
+            if selectedHome == nil { rememberHome(target) }
+        }
+    }
+
+    private var dockInset: CGFloat {
+        LocalDockLayout.inset(showsMusic: store.music.showsStrip(videoPlaying: store.playing != nil), controlHeight: dockControlHeight)
+    }
+
+    private var dockControlHeight: CGFloat { max(LocalDockLayout.controlHeight, 32 + dockLabelSize * 1.4) }
 
     private func scrolled(id: UUID, active: Bool) {
         if active { activeScrollObservers.insert(id) } else { activeScrollObservers.remove(id) }
@@ -321,80 +475,65 @@ struct LocalAppNavigation: View {
 
     private func dock(availableWidth: CGFloat) -> some View {
         let metrics = LocalDockLayout.metrics(availableWidth: availableWidth)
-        return HStack(spacing: metrics.groupSpacing) {
-            HStack(spacing: metrics.buttonSpacing) {
-                ForEach(entries) { entry in WithPerceptionTracking { dockButton(entry, width: metrics.buttonWidth) } }
+        return HStack(spacing: 0) {
+            ForEach(entries) { entry in
+                WithPerceptionTracking { dockButton(entry, width: metrics.buttonWidth) }
             }
-                .padding(LocalDockLayout.groupPadding).localGlassSurface(cornerRadius: 29)
-            HStack(spacing: metrics.buttonSpacing) {
-                searchButton(width: metrics.buttonWidth)
-                pushButton(width: metrics.buttonWidth)
-            }
-            .padding(LocalDockLayout.groupPadding).localGlassSurface(cornerRadius: 29)
         }
-        .frame(maxWidth: .infinity).frame(height: LocalDockLayout.dockHeight)
+        .padding(metrics.padding)
+        .frame(width: metrics.width, height: LocalDockLayout.height(controlHeight: dockControlHeight))
+        .localSettingsSurface(cornerRadius: LocalDockLayout.height(controlHeight: dockControlHeight) / 2, navigation: true)
+        .frame(maxWidth: .infinity)
     }
 
-    private func dockButton(_ entry: AppSection, width: CGFloat) -> some View {
+    @ViewBuilder private func dockButton(_ entry: AppSection, width: CGFloat) -> some View {
         let selected = current == entry || entry == .home && (current == .sites || current == .python)
-        let color = dockColor(entry)
-        return Button {
-            restoredDestination = true
-            if entry == .home { openHomeSources() }
+        let button = Button {
+            if entry == .home { homeTapped() }
             else { selectSection(entry) }
         } label: {
-            Image(systemName: entry == .home ? "house.fill" : entry == .settings ? "gearshape.fill" : entry.icon)
-            .font(.system(size: 19, weight: .semibold))
-            .frame(width: width, height: LocalDockLayout.controlHeight)
-            .foregroundStyle(selected ? color : .primary)
-            .background(selected ? color.opacity(0.16) : .clear, in: Capsule())
+            VStack(spacing: 3) {
+                Image(systemName: dockSymbol(entry, selected: selected)).font(.system(size: 23, weight: selected ? .semibold : .regular))
+                Text(entry.title).font(.system(size: dockLabelSize)).lineLimit(1).minimumScaleFactor(0.75)
+            }
+            .frame(width: width, height: dockControlHeight)
+            .foregroundStyle(Color.primary.opacity(selected ? 1 : 0.55))
+            .background(selected ? Color.primary.opacity(0.12) : .clear, in: Capsule())
             .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel(entry.title)
-            .accessibilityAddTraits(selected ? .isSelected : [])
-            .accessibilityIdentifier("local.dock." + (entry == .home ? "home" : entry == .history ? "history" : entry == .music ? "music" : "settings"))
+        }
+        .buttonStyle(.plain).accessibilityLabel(entry.title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier(dockIdentifier(entry))
+        if entry == .home { button.accessibilityAction(named: Text("选择首页"), openHomeSources) }
+        else { button }
     }
 
-    private func dockColor(_ entry: AppSection) -> Color {
+    private func dockSymbol(_ entry: AppSection, selected: Bool) -> String {
         switch entry {
-        case .home: Color(light: Color(red: 0.04, green: 0.42, blue: 0.82), dark: Brand.cyan)
-        case .history: Color(light: Color(red: 0.68, green: 0.36, blue: 0.02), dark: Brand.amber)
-        case .music: Color(light: Color(red: 0.78, green: 0.18, blue: 0.34), dark: Brand.rose)
-        case .settings: Color(light: Color(red: 0.36, green: 0.29, blue: 0.80), dark: Brand.indigo)
-        default: Color(light: Color(red: 0.04, green: 0.46, blue: 0.44), dark: Brand.teal)
+        case .home: selected ? "house.fill" : "house"
+        case .history: selected ? "clock.fill" : "clock"
+        case .music: "music.note"
+        case .settings: selected ? "gearshape.fill" : "gearshape"
+        case .search: "magnifyingglass"
+        case .push: selected ? "paperplane.fill" : "paperplane"
+        default: entry.icon
         }
     }
 
-    private func searchButton(width: CGFloat) -> some View {
-        let selected = current == .search
-        let color = dockColor(.search)
-        return Button {
-            selectSection(.search)
-        } label: {
-            Image(systemName: "magnifyingglass").font(.system(size: 19, weight: .semibold))
-                .frame(width: width, height: LocalDockLayout.controlHeight)
-                .foregroundStyle(selected ? color : .primary)
-                .background(selected ? color.opacity(0.16) : .clear, in: Capsule())
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel("搜索").accessibilityIdentifier("local.search")
-            .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private func pushButton(width: CGFloat) -> some View {
-        let selected = current == .push
-        let color = dockColor(.push)
-        return Button {
-            selectSection(.push)
-        } label: {
-            Image(systemName: selected ? "paperplane.fill" : "paperplane")
-                .font(.system(size: 19, weight: .semibold)).frame(width: width, height: LocalDockLayout.controlHeight)
-                .foregroundStyle(selected ? color : .primary)
-                .background(selected ? color.opacity(0.16) : .clear, in: Capsule())
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain).accessibilityLabel("推送").accessibilityIdentifier("local.push")
-            .accessibilityAddTraits(selected ? .isSelected : [])
+    private func dockIdentifier(_ entry: AppSection) -> String {
+        switch entry {
+        case .home: "local.dock.home"
+        case .history: "local.dock.history"
+        case .music: "local.dock.music"
+        case .settings: "local.dock.settings"
+        case .search: "local.search"
+        case .push: "local.push"
+        default: "local.dock." + entry.id
+        }
     }
 
     private func selectSection(_ section: AppSection) {
+        homeTaps.reset(); pendingHomeNavigation = false; homeNotice = nil
         restoredDestination = true
         guard current != section else { return }
         store.cancelResume()

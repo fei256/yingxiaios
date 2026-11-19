@@ -88,6 +88,16 @@ jobs:
           xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
             -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" build/ci/reorder-provider.swift
 
+      - name: Check home navigation and settings surfaces
+        run: |
+          xcrun swiftc -swift-version 6 App/LocalHomeSourceSelection.swift App/LocalHomeNavigationState.swift \
+            Sources/TVCore/LocalDockLayout.swift Tests/NavigationState/main.swift -o build/ci/navigation-state-checks
+          build/ci/navigation-state-checks
+          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
+            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" App/LocalSettingsAppearance.swift
+          xcrun swiftc -frontend -parse -swift-version 6 -target arm64-apple-ios16.2 \
+            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" App/*.swift
+
       - name: Restore iOS 18.1 platform package
         id: platform-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24

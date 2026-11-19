@@ -12,7 +12,7 @@ private struct LocalDialogContentHeightKey: PreferenceKey {
 }
 
 enum LocalDialogLayout: Equatable {
-    case centered, upper, calendar, expanded, player
+    case centered, upper, calendar, expanded, player, homePicker
 
     func height(in viewport: CGSize, maximum: CGFloat?, content: CGFloat, header: CGFloat) -> CGFloat {
         let available = max(1, viewport.height - 24)
@@ -27,8 +27,9 @@ enum LocalDialogLayout: Equatable {
         case .calendar: limit = min(maximum ?? 680, available)
         case .expanded: limit = min(maximum ?? 820, available)
         case .player: limit = min(maximum ?? 520, available)
+        case .homePicker: limit = min(maximum ?? viewport.height * 0.9, available)
         }
-        let fitted = content > 0 && self != .expanded && self != .player ? content + header : limit
+        let fitted = content > 0 && self != .expanded && self != .player && self != .homePicker ? content + header : limit
         return max(1, min(available, limit, fitted))
     }
 }
@@ -48,42 +49,47 @@ private struct LocalGlassSurface: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var opaque
     @Environment(\.localGlassSharedBackdrop) private var sharedBackdrop
+    @Environment(\.localSettingsAtmosphere) private var settingsAtmosphere
     let radius: CGFloat
 
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        let dark = scheme == .dark
-        content
-            .background {
-                Group {
-                    if opaque {
-                        shape.fill(Color(uiColor: .secondarySystemBackground))
-                    } else if sharedBackdrop {
-                        // Translucent tiles share the page's static canvas. They do
-                        // not need a live blur of the retained tabs underneath it.
-                        shape.fill(LinearGradient(colors: [
-                            .white.opacity(dark ? 0.09 : 0.74),
-                            .white.opacity(dark ? 0.035 : 0.34)
-                        ], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    } else {
-                        shape.fill(.ultraThinMaterial)
-                            .overlay { shape.fill(Color.white.opacity(dark ? 0.025 : 0.22)) }
+    @ViewBuilder func body(content: Content) -> some View {
+        if settingsAtmosphere {
+            content.localSettingsSurface(cornerRadius: radius)
+        } else {
+            let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+            let dark = scheme == .dark
+            content
+                .background {
+                    Group {
+                        if opaque {
+                            shape.fill(Color(uiColor: .secondarySystemBackground))
+                        } else if sharedBackdrop {
+                            // Translucent tiles share the page's static canvas. They do
+                            // not need a live blur of the retained tabs underneath it.
+                            shape.fill(LinearGradient(colors: [
+                                .white.opacity(dark ? 0.09 : 0.74),
+                                .white.opacity(dark ? 0.035 : 0.34)
+                            ], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        } else {
+                            shape.fill(.ultraThinMaterial)
+                                .overlay { shape.fill(Color.white.opacity(dark ? 0.025 : 0.22)) }
+                        }
                     }
+                    // Shadow only the plate. A shadow on content rasterizes all of a
+                    // settings group's labels/controls again while scrolling on iOS 16.
+                    .shadow(color: .black.opacity(dark ? 0.24 : 0.09), radius: sharedBackdrop ? 5 : 12, x: 3, y: 5)
+                    .shadow(color: .white.opacity(dark ? 0.025 : 0.30), radius: sharedBackdrop ? 2 : 4, x: -2, y: -2)
+                    .allowsHitTesting(false)
                 }
-                // Shadow only the plate. A shadow on content rasterizes all of a
-                // settings group's labels/controls again while scrolling on iOS 16.
-                .shadow(color: .black.opacity(dark ? 0.24 : 0.09), radius: sharedBackdrop ? 5 : 12, x: 3, y: 5)
-                .shadow(color: .white.opacity(dark ? 0.025 : 0.30), radius: sharedBackdrop ? 2 : 4, x: -2, y: -2)
-                .allowsHitTesting(false)
-            }
-            .overlay {
-                shape.strokeBorder(LinearGradient(colors: [
-                    .white.opacity(dark ? 0.20 : 0.65),
-                    .white.opacity(dark ? 0.025 : 0.10),
-                    .black.opacity(dark ? 0.18 : 0.045)
-                ], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.7)
-                .allowsHitTesting(false)
-            }
+                .overlay {
+                    shape.strokeBorder(LinearGradient(colors: [
+                        .white.opacity(dark ? 0.20 : 0.65),
+                        .white.opacity(dark ? 0.025 : 0.10),
+                        .black.opacity(dark ? 0.18 : 0.045)
+                    ], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.7)
+                    .allowsHitTesting(false)
+                }
+        }
     }
 }
 
@@ -102,16 +108,6 @@ private struct LocalGlassBackdrop: View {
     }
 }
 
-private struct LocalGlassSettingsBackdrop: View {
-    @Environment(\.isLocalGlassDialog) private var dialog
-    var body: some View {
-        if !dialog {
-            LocalGlassBackdrop()
-                .allowsHitTesting(false)
-        }
-    }
-}
-
 extension View {
     func localGlassSurface(cornerRadius: CGFloat = 22) -> some View {
         modifier(LocalGlassSurface(radius: cornerRadius))
@@ -124,7 +120,7 @@ extension View {
     /// A static canvas under translucent cards. Live material belongs to dialogs,
     /// where there is actually changing page content behind the glass.
     func localGlassSettingsCanvas() -> some View {
-        background { LocalGlassSettingsBackdrop() }
+        localSettingsCanvas()
         .environment(\.localGlassSharedBackdrop, true)
     }
 
@@ -208,6 +204,7 @@ private struct LocalGlassDialog<Content: View>: View {
                     .modifier(LocalDialogSurface(layout: layout))
                     .environment(\.isLocalGlassDialog, true)
                     .environment(\.localGlassSharedBackdrop, false)
+                    .environment(\.localSettingsAtmosphere, layout == .homePicker)
                     .environment(\.usesLocalDock, false)
                     .environment(\.localDockInset, 0)
                     .environment(\.localDockTop, nil)
@@ -260,7 +257,10 @@ private struct LocalGlassInputSurface: ViewModifier {
 private struct LocalDialogSurface: ViewModifier {
     let layout: LocalDialogLayout
     @ViewBuilder func body(content: Content) -> some View {
-        if layout == .player { content.localPlayerGlassSurface(cornerRadius: 24) }
+        if layout == .homePicker {
+            content.background { LocalSettingsAtmosphere().clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous)) }
+                .localSettingsSurface()
+        } else if layout == .player { content.localPlayerGlassSurface(cornerRadius: 24) }
         else if layout == .calendar { content.modifier(LocalCalendarGlassSurface()) }
         else { content.localGlassSurface(cornerRadius: 24) }
     }

@@ -10,7 +10,7 @@ extension LocalAppearance {
 
 struct LocalAppearanceSettingsView: View {
     var body: some View {
-        SettingsPage(title: "主题", symbol: "circle.lefthalf.filled") {
+        SettingsPage(title: "界面显示", symbol: "paintpalette") {
             LocalAppearanceSettingsSection()
         }
     }

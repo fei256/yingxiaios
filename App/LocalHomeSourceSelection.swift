@@ -1,7 +1,7 @@
 import Foundation
 
 /// Merge keys can change when another subscription is enabled. Keep the original source key and owner.
-struct LocalHomeSourceSelection: Codable, Hashable {
+struct LocalHomeSourceSelection: Codable, Hashable, Sendable {
     let origin: String
     let sourceKey: String
     let python: Bool
