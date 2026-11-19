@@ -37,7 +37,10 @@ private struct PlayerControlTarget: ViewModifier {
     @Environment(\.playerControlMinimum) private var minimum
     let size: CGFloat?
     func body(content: Content) -> some View {
-        content.frame(minWidth: max(44, size ?? minimum), minHeight: max(44, size ?? minimum)).contentShape(Rectangle())
+        content
+            .frame(minWidth: max(44, size ?? minimum), minHeight: max(44, size ?? minimum))
+            .background(Color.white.opacity(0.001))
+            .contentShape(.interaction, Rectangle())
     }
 }
 

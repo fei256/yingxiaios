@@ -119,6 +119,13 @@ jobs:
           xcrun simctl shutdown "$SEARCH_INPUT_SIMULATOR" || true
           xcrun simctl delete "$SEARCH_INPUT_SIMULATOR" || true
 
+      - name: Export native test attachments
+        if: always()
+        run: |
+          if test -d build/ci/search-input-results.xcresult; then
+            xcrun xcresulttool export attachments --path build/ci/search-input-results.xcresult --output-path build/ci/search-input-attachments
+          fi
+
       - name: Upload native test diagnostics
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
@@ -127,6 +134,7 @@ jobs:
           path: |
             build/ci/search-input-tests.log
             build/ci/search-input-results.xcresult
+            build/ci/search-input-attachments
           if-no-files-found: ignore
           retention-days: 14
           compression-level: 6

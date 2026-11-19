@@ -30,19 +30,20 @@ struct SearchInputHarness: View {
 
 private struct ControlHarness: View {
     @State private var last = "none"
+    @State private var events = 0
     var body: some View {
         ZStack {
             Color.black.allowsHitTesting(false)
-            PictureGestures(tap: { _, _ in last = "picture" }, hold: { _ in last = "hold" }, swipe: { _ in last = "swipe" }) { _ in last = "pinch" }
+            PictureGestures(tap: { _, _ in record("picture") }, hold: { _ in record("hold") }, swipe: { _ in record("swipe") }) { _ in record("pinch") }
                 .ignoresSafeArea()
             VStack(spacing: 30) {
-                Text(last).accessibilityIdentifier("control.last")
+                Text("\(last):\(events)").accessibilityIdentifier("control.last")
                 controls("top")
                 Spacer()
                 controls("bottom")
                 HStack(spacing: 0) {
                     ForEach(0..<6) { index in
-                        Button { last = "dock.\(index)" } label: {
+                        Button { record("dock.\(index)") } label: {
                             VStack { Image(systemName: "house"); Text("\(index)") }
                                 .frame(width: 88, height: 56).background(Color.gray.opacity(0.4))
                                 .localDockControlTarget(width: 88, height: 64)
@@ -52,10 +53,14 @@ private struct ControlHarness: View {
             }.padding(24)
         }.foregroundStyle(.white)
     }
+    private func record(_ action: String) {
+        last = action
+        events += 1
+    }
     private func controls(_ prefix: String) -> some View {
         HStack(spacing: 6) {
             ForEach(0..<3) { index in
-                Button { last = "\(prefix).\(index)" } label: {
+                Button { record("\(prefix).\(index)") } label: {
                     Image(systemName: "play.fill").playerControlTarget()
                 }.buttonStyle(PlayerToolbarButtonStyle()).accessibilityIdentifier("\(prefix).\(index)")
             }

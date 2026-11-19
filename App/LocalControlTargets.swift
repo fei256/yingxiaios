@@ -3,7 +3,9 @@ import SwiftUI
 extension View {
     /// Hit the complete visible navigation slot, including its inner capsule padding.
     func localDockControlTarget(width: CGFloat, height: CGFloat) -> some View {
-        frame(width: width, height: height).contentShape(Rectangle())
+        frame(width: width, height: height)
+            .background(Color.primary.opacity(0.001))
+            .contentShape(.interaction, Rectangle())
     }
 
     /// Empty painted edges must not open a poster underneath the floating dock.
