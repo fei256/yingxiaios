@@ -2428,7 +2428,7 @@ struct VideoDetailView: View {
             #if os(iOS)
             .navigationTitle("").navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.hidden, for: .navigationBar)
-            .toolbarColorScheme(mobileDetailDark ? .dark : .light, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
             #else
             .screenTitle(video.name)
             #endif
@@ -3026,7 +3026,6 @@ struct VideoDetailView: View {
     #if os(iOS)
     private var mobileDetailArtwork: [URL] { LocalCatalogDetailArtwork.images(video: currentVideo(), details: tmdb.details) }
     private var mobileSourceMetadata: LocalCatalogSourceMetadata { LocalCatalogSourceMetadata(currentVideo()) }
-    private var mobileDetailDark: Bool { detailArtworkPaint?.isDark ?? true }
     private var mobileDetailOverview: String {
         let tmdbText = tmdb.details?.overview.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return tmdbText.isEmpty ? mobileSourceMetadata.overview : tmdbText
@@ -3047,6 +3046,7 @@ struct VideoDetailView: View {
                                                 presented: !choosingDetailArtwork && !choosingDetailMatch && !showingDetailOverview && !showingDetailCalendar && !detailSectionsPresented,
                                                 selection: $detailArtworkSelection, paused: $detailArtworkPaused, paint: $detailArtworkPaint)
                         .frame(height: height).accessibilityIdentifier("detail.poster")
+                    DetailReadabilityOverlay().ignoresSafeArea()
                     ScrollView {
                         WithPerceptionTracking {
                             VStack(alignment: .leading, spacing: 24) {
@@ -3063,8 +3063,8 @@ struct VideoDetailView: View {
                 }
             }
         }
-        .foregroundStyle(mobileDetailDark ? Color.white : Color.black)
-        .environment(\.colorScheme, mobileDetailDark ? .dark : .light)
+        .foregroundStyle(Color.white)
+        .environment(\.colorScheme, .dark)
         .ignoresSafeArea(edges: .top)
     }
 

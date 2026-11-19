@@ -144,8 +144,6 @@ struct LocalAppNavigation: View {
                                 }
                                 .padding(.horizontal, LocalDockLayout.horizontalPadding)
                                 .padding(.top, LocalDockLayout.topPadding).padding(.bottom, LocalDockLayout.bottomPadding)
-                                .localDockHitRegions(frames: LocalDockLayout.touchFrames(containerWidth: viewport.size.width,
-                                    showsMusic: store.music.showsStrip(videoPlaying: store.playing != nil), controlHeight: dockControlHeight))
                                 .disabled(sourcePanelBlocksInput)
                                 .allowsHitTesting(!sourcePanelBlocksInput)
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -480,9 +478,10 @@ struct LocalAppNavigation: View {
                 WithPerceptionTracking { dockButton(entry, width: metrics.buttonWidth) }
             }
         }
-        .padding(metrics.padding)
+        .padding(.horizontal, metrics.padding)
         .frame(width: metrics.width, height: LocalDockLayout.height(controlHeight: dockControlHeight))
         .localSettingsSurface(cornerRadius: LocalDockLayout.height(controlHeight: dockControlHeight) / 2, navigation: true)
+        .localDockTouchSurface()
         .frame(maxWidth: .infinity)
     }
 
@@ -499,7 +498,7 @@ struct LocalAppNavigation: View {
             .frame(width: width, height: dockControlHeight)
             .foregroundStyle(Color.primary.opacity(selected ? 1 : 0.55))
             .background(selected ? Color.primary.opacity(0.12) : .clear, in: Capsule())
-            .contentShape(Rectangle())
+            .localDockControlTarget(width: width, height: LocalDockLayout.height(controlHeight: dockControlHeight))
         }
         .buttonStyle(.plain).accessibilityLabel(entry.title)
         .accessibilityAddTraits(selected ? .isSelected : [])

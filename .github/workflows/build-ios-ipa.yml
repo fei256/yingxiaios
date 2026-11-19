@@ -128,6 +128,32 @@ jobs:
           key: ${{ steps.platform-cache.outputs.cache-primary-key }}
           path: build/ios-platform-cache
 
+      - name: Test native search input and control hit areas
+        run: |
+          mkdir -p build/ci/search-input
+          xcodegen generate --spec Tests/SearchInput/project.yml --project build/ci/search-input
+          python3 - <<'PY'
+          import json, os, subprocess
+          runtimes = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'runtimes', '--json']))['runtimes']
+          runtime = next(x for x in runtimes if x.get('isAvailable') and x.get('version') == '18.1')
+          types = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devicetypes', '--json']))['devicetypes']
+          device = next(x for x in types if x['name'].startswith('iPad Pro') and 'M4' in x['name'])
+          identifier = subprocess.check_output(['xcrun', 'simctl', 'create', 'Yingxia Input Checks', device['identifier'], runtime['identifier']], text=True).strip()
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('SEARCH_INPUT_SIMULATOR=' + identifier + '\n')
+          PY
+          xcodebuild test -project build/ci/search-input/SearchInputChecks.xcodeproj -scheme SearchInputChecks \
+            -destination "platform=iOS Simulator,id=$SEARCH_INPUT_SIMULATOR" -destination-timeout 60 \
+            -parallel-testing-enabled NO -derivedDataPath build/ci/search-input-derived \
+            -resultBundlePath build/ci/search-input-results.xcresult CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/ci/search-input-tests.log
+
+      - name: Shut down input test simulator
+        if: always() && env.SEARCH_INPUT_SIMULATOR != ''
+        run: |
+          xcrun simctl shutdown "$SEARCH_INPUT_SIMULATOR" || true
+          xcrun simctl delete "$SEARCH_INPUT_SIMULATOR" || true
+
       - name: Restore native dependencies
         id: native-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24

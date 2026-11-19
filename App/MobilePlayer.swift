@@ -77,9 +77,6 @@ struct MobilePlayerView: View {
     @State private var taps = PictureTaps()
     @State private var skipped: (forward: Bool, total: Double)?
     @State private var skippedTask: Task<Void, Never>?
-    /// Controls a tap just brought up let a second tap through to the picture, which may be a double tap.
-    @State private var settling = false
-    @State private var settleTask: Task<Void, Never>?
     /// Sliding sideways across the picture: where the slide began.
     @State private var swipeStart: Double?
     /// Sliding up or down: the brightness on the left, the volume on the right, from where the slide began.
@@ -112,7 +109,7 @@ struct MobilePlayerView: View {
                     playbackInteractionOverlay
                     playbackInformationOverlay
                     controls.opacity(chromeVisible && !locked ? 1 : 0)
-                        .allowsHitTesting(chromeVisible && !locked && !settling)
+                        .allowsHitTesting(chromeVisible && !locked)
                     playbackNotices
                     localPopup
                         .opacity(chromeVisible && !locked ? 1 : 0)
@@ -406,7 +403,7 @@ struct MobilePlayerView: View {
 
     private func tapped(_ x: CGFloat, _ width: CGFloat) {
         #if DEBUG
-        Diagnostics.shared.record(.debug, "player.chrome", "event=picture-tap x=\(x) width=\(width) visible=\(chromeVisible) settling=\(settling) locked=\(locked)")
+        Diagnostics.shared.record(.debug, "player.chrome", "event=picture-tap x=\(x) width=\(width) visible=\(chromeVisible) locked=\(locked)")
         #endif
         // Locked, a tap shows (or hides) the lock button and nothing else: no controls, no skip, no pause.
         if locked {
@@ -418,7 +415,7 @@ struct MobilePlayerView: View {
         case .toggleControls:
             let showing = !chromeVisible
             toggleChrome()
-            if showing { settle(); clearLabels() }
+            if showing { clearLabels() }
         case .togglePlayback:
             toggleChrome()
             session.togglePlayback()
@@ -433,16 +430,6 @@ struct MobilePlayerView: View {
                 try? await Task.sleep(for: .seconds(PictureTaps.streak + 0.1))
                 if !Task.isCancelled { withAnimation(.easeOut(duration: 0.2)) { skipped = nil } }
             }
-        }
-    }
-
-    /// For as long as a second tap would make a double tap, it reaches the picture rather than the controls it showed.
-    private func settle() {
-        settling = true
-        settleTask?.cancel()
-        settleTask = Task {
-            try? await Task.sleep(for: .seconds(PictureTaps.interval))
-            if !Task.isCancelled { settling = false }
         }
     }
 
@@ -462,7 +449,7 @@ struct MobilePlayerView: View {
 
     private func swiped(_ phase: PictureGestures.Swipe) {
         #if DEBUG
-        Diagnostics.shared.record(.debug, "player.picture-gesture", "phase=\(String(describing: phase)) visible=\(chromeVisible) settling=\(settling)")
+        Diagnostics.shared.record(.debug, "player.picture-gesture", "phase=\(String(describing: phase)) visible=\(chromeVisible)")
         #endif
         if locked, case .began = phase { return }
         switch phase {
@@ -607,7 +594,7 @@ struct MobilePlayerView: View {
         .offset(y: playerSize.width > playerSize.height ? -36 : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .opacity(visible ? 1 : 0)
-        .allowsHitTesting(visible && !settling)
+        .allowsHitTesting(visible)
         .animation(.easeOut(duration: 0.2), value: visible)
     }
 
@@ -751,7 +738,7 @@ struct MobilePlayerView: View {
 
     // MARK: Top row
 
-    /// Always-visible corner actions share 44 pt targets. The rotation button stays at the upper right.
+    /// Always-visible corner actions share 48 pt targets. The rotation button stays at the upper right.
     private var topRow: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 10) {
@@ -804,7 +791,9 @@ struct MobilePlayerView: View {
                     .accessibilityIdentifier("player.rotate")
             }
             }
-        }.simultaneousGesture(TapGesture().onEnded { poke() })
+        }
+        .background { Color.black.opacity(0.001).contentShape(Rectangle()).onTapGesture { poke() } }
+        .simultaneousGesture(TapGesture().onEnded { poke() })
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { topRowHeight = $0 }
     }
 
@@ -863,13 +852,13 @@ struct MobilePlayerView: View {
             HStack(spacing: 10) {
                 if let previous {
                     Button { previous.go() } label: { Image(systemName: "backward.end.fill").playerControlTarget() }
-                        .buttonStyle(PlayerCircleStyle(size: 44))
+                        .buttonStyle(PlayerCircleStyle(size: 48))
                         .disabled(previous.busy)
                         .accessibilityLabel(L10n.text("Previous Episode"))
                 }
                 if let next {
                     Button { next.go() } label: { Image(systemName: "forward.end.fill").playerControlTarget() }
-                        .buttonStyle(PlayerCircleStyle(size: 44))
+                        .buttonStyle(PlayerCircleStyle(size: 48))
                         .disabled(next.busy)
                         .accessibilityLabel(L10n.text("Next Episode"))
                 }
@@ -889,7 +878,7 @@ struct MobilePlayerView: View {
                     Button(action: toggleFullScreen) {
                         Image(systemName: full ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right").playerControlTarget()
                     }
-                    .buttonStyle(PlayerCircleStyle(size: 44))
+                    .buttonStyle(PlayerCircleStyle(size: 48))
                     .accessibilityLabel(L10n.text(full ? "Exit Full Screen" : "Full Screen"))
                     .accessibilityIdentifier("player.fullScreen")
                 }
@@ -929,8 +918,9 @@ struct MobilePlayerView: View {
                 }.frame(minWidth: viewport.size.width, alignment: .leading)
             }.accessibilityIdentifier("player.controls.bottom")
         }
-        .frame(height: 44)
+        .frame(height: 48)
         .padding(.top, 2)
+        .background { Color.black.opacity(0.001).contentShape(Rectangle()).onTapGesture { poke() } }
     }
 
     private func togglePanel(_ panel: LocalPlayerPanel) {
@@ -986,7 +976,7 @@ struct MobilePlayerView: View {
     }
 
     private var transportButtons: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 6) {
             let previous = store.step(back: true, from: channel, session: session)
             let next = store.step(back: false, from: channel, session: session)
             Button { previous?.go(); poke() } label: { Image(systemName: "backward.end.fill").playerControlTarget() }
@@ -1008,7 +998,7 @@ struct MobilePlayerView: View {
     }
 
     private var panelButtons: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 6) {
             ForEach(availablePanels) { panel in
                 Button { togglePanel(panel) } label: {
                     HStack(spacing: 4) {

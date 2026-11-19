@@ -118,6 +118,7 @@ struct GlobalSearchView: View {
     @AppStorage("videoSearchHistory") private var historyData = Data()
     #if os(iOS)
     @State private var suggestionState = SearchSuggestionState()
+    @State private var inputFocusRequest: GlobalSearchFocusRequest?
     #endif
     #if os(tvOS)
     /// Titles iQiyi suggests for the draft, and 360kan's chart for an empty field (`SearchSuggestions`).
@@ -212,11 +213,13 @@ struct GlobalSearchView: View {
                 }
                 .navigationBarTitleDisplayMode(.inline)
                 .appOnChange(of: localPageActive) { _, active in
-                    if active, let config = store.subscription {
-                        model.resumeSuspended(config: config)
-                        requestNextPage(config: config)
+                    if active {
+                        if let config = store.subscription {
+                            model.resumeSuspended(config: config)
+                            requestNextPage(config: config)
+                        }
                     } else {
-                        inputFocused = false; suggestionState.cancel(); model.suspend()
+                        requestInputFocus(false); suggestionState.cancel(); model.suspend()
                     }
                 }
                 #else
@@ -257,6 +260,10 @@ struct GlobalSearchView: View {
     }
 
     #if os(iOS)
+    private func requestInputFocus(_ focused: Bool) {
+        inputFocused = focused
+        inputFocusRequest = GlobalSearchFocusRequest(focused: focused)
+    }
     private var showsSuggestions: Bool {
         inputFocused && !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -267,15 +274,15 @@ struct GlobalSearchView: View {
         return HStack(spacing: 8) {
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                GlobalSearchInput(text: $model.draft, focused: $inputFocused) {
+                GlobalSearchInput(text: $model.draft, focused: $inputFocused, focusRequest: inputFocusRequest) {
                     if let config = store.subscription { submit(config) }
                 }.frame(height: 44)
-                if !model.draft.isEmpty {
-                    Button { model.draft = ""; inputFocused = true } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
-                    }.buttonStyle(.plain).accessibilityLabel("清空搜索")
-                }
+                Button { model.draft = ""; requestInputFocus(true) } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }.buttonStyle(.plain).accessibilityLabel("清空搜索")
+                .opacity(model.draft.isEmpty ? 0 : 1).disabled(model.draft.isEmpty)
+                .accessibilityHidden(model.draft.isEmpty)
             }
             .padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 4)
             .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -346,11 +353,10 @@ struct GlobalSearchView: View {
     private var searchSettingsButton: some View {
         WithPerceptionTracking {
             Button {
-                inputFocused = false
                 #if os(iOS)
-                // searchFieldFocused has no binding on iOS 16/17. End the native
-                // search field's editing session before presenting another controller.
-                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                requestInputFocus(false)
+                #else
+                inputFocused = false
                 #endif
                 showsSearchSettings = true
             } label: {
@@ -379,32 +385,34 @@ struct GlobalSearchView: View {
     /// Result-bearing sources form a vertical list on phones and iPad split views too.
     @ViewBuilder private var searchResultLayout: some View {
         #if os(iOS)
-        if showsSuggestions {
-            ScrollView {
-                WithPerceptionTracking {
-                    LazyVStack(alignment: .leading, spacing: 0) { searchCompletions }.pageContainer()
-                }
-            }.accessibilityIdentifier("search.suggestions")
-        } else {
-            GeometryReader { geometry in
-                WithPerceptionTracking {
-                    let rail = !model.keyword.isEmpty && store.subscription != nil
-                    let railWidth = min(208, max(104, geometry.size.width * (geometry.size.width < 600 ? 0.30 : 0.24)))
-                    HStack(alignment: .top, spacing: 0) {
-                        if rail {
-                            SearchSiteRail(items: sourceItems, selection: model.selectedSource ?? "", waiting: model.busy,
-                                           compact: geometry.size.width < 600) { id in
-                                model.select(id.isEmpty ? nil : id)
-                            }
-                            .frame(width: railWidth)
-                            .padding(.leading, geometry.size.width < 600 ? 8 : Layout.gutter)
-                            .padding(.vertical, Layout.gutter)
-                        }
-                        positionedSearchResults(usesSiteRail: rail)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        GlobalSearchSurface {
+            if showsSuggestions {
+                ScrollView {
+                    WithPerceptionTracking {
+                        LazyVStack(alignment: .leading, spacing: 0) { searchCompletions }.pageContainer()
                     }
-                    .frame(maxWidth: Layout.maxWidth, maxHeight: .infinity)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }.accessibilityIdentifier("search.suggestions")
+            } else {
+                GeometryReader { geometry in
+                    WithPerceptionTracking {
+                        let rail = !model.keyword.isEmpty && store.subscription != nil
+                        let railWidth = min(208, max(104, geometry.size.width * (geometry.size.width < 600 ? 0.30 : 0.24)))
+                        HStack(alignment: .top, spacing: 0) {
+                            if rail {
+                                SearchSiteRail(items: sourceItems, selection: model.selectedSource ?? "", waiting: model.busy,
+                                               compact: geometry.size.width < 600) { id in
+                                    model.select(id.isEmpty ? nil : id)
+                                }
+                                .frame(width: railWidth)
+                                .padding(.leading, geometry.size.width < 600 ? 8 : Layout.gutter)
+                                .padding(.vertical, Layout.gutter)
+                            }
+                            positionedSearchResults(usesSiteRail: rail)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        .frame(maxWidth: Layout.maxWidth, maxHeight: .infinity)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
         }
@@ -1202,10 +1210,11 @@ struct GlobalSearchView: View {
         let keyword = model.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !keyword.isEmpty else { return }
         rememberQuery(keyword)
-        inputFocused = false
         #if os(iOS)
+        requestInputFocus(false)
         suggestionState.cancel()
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        #else
+        inputFocused = false
         #endif
         #if os(tvOS)
         entering = false

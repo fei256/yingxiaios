@@ -40,7 +40,13 @@ struct DiscoverDetailView: View {
         let value = details?.overview.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return value.isEmpty ? item.overview : value
     }
-    private var dark: Bool { model.paint?.isDark ?? true }
+    private var dark: Bool {
+        #if os(iOS)
+        true
+        #else
+        model.paint?.isDark ?? true
+        #endif
+    }
     private var seasons: [TMDBMatch.SeasonSummary] { details?.seasons.filter { $0.number > 0 } ?? [] }
     private var previewActive: Bool {
         #if os(iOS)
@@ -182,6 +188,9 @@ struct DiscoverDetailView: View {
                 ZStack(alignment: .top) {
                     DiscoverDetailBackground(model: model, width: width, height: coverHeight,
                                              active: previewActive && !trailerShown && !searchShown && still == nil && !overviewShown)
+                    #if os(iOS)
+                    DetailReadabilityOverlay().ignoresSafeArea()
+                    #endif
                     ScrollViewReader { scroll in
                     ScrollView {
                         WithPerceptionTracking {

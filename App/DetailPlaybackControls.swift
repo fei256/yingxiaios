@@ -37,7 +37,8 @@ struct DetailPlaybackControls: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
+        .background(Color(white: 0.08).opacity(0.92), in: RoundedRectangle(cornerRadius: 18))
+        .foregroundStyle(.white).environment(\.colorScheme, .dark)
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay { RoundedRectangle(cornerRadius: 18).strokeBorder(.primary.opacity(0.1), lineWidth: 0.5) }
         .accessibilityElement(children: .contain).accessibilityLabel("播放模式")
@@ -54,7 +55,7 @@ struct DetailPlaybackControls: View {
                 else { Image(systemName: symbol).font(.system(size: 17, weight: .semibold)).foregroundStyle(Brand.accent) }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.white.opacity(0.84)).lineLimit(1)
                 }
             }.frame(maxWidth: .infinity, minHeight: 64, alignment: .leading).padding(.horizontal, 13)
                 .contentShape(Rectangle())

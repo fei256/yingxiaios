@@ -1,0 +1,48 @@
+name: SearchInputChecks
+options:
+  bundleIdPrefix: com.yingxia
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    IPHONEOS_DEPLOYMENT_TARGET: '16.2'
+    CODE_SIGNING_ALLOWED: 'NO'
+    GENERATE_INFOPLIST_FILE: 'YES'
+targets:
+  SearchInputChecks:
+    type: application
+    platform: iOS
+    sources:
+      - path: ../../App/GlobalSearchInput.swift
+      - path: ../../App/PlayerControlTargets.swift
+      - path: ../../App/LocalControlTargets.swift
+      - path: Harness.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.yingxia.search-input-checks
+        TARGETED_DEVICE_FAMILY: '1,2'
+    info:
+      path: ../../build/ci/search-input/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+  SearchInputTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: InputTests.swift
+    dependencies:
+      - target: SearchInputChecks
+  ControlHitTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: ControlHitTests.swift
+    dependencies:
+      - target: SearchInputChecks
+schemes:
+  SearchInputChecks:
+    build:
+      targets:
+        SearchInputChecks: all
+    test:
+      targets: [SearchInputTests, ControlHitTests]
