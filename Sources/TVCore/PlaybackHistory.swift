@@ -132,6 +132,8 @@ public struct PlaybackHistoryEntry: Identifiable, Codable, Hashable, Sendable {
     public let position: Double
     public let duration: Double
     public let updatedAt: Date
+    /// Absent in older histories; media position is never backfilled as viewing time.
+    public let watchActivity: PlaybackWatchActivity?
     public var id: String { context.historyIdentity }
     public var completed: Bool {
         if let reading = context.readingProgress { return reading.isValid && reading.page == reading.totalPages - 1 }
@@ -159,11 +161,13 @@ public struct PlaybackHistoryEntry: Identifiable, Codable, Hashable, Sendable {
         completed ? EpisodePlaylist(episodes).next(after: context) : context.episode(in: episodes)
     }
 
-    public init(context: PlaybackHistoryContext, position: Double, duration: Double, updatedAt: Date) {
+    public init(context: PlaybackHistoryContext, position: Double, duration: Double, updatedAt: Date,
+                watchActivity: PlaybackWatchActivity? = nil) {
         self.context = context
         self.position = position
         self.duration = duration
         self.updatedAt = updatedAt
+        self.watchActivity = watchActivity
     }
 
     public static func resumeTarget(_ position: Double, duration: Double) -> Double? {
@@ -230,12 +234,16 @@ extension PlaybackHistoryEntry {
         persistence.prioritize(entries, cache: cache)
     }
 
-    public func record(_ originalContext: PlaybackHistoryContext, position: Double, duration: Double, now: Date = Date()) {
+    public func record(_ originalContext: PlaybackHistoryContext, position: Double, duration: Double,
+                       watchActivity: PlaybackWatchActivity? = nil, now: Date = Date()) {
         guard isEnabled else { return }
         guard position.isFinite, position >= 0, duration.isFinite, duration >= 0 else { return }
         if let reading = originalContext.readingProgress {
             guard reading.isValid else { return }
-        } else if position < 1 { return }
+        } else if position < 1 {
+            recordWatchActivity(for: originalContext, activity: watchActivity ?? PlaybackWatchActivity(), now: now)
+            return
+        }
         var context = originalContext
         if context.poster != nil, PosterPresentation.imageURL(context.poster, excluding: [context.videoID, context.episodeID]) == nil {
             context = context.replacingPoster(nil, confirmedAt: context.posterConfirmedAt)
@@ -255,16 +263,39 @@ extension PlaybackHistoryEntry {
                   let image = PosterPresentation.imageURL(old.context.poster) {
             context = context.replacingPoster(image, headers: old.context.posterHeaders ?? [:])
         }
+        let old = entries.first { $0.id == context.historyIdentity }
+        let measured = (old?.watchActivity ?? PlaybackWatchActivity()).merging(watchActivity ?? PlaybackWatchActivity())
         let entry = PlaybackHistoryEntry(context: context, position: context.readingProgress == nil ? (duration > 0 ? min(position, duration) : position) : 0,
-                                         duration: context.readingProgress == nil ? duration : 0, updatedAt: now)
+                                         duration: context.readingProgress == nil ? duration : 0, updatedAt: now,
+                                         watchActivity: measured.isEmpty ? old?.watchActivity : measured)
         guard Self.valid(entry) else { return }
-        if let old = entries.first(where: { $0.id == entry.id }), old.context == context,
+        if let old, old.context == context, old.watchActivity == entry.watchActivity,
            abs(old.position - entry.position) < 0.25, old.duration == duration { return }
         entries.removeAll { $0.id == entry.id }
         entries.insert(entry, at: 0)
         entries = Self.bounded(entries)
         persist()
         onChange?()
+    }
+
+    public func recordingIdentity(for originalContext: PlaybackHistoryContext) -> String {
+        var context = originalContext
+        if let recordingScope { context.historyScope = recordingScope }
+        return context.historyIdentity
+    }
+
+    /// Final measured time can be saved even while a seek temporarily makes the media position unavailable.
+    public func recordWatchActivity(for context: PlaybackHistoryContext, activity: PlaybackWatchActivity, now: Date = Date()) {
+        guard isEnabled, context.readingProgress == nil, !activity.isEmpty, now.timeIntervalSince1970.isFinite else { return }
+        refreshPendingEntries()
+        let identity = recordingIdentity(for: context)
+        guard let index = entries.firstIndex(where: { $0.id == identity }) else { return }
+        let old = entries[index]
+        let measured = (old.watchActivity ?? PlaybackWatchActivity()).merging(activity)
+        entries[index] = PlaybackHistoryEntry(context: old.context, position: old.position, duration: old.duration,
+                                              updatedAt: now, watchActivity: measured)
+        entries.sort { $0.updatedAt > $1.updatedAt }
+        persist(); onChange?()
     }
 
     /// Existing rows and a session that has not reached its first progress tick share the same
@@ -307,7 +338,8 @@ extension PlaybackHistoryEntry {
             let updated = entry.context.replacingPoster(poster, headers: headers, confirmed: confirmed, confirmedAt: decidedAt)
             guard entry.context != updated else { return entry }
             changed = true
-            return PlaybackHistoryEntry(context: updated, position: entry.position, duration: entry.duration, updatedAt: entry.updatedAt)
+            return PlaybackHistoryEntry(context: updated, position: entry.position, duration: entry.duration,
+                                        updatedAt: entry.updatedAt, watchActivity: entry.watchActivity)
         }
         if changed { persist(); onChange?() }
     }
@@ -336,7 +368,8 @@ extension PlaybackHistoryEntry {
             guard entry.context.historyScope == nil,
                   let owner = scopes[entry.context.origin] ?? scopes[PlaybackHistoryContext.sourceIdentity(entry.context.origin)] else { return entry }
             var context = entry.context; context.historyScope = owner; changed = true
-            return PlaybackHistoryEntry(context: context, position: entry.position, duration: entry.duration, updatedAt: entry.updatedAt)
+            return PlaybackHistoryEntry(context: context, position: entry.position, duration: entry.duration,
+                                        updatedAt: entry.updatedAt, watchActivity: entry.watchActivity)
         }
         if changed { persist() }
     }

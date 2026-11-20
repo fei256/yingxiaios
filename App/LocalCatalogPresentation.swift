@@ -264,11 +264,11 @@ struct LocalCatalogArtworkCarousel: View {
             .task(id: address) {
                 guard let address else { paint = nil; return }
                 let headers = address == video.poster ? video.posterHeaders : [:]
-                let requested = await DiscoverPainter.shared.paint(address, headers: headers)
+                let requested = await DiscoverPainter.shared.paint(address, headers: headers, style: .detail)
                 guard !Task.isCancelled else { return }
                 let loaded: DiscoverPaint?
                 if let requested { loaded = requested }
-                else if let source = video.poster, source != address { loaded = await DiscoverPainter.shared.paint(source, headers: video.posterHeaders) }
+                else if let source = video.poster, source != address { loaded = await DiscoverPainter.shared.paint(source, headers: video.posterHeaders, style: .detail) }
                 else { loaded = nil }
                 guard let loaded, !Task.isCancelled else { return }
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) { paint = loaded }
@@ -359,6 +359,7 @@ struct LocalCatalogDetailTitle: View {
                     .id(logo).accessibilityLabel(title)
             } else { titleText }
         }.frame(maxWidth: .infinity)
+            .shadow(color: .black.opacity(0.8), radius: 4, y: 2)
     }
     private var titleText: some View {
         Text(title).font(.system(size: 38, weight: .semibold))
@@ -466,7 +467,7 @@ struct LocalCatalogSynopsisButton: View {
                 Text(overview).font(.system(size: 14)).lineSpacing(5).lineLimit(3)
                     .multilineTextAlignment(.leading).frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.right").font(.system(size: 16)).foregroundStyle(Brand.accent)
-            }.foregroundStyle(Color.primary.opacity(0.78)).frame(minHeight: 44).contentShape(Rectangle())
+            }.foregroundStyle(Color.primary.opacity(0.88)).frame(minHeight: 44).contentShape(Rectangle())
         }.buttonStyle(.plain).accessibilityLabel("查看完整简介").accessibilityIdentifier("detail.overview")
     }
 }

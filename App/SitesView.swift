@@ -3045,15 +3045,16 @@ struct VideoDetailView: View {
                     LocalCatalogArtworkCarousel(video: currentVideo(), images: mobileDetailArtwork,
                                                 presented: !choosingDetailArtwork && !choosingDetailMatch && !showingDetailOverview && !showingDetailCalendar && !detailSectionsPresented,
                                                 selection: $detailArtworkSelection, paused: $detailArtworkPaused, paint: $detailArtworkPaint)
-                        .frame(height: height).accessibilityIdentifier("detail.poster")
-                    DetailReadabilityOverlay().ignoresSafeArea()
+                        .frame(height: height).detailArtworkToolbarShade().accessibilityIdentifier("detail.poster")
                     ScrollView {
                         WithPerceptionTracking {
                             VStack(alignment: .leading, spacing: 24) {
                                 header
                                 if detail != nil {
-                                    episodePanel
-                                    tmdbExtras
+                                    VStack(alignment: .leading, spacing: 24) {
+                                        episodePanel
+                                        tmdbExtras
+                                    }.detailReadableContent()
                                 } else if let error { errorCard(error).padding(.top, 12) }
                                 else { DetailSkeleton() }
                             }
@@ -3073,23 +3074,26 @@ struct VideoDetailView: View {
             VStack(alignment: .leading, spacing: 16) {
                 Color.clear.frame(height: containerWidth < 600 ? containerWidth * 0.95 : containerWidth * 0.25)
                     .overlay(alignment: .top) {
-                        mobileDetailTools.padding(.top, containerWidth < 600 ? 110 : 80)
+                        mobileDetailTools.shadow(color: .black.opacity(0.85), radius: 2, y: 1)
+                            .padding(.top, containerWidth < 600 ? 110 : 80)
                     }
-                if let original = tmdb.details?.originalName, !original.isEmpty, original != tmdb.details?.name {
-                    Text(original).font(.system(size: 13)).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity).multilineTextAlignment(.center)
-                }
-                LocalCatalogDetailTitle(title: tmdb.details?.name ?? currentVideo().name, logo: tmdb.details?.logo, width: containerWidth)
-                    .id(tmdb.details?.logo)
-                LocalCatalogMetadataPills(details: tmdb.details, year: mobileSourceMetadata.year,
-                                          area: mobileSourceMetadata.area, remarks: mobileSourceMetadata.remarks,
-                                          calendar: { showingDetailCalendar = true })
-                if !mobileDetailOverview.isEmpty {
-                    LocalCatalogSynopsisButton(overview: mobileDetailOverview) { showingDetailOverview = true }
-                }
-                playControl
-                playbackBanner
-                if tmdb.phase == .ambiguous { tmdbStatus }
+                VStack(alignment: .leading, spacing: 16) {
+                    if let original = tmdb.details?.originalName, !original.isEmpty, original != tmdb.details?.name {
+                        Text(original).font(.system(size: 13)).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).multilineTextAlignment(.center)
+                    }
+                    LocalCatalogDetailTitle(title: tmdb.details?.name ?? currentVideo().name, logo: tmdb.details?.logo, width: containerWidth)
+                        .id(tmdb.details?.logo)
+                    LocalCatalogMetadataPills(details: tmdb.details, year: mobileSourceMetadata.year,
+                                              area: mobileSourceMetadata.area, remarks: mobileSourceMetadata.remarks,
+                                              calendar: { showingDetailCalendar = true })
+                    if !mobileDetailOverview.isEmpty {
+                        LocalCatalogSynopsisButton(overview: mobileDetailOverview) { showingDetailOverview = true }
+                    }
+                    playControl
+                    playbackBanner
+                    if tmdb.phase == .ambiguous { tmdbStatus }
+                }.detailReadableContent()
             }
         }
     }

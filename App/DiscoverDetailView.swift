@@ -3,7 +3,7 @@ import Perception
 import TVCore
 import AVKit
 
-/// Catalog detail uses the same independent, full-bleed paint layer as the home hero.
+/// Catalog detail keeps its artwork independent of the scrolling reading surface.
 /// Available actions use Yingxia's source search and system share sheet.
 struct DiscoverDetailView: View {
     @Environment(Store.self) private var store
@@ -189,7 +189,7 @@ struct DiscoverDetailView: View {
                     DiscoverDetailBackground(model: model, width: width, height: coverHeight,
                                              active: previewActive && !trailerShown && !searchShown && still == nil && !overviewShown)
                     #if os(iOS)
-                    DetailReadabilityOverlay().ignoresSafeArea()
+                    Color.clear.frame(height: coverHeight).detailArtworkToolbarShade().allowsHitTesting(false)
                     #endif
                     ScrollViewReader { scroll in
                     ScrollView {
@@ -210,7 +210,7 @@ struct DiscoverDetailView: View {
                                                               scroll.scrollTo("discover.pan.query.anchor", anchor: .center)
                                                           }
                                                       })
-                                            .padding(.horizontal, 20)
+                                            .padding(.horizontal, 20).detailReadableContent()
                                     }
                                     #else
                                     if !seasons.isEmpty { episodes }
@@ -218,7 +218,7 @@ struct DiscoverDetailView: View {
                                     if let details {
                                         #if os(iOS)
                                         CatalogDetailSections(details: details) { detailSectionsPresented = $0 }
-                                            .id(item.key)
+                                            .id(item.key).detailReadableContent()
                                         #else
                                         if !details.cast.isEmpty { people(details.cast, title: L10n.text("Cast")) }
                                         if details.crew.contains(where: { $0.profile != nil }) { people(details.crew, title: L10n.text("Crew")) }
@@ -273,6 +273,21 @@ struct DiscoverDetailView: View {
     private func identity(width: CGFloat) -> some View {
         VStack(spacing: 16) {
             Color.clear.frame(height: width < 600 ? width * 0.95 : width * 0.25)
+            #if os(iOS)
+            identityContents(width: width).detailReadableContent()
+            #else
+            identityContents(width: width)
+            #endif
+        }
+        .padding(.horizontal, 20).padding(.bottom, 0)
+        #if os(macOS)
+        .frame(maxWidth: 640)
+        #endif
+        .frame(maxWidth: .infinity)
+    }
+
+    private func identityContents(width: CGFloat) -> some View {
+        VStack(spacing: 16) {
             #if os(iOS)
             if let original = details?.originalName, !original.isEmpty, original != details?.name {
                 Text(original).font(.system(size: 13)).foregroundStyle(.secondary)
@@ -333,11 +348,6 @@ struct DiscoverDetailView: View {
             #endif
             if model.loading, details == nil { ProgressView().padding(10) }
         }
-        .padding(.horizontal, 20).padding(.bottom, 0)
-        #if os(macOS)
-        .frame(maxWidth: 640)
-        #endif
-        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder private var overviewButton: some View {
@@ -661,7 +671,13 @@ struct DiscoverDetailView: View {
             let value = try await TMDBMatch.details(item.mediaType, id: item.id, season: nil)
             guard !Task.isCancelled else { return }
             details = value
-            if let poster = value.heroPoster ?? item.poster { paint = await DiscoverPainter.shared.paint(poster) }
+            if let poster = value.heroPoster ?? item.poster {
+                #if os(iOS)
+                paint = await DiscoverPainter.shared.paint(poster, style: .detail)
+                #else
+                paint = await DiscoverPainter.shared.paint(poster)
+                #endif
+            }
         } catch { if !Task.isCancelled { failed = true } }
     }
 }

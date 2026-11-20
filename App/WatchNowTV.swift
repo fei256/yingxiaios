@@ -586,7 +586,7 @@ struct WatchNowTVCategoryRail: View {
                     let paint: DiscoverPaint? = if let backdrop = details?.backdrop {
                         await DiscoverPainter.shared.paint(backdrop)
                     } else if let poster = entry.context.poster {
-                        await DiscoverPainter.shared.paint(poster, headers: entry.context.posterHeaders ?? [:], soft: true)
+                        await DiscoverPainter.shared.paint(poster, headers: entry.context.posterHeaders ?? [:], style: .soft)
                     } else { nil }
                     #else
                     // The phone's hero is portrait: a cover fills it, sharp at the top, as Discover's.

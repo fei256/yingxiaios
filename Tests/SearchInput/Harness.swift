@@ -89,6 +89,7 @@ private struct ControlHarness: View {
     var body: some Scene {
         WindowGroup {
             if ProcessInfo.processInfo.arguments.contains("controls") { ControlHarness() }
+            else if ProcessInfo.processInfo.arguments.contains("journal") { JournalHarness() }
             else { SearchInputHarness(state: state) }
         }
     }

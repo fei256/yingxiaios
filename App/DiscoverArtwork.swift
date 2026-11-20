@@ -4,13 +4,15 @@ import CoreImage
 import ImageIO
 import TVCore
 
-/// A bounded, off-main-thread paint pass. The bottom of a cover gradually loses detail and
-/// merges into its own colour, so the full-screen background and the scrolling shelves join.
+enum DiscoverPaintStyle: String, Sendable { case blended, soft, detail }
+
+/// Artwork is prepared off the main thread; detail covers keep their original sharp pixels.
 struct DiscoverPaint: @unchecked Sendable {
     let image: CGImage
     let red: Double
     let green: Double
     let blue: Double
+    let style: DiscoverPaintStyle
     var color: Color { Color(red: red, green: green, blue: blue) }
     var isDark: Bool { red * 0.2126 + green * 0.7152 + blue * 0.0722 < 0.58 }
 }
@@ -22,17 +24,17 @@ actor DiscoverPainter {
     private var order: [String] = []
     private var pending: [String: Task<DiscoverPaint?, Never>] = [:]
 
-    /// `headers` for a source's poster; `soft` blurs the whole cover, for a poster standing in for a backdrop (Watch Now's
+    /// `headers` for a source's poster; `.soft` blurs the whole cover, for a poster standing in for a backdrop (Watch Now's
     /// Up Next), whose sharp half would show its low resolution at the size of the screen.
-    func paint(_ source: URL, headers: [String: String] = [:], soft: Bool = false) async -> DiscoverPaint? {
+    func paint(_ source: URL, headers: [String: String] = [:], style: DiscoverPaintStyle = .blended) async -> DiscoverPaint? {
         let source = TMDBServiceSettings.artworkURL(source)
-        let key = (soft ? "soft|" : "") + source.absoluteString
+        let key = style.rawValue + "|" + source.absoluteString
         if let cached = cache[key] { return cached }
         if let task = pending[key] { return await task.value }
         // The rails use w500; the full-width cover needs enough pixels for the phone's display.
         let url = ["images.tmdb.org", "image.tmdb.org"].contains(source.host ?? "")
             ? URL(string: source.absoluteString.replacingOccurrences(of: "/w500/", with: "/w1280/").replacingOccurrences(of: "/w780/", with: "/w1280/")) ?? source : source
-        let task = Task { await self.render(url, headers: headers, soft: soft) }
+        let task = Task { await self.render(url, headers: headers, style: style) }
         pending[key] = task
         let result = await task.value
         pending[key] = nil
@@ -44,7 +46,7 @@ actor DiscoverPainter {
         return result
     }
 
-    private func render(_ url: URL, headers: [String: String], soft: Bool) async -> DiscoverPaint? {
+    private func render(_ url: URL, headers: [String: String], style: DiscoverPaintStyle) async -> DiscoverPaint? {
         var request = URLRequest(url: url)
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         guard let (data, response) = try? await URLSession.shared.data(for: request),
@@ -53,10 +55,14 @@ actor DiscoverPainter {
               let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: 1600,
+                kCGImageSourceThumbnailMaxPixelSize: style == .detail ? 2400 : 1600,
                 kCGImageSourceShouldCacheImmediately: true,
               ] as CFDictionary) else { return nil }
         let rgb = palette(decoded)
+        if style == .detail {
+            return DiscoverPaint(image: decoded, red: rgb.0 * 0.32, green: rgb.1 * 0.32, blue: rgb.2 * 0.32, style: style)
+        }
+        let soft = style == .soft
         let image = CIImage(cgImage: decoded)
         let rect = image.extent
         let blurred = image.clampedToExtent().applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: rect.width * (soft ? 0.09 : 0.055)]).cropped(to: rect)
@@ -75,7 +81,7 @@ actor DiscoverPainter {
         ])!.outputImage!.cropped(to: rect)
         let composited = fade.composited(over: progressive)
         guard let result = context.createCGImage(composited, from: rect) else { return nil }
-        return DiscoverPaint(image: result, red: rgb.0, green: rgb.1, blue: rgb.2)
+        return DiscoverPaint(image: result, red: rgb.0, green: rgb.1, blue: rgb.2, style: style)
     }
 
     private func palette(_ image: CGImage) -> (Double, Double, Double) {
@@ -109,8 +115,7 @@ actor DiscoverPainter {
     }
 }
 
-/// Lives behind the scroll view. Only the cover responds to scroll; the sampled surface stays
-/// screen-sized. The image is already progressively blurred, avoiding live full-screen blur passes.
+/// Only the cover responds to scroll; the sampled surface stays screen-sized.
 struct DiscoverBackdrop: View {
     let paint: DiscoverPaint?
     let width: CGFloat
@@ -170,14 +175,14 @@ struct DiscoverBackdrop: View {
         let fade: CGFloat = max(0, 1 - max(0, scrollY - heroHeight * 0.45) / (heroHeight * 0.55))
         return Image(decorative: paint.image, scale: 1).resizable().scaledToFill()
             .frame(width: width, height: heroHeight)
-            .scaleEffect(1.2 + max(0, -scrollY) / max(heroHeight, 1), anchor: .center)
+            .scaleEffect((paint.style == .detail ? 1 : 1.2) + max(0, -scrollY) / max(heroHeight, 1), anchor: .center)
             .offset(y: -scrollY * 0.78)
             .opacity(Double(fade))
             .opacity(videoReady ? 0 : 1)
             .frame(width: width, height: heroHeight, alignment: .top).clipped()
             .mask {
                 WithPerceptionTracking {
-                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.72),
+                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: paint.style == .detail ? 0.82 : 0.72),
                                            .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom)
                 }
             }

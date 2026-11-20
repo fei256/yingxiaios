@@ -202,7 +202,7 @@ struct GlobalSearchView: View {
                         #endif
                     }
                 }
-                .screenBackdrop()
+                .libraryBackdrop()
                 .screenTitle(L10n.text("Global Search"))
                 #if os(iOS)
                 .toolbar { ToolbarItem(placement: .navigationBarTrailing) { searchSettingsButton } }

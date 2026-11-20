@@ -67,6 +67,7 @@ import TVCore
     @PerceptionIgnored private var generation = UUID()
     @PerceptionIgnored private var preparation: Task<Void, Never>?
     @PerceptionIgnored private var sampler: Task<Void, Never>?
+    @PerceptionIgnored private var watchSampler = PlaybackWatchSampler()
     @PerceptionIgnored private var transferTicker: Task<Void, Never>?
     @PerceptionIgnored private var runtimePinTask: Task<Void, Never>?
     @PerceptionIgnored private var runtimePinnedURLs = Set<URL>()
@@ -191,8 +192,15 @@ import TVCore
             }
         }
     }
-    func togglePlayback() { if paused { engine.play() } else { engine.pause(); clearBoost() } }
-    func skip(_ seconds: Double) { engine.seek(to: position + seconds) }
+    func togglePlayback() {
+        sampleWatchActivity()
+        if paused { engine.play() } else { engine.pause(); clearBoost() }
+        sampleWatchActivity()
+    }
+    func skip(_ seconds: Double) {
+        sampleWatchActivity(); watchSampler.interrupt()
+        engine.seek(to: position + seconds)
+    }
     func chooseAudio(_ id: CMPersistentTrackID) { engine.selectAudio(id: String(id)) }
     func setSpeed(_ speed: Float) { selectedSpeed = min(8, max(0.25, speed)); clearBoost(); engine.speed = selectedSpeed }
     func setBoost(_ rate: Float?) {
@@ -204,8 +212,15 @@ import TVCore
         engine.speed = boost ?? selectedSpeed
     }
     private func clearBoost() { throttle = nil; boost = nil; boostWanted = nil; engine.speed = selectedSpeed }
-    func beginEditingSkip() { editingSkip = true; resumeAfterEditing = !paused; engine.pause() }
-    func endEditingSkip() { editingSkip = false; if resumeAfterEditing { engine.play() }; resumeAfterEditing = false }
+    func beginEditingSkip() {
+        sampleWatchActivity()
+        editingSkip = true; resumeAfterEditing = !paused; engine.pause()
+        sampleWatchActivity()
+    }
+    func endEditingSkip() {
+        editingSkip = false; if resumeAfterEditing { engine.play() }; resumeAfterEditing = false
+        sampleWatchActivity()
+    }
     func applySkipSettings(_ settings: EpisodeSkipSettings) {
         guard let skipScope else { return }
         settings.save(scope: skipScope, defaults: skipDefaults); skipSettings = settings; skipPass = EpisodeSkipPass(); remoteSkip.settingsChanged()
@@ -263,6 +278,7 @@ import TVCore
         if sourceDanmakuGeneration == active { sourceDanmakuLoading = nil }
     }
     private func begin(_ channel: Channel) {
+        watchSampler.reset()
         error = nil; loading = true; showsPicture = false; buffering = false; steps = ["正在解析播放地址"]
         preparationStarted = Date()
         transfer = Transfer(); transfer.host = channel.url.host()
@@ -426,6 +442,7 @@ import TVCore
                                      sessionID: self.mediaEnhancements.sessionID, ready: self.mediaEnhancements.serviceReady)
                 self.updateSkipping()
                 self.queueUpcomingIfDue()
+                self.sampleWatchActivity()
                 ticks += 1
                 if ticks % 5 == 0 { self.saveHistory() }
                 try? await Task.sleep(for: .seconds(1))
@@ -435,6 +452,7 @@ import TVCore
     private func updateSkipping() {
         guard !isLive, !editingSkip, !seekingSegment, !engine.seeking, pendingResume == nil, !restoringPosition, engine.isReady else { return }
         guard let action = remoteSkip.nextAction(time: position, duration: duration, playing: !paused && !buffering, enabled: skipSettings.enabled) else { return }
+        sampleWatchActivity(); watchSampler.interrupt()
         seekingSegment = true
         let active = generation
         engine.seek(to: action.target) { [weak self] success in
@@ -458,14 +476,32 @@ import TVCore
             Diagnostics.shared.record(.error, "player.recovery", "event=terminal code=\(PlaybackFailureDiagnostics.codes(failure)) \(engine.failureDiagnostic)")
             return
         }
-        if looping { engine.seek(to: 0) { [weak self] ok in if ok { self?.engine.play() } }; return }
+        if looping {
+            sampleWatchActivity(); watchSampler.interrupt()
+            engine.seek(to: 0) { [weak self] ok in if ok { self?.engine.play() } }
+            return
+        }
         saveHistory(completed: true)
         if playsOn(), playUpcoming() { return }
         onPlaybackEnded?()
     }
     func saveHistory(completed: Bool = false, item: AVPlayerItem? = nil) {
-        guard let context = historyContext, engine.isReady, pendingResume == nil, !restoringPosition, !seekingSegment, !engine.seeking else { return }
-        history.record(context, position: completed && duration > 0 ? duration : position, duration: duration)
+        sampleWatchActivity()
+        guard let context = historyContext else { return }
+        let activity = watchSampler.drain(identity: history.recordingIdentity(for: context))
+        guard engine.isReady, pendingResume == nil, !restoringPosition, !seekingSegment, !engine.seeking else {
+            history.recordWatchActivity(for: context, activity: activity)
+            return
+        }
+        history.record(context, position: completed && duration > 0 ? duration : position, duration: duration,
+                       watchActivity: activity.isEmpty ? nil : activity)
+    }
+    private func sampleWatchActivity() {
+        watchSampler.sample(identity: historyContext.map { history.recordingIdentity(for: $0) },
+                            playing: historyContext != nil && historyContext?.readingProgress == nil && !isLive && engine.isReady
+                                && !paused && !buffering && !loading && pendingResume == nil && !restoringPosition
+                                && !seekingSegment && !editingSkip && !engine.seeking,
+                            position: position, speed: Double(engine.speed))
     }
     func choose(quality: Int?) {
         guard let channel = playing, quality != self.quality else { return }
@@ -616,6 +652,7 @@ import TVCore
         aiSubtitles.stop()
         remoteSkip.stop(); mediaEnhancements.stop(); externalSubtitles.stop(); subtitles.resetKS()
         engine.shutdown(); player.pause(); player.removeAllItems()
+        watchSampler.reset()
         catalogDanmaku.clear(); sourceDanmaku = []; chatGeneration = UUID(); chat?.stop(); chat = nil
         sourceDanmakuGeneration = UUID()
         sourceDanmakuLoading?.cancel(); sourceDanmakuLoading = nil; sourceDanmakuLoaded = false

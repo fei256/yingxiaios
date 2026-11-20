@@ -42,15 +42,18 @@ import IOKit.pwr_mgt
     private var seekingSegment = false
 
     func beginEditingSkip() {
+        sampleWatchActivity(item: item)
         editingSkip = true
         resumeAfterEditing = player.rate > 0
         player.pause()
+        sampleWatchActivity(item: item)
     }
 
     func endEditingSkip() {
         editingSkip = false
         if resumeAfterEditing { player.play() }
         resumeAfterEditing = false
+        sampleWatchActivity(item: item)
     }
 
     func applySkipSettings(_ settings: EpisodeSkipSettings) {
@@ -214,11 +217,13 @@ import IOKit.pwr_mgt
     }
     private var noteKind: String?
     private var sampler: Task<Void, Never>?
+    @PerceptionIgnored private var watchSampler = PlaybackWatchSampler()
     private var endObserver: NSObjectProtocol?
     private var timeObservation: NSKeyValueObservation?
     private var muteObservation: NSKeyValueObservation?
 
     func togglePlayback() {
+        sampleWatchActivity(item: item)
         if player.timeControlStatus == .paused {
             if let item = player.currentItem, item.duration.seconds.isFinite,
                player.currentTime().seconds >= item.duration.seconds - 0.1 {
@@ -228,6 +233,7 @@ import IOKit.pwr_mgt
         } else { player.pause() }
         // The button follows the tap at once; the player's status (observed below) confirms it a moment later.
         paused = player.rate == 0
+        sampleWatchActivity(item: item)
     }
 
     func skip(_ seconds: Double) {
@@ -238,6 +244,7 @@ import IOKit.pwr_mgt
         guard let range = ranges.first(where: { CMTimeRangeContainsTime($0, time: player.currentTime()) }) ?? ranges.last else { return }
         let target = min(max(current + seconds, range.start.seconds), range.end.seconds)
         guard target.isFinite else { return }
+        sampleWatchActivity(item: item); watchSampler.interrupt()
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
     }
 
@@ -979,6 +986,7 @@ import IOKit.pwr_mgt
         Task { await mediaEnhancements.tick() }
         #endif
         if let url = playing?.url { HongguoStreams.updatePosition(for: url, seconds: pendingResume ?? player.currentTime().seconds) }
+        sampleWatchActivity(item: item)
         if tick % 5 == 0 { saveHistory() }
         let events = item.accessLog()?.events ?? []
         let now = Date()
@@ -1068,6 +1076,7 @@ import IOKit.pwr_mgt
         displayAwake.hold(false)
         #endif
         saveHistory()
+        watchSampler.reset()
         discardUpcoming()
         upcomingAttempted = false; skipsToUpcoming = false; advanced = nil
         upcomingEpisode = nil; onAdvance = nil; playsOn = { false }; clearBoost()
@@ -1114,15 +1123,30 @@ import IOKit.pwr_mgt
     }
     /// Records where the episode is; `item` is the episode's own, which the queue may already have moved past.
     func saveHistory(completed: Bool = false, item: AVPlayerItem? = nil) {
-        guard let context = historyContext, let item = item ?? self.item, item.status == .readyToPlay,
-              pendingResume == nil, !restoringPosition, !seekingSegment else { return }
+        let item = item ?? self.item
+        sampleWatchActivity(item: item)
+        guard let context = historyContext else { return }
+        let activity = watchSampler.drain(identity: history.recordingIdentity(for: context))
+        guard let item, item.status == .readyToPlay, pendingResume == nil, !restoringPosition, !seekingSegment else {
+            history.recordWatchActivity(for: context, activity: activity)
+            return
+        }
         let length = item.duration.seconds
         let time = completed && length.isFinite ? length : item.currentTime().seconds
-        history.record(context, position: time, duration: length.isFinite ? length : 0)
+        history.record(context, position: time, duration: length.isFinite ? length : 0, watchActivity: activity.isEmpty ? nil : activity)
+    }
+    private func sampleWatchActivity(item: AVPlayerItem?) {
+        watchSampler.sample(identity: historyContext.map { history.recordingIdentity(for: $0) },
+                            playing: historyContext != nil && historyContext?.readingProgress == nil && !isLive
+                                && item != nil && player.currentItem === item && item?.status == .readyToPlay
+                                && player.timeControlStatus == .playing && player.rate > 0 && !loading && !buffering && !editingSkip
+                                && pendingResume == nil && !restoringPosition && !seekingSegment,
+                            position: item?.currentTime().seconds ?? 0, speed: player.rate > 0 ? Double(player.rate) : 1)
     }
 
     /// Per-episode state: where its history goes, where it resumes, the intro and outro to skip, its danmaku.
     private func begin(_ channel: Channel) {
+        watchSampler.reset()
         historyContext = channel.historyContext
         requestedResumePosition = channel.resumePosition
         pendingResume = channel.resumePosition.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }

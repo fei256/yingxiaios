@@ -460,6 +460,15 @@ public actor TMDBMatchStore {
         return now.timeIntervalSince(entry.saved) < keep ? entry.answer : nil
     }
 
+    /// A calendar can refresh a previously confirmed identity after its artwork/details expire.
+    /// The caller still checks manual choices; this never promotes an ambiguous title.
+    public func calendarMatch(for key: String) -> TMDBMatch.Answer? {
+        guard let entry = loadEntries()[key], entry.version == Self.matchingVersion,
+              entry.answer.status == .matched, entry.answer.match != nil,
+              entry.answer.details != nil else { return nil }
+        return entry.answer
+    }
+
     public func save(_ answer: TMDBMatch.Answer, for key: String, now: Date = Date()) {
         var entries = loadEntries()
         // Incomplete matches are failed requests, not stable answers for this source video.

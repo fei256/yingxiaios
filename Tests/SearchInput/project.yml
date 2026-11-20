@@ -18,7 +18,10 @@ targets:
       - path: ../../Sources/TVCore/PictureTaps.swift
       - path: ../../App/LocalControlTargets.swift
       - path: ../../App/LocalSettingsAppearance.swift
+      - path: ../../App/LibraryAtmosphere.swift
+      - path: ../../App/WatchingJournalComponents.swift
       - path: NativeReferenceButton.swift
+      - path: JournalHarness.swift
       - path: Harness.swift
     settings:
       base:
@@ -31,6 +34,7 @@ targets:
     platform: iOS
     sources:
       - path: InputTests.swift
+      - path: JournalDateTests.swift
     dependencies:
       - target: SearchInputChecks
   ControlHitTests:
@@ -38,6 +42,7 @@ targets:
     platform: iOS
     sources:
       - path: ControlHitTests.swift
+      - path: JournalInteractionTests.swift
     dependencies:
       - target: SearchInputChecks
 schemes:

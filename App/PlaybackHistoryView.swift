@@ -2,7 +2,7 @@ import SwiftUI
 import Perception
 import TVCore
 
-/// Watching follows the selected subscription and keeps a list or poster layout.
+/// The journal and desktop/TV lists share the same subscription-scoped progress.
 struct PlaybackHistoryView: View {
     @Environment(Store.self) private var store
     @Environment(\.isEnabled) private var isEnabled
@@ -19,6 +19,9 @@ struct PlaybackHistoryView: View {
     }
 
     var body: some View {
+        #if os(iOS)
+        WatchingJournalView().historyDetailsDestination()
+        #else
         WithPerceptionTracking {
             ScrollView {
                 WithPerceptionTracking {
@@ -50,6 +53,7 @@ struct PlaybackHistoryView: View {
                 Button("取消", role: .cancel) { clearIDs.removeAll() }
             }
         }
+        #endif
     }
 
     private var canInteract: Bool {

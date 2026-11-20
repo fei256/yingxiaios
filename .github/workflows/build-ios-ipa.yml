@@ -64,7 +64,14 @@ jobs:
           xcrun simctl list runtimes
           brew install xcodegen
 
-      - name: Test native search input and control hit areas
+      - name: Check measured watching activity
+        run: |
+          mkdir -p build/ci
+          xcrun swiftc -swift-version 6 -parse-as-library Sources/TVCore/PlaybackWatchActivity.swift \
+            Tests/WatchActivity/checks.swift -o build/ci/watch-activity-checks
+          build/ci/watch-activity-checks 2>&1 | tee build/ci/watch-activity-checks.log
+
+      - name: Test native search input, controls and journal calendar
         timeout-minutes: 20
         run: |
           mkdir -p build/ci/search-input
@@ -145,6 +152,7 @@ jobs:
           name: native-input-controls-build${{ inputs.build_number || github.run_number }}-${{ github.run_attempt }}
           path: |
             build/ci/search-input-tests.log
+            build/ci/watch-activity-checks.log
             build/ci/search-input-results.xcresult
             build/ci/search-input-attachments
           if-no-files-found: ignore
@@ -225,6 +233,12 @@ jobs:
           build/ci/search-suggestion-checks
           xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
             -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" App/GlobalSearchInput.swift
+
+      - name: Check measured watching activity
+        run: |
+          xcrun swiftc -swift-version 6 -parse-as-library Sources/TVCore/PlaybackWatchActivity.swift \
+            Tests/WatchActivity/checks.swift -o build/ci/watch-activity-checks
+          build/ci/watch-activity-checks 2>&1 | tee build/ci/watch-activity-checks.log
 
       - name: Restore iOS 18.1 platform package
         id: platform-cache

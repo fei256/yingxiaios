@@ -66,6 +66,7 @@ struct DiscoverSearchView: View {
                         }
                     }
                     .background { WithPerceptionTracking { DiscoverSearchAtmosphere() } }
+                    .libraryAppearance()
                     #if !os(macOS)
                     .toolbar(.hidden, for: .navigationBar)
                     #endif
@@ -306,6 +307,9 @@ struct DiscoverSearchAtmosphere: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var started = Date()
     var body: some View {
+        #if os(iOS)
+        LibraryAtmosphere()
+        #else
         WithPerceptionTracking {
             GeometryReader { geometry in
                 WithPerceptionTracking {
@@ -329,6 +333,7 @@ struct DiscoverSearchAtmosphere: View {
                 }
             }.discoverFullBleed().allowsHitTesting(false)
         }
+        #endif
     }
 
     /// An ellipse of this size as if blurred by `blur`: a gradient that falls off as a Gaussian blur does, from
@@ -476,6 +481,7 @@ struct DiscoverMacSearchView: View {
                 }
             }
             .background { WithPerceptionTracking { DiscoverSearchAtmosphere() } }
+            .libraryAppearance()
             .navigationTitle(L10n.text("Search Catalog"))
             .searchable(text: $query, isPresented: $searching, placement: .toolbar, prompt: Text(L10n.text("Search")))
             .onSubmit(of: .search) { model.remember(keyword) }
