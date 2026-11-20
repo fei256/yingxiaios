@@ -218,6 +218,9 @@ jobs:
           ci_xcode_path=/Applications/Xcode_16.4.app/Contents/Developer
           test -d "$ci_xcode_path" || { echo 'Xcode 16.4 is missing from this runner image.' >&2; exit 1; }
           sudo xcode-select --switch "$ci_xcode_path"
+          # Cache extraction changes device/inode IDs even when file content and mtime match.
+          defaults write com.apple.dt.XCBuild IgnoreFileSystemDeviceInodeChanges -bool YES
+          defaults read com.apple.dt.XCBuild IgnoreFileSystemDeviceInodeChanges
           xcrun simctl list > /dev/null
           python3 - <<'PY'
           import os

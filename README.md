@@ -54,6 +54,8 @@ python3 Scripts/prepare-ios-dependencies.py --av3a-archive /path/to/av3a-pinned-
 
 原生缓存键仅计算 Git 跟踪的输入文件、权限和链接目标，忽略预检生成的 Python 字节码及下载后的依赖产物。应用编译缓存保存 DerivedData 和生成的工程，按工具链、依赖配方及构建配置隔离；恢复时仅对内容哈希一致的源码恢复修改时间，让 Xcode 可以复用编译结果。修改源码仍由编译器检查依赖，新增文件仍由 XcodeGen 更新工程。并行度根据物理核心和内存自动选择，完整回归检查和包体校验继续执行。
 
+云端构建机还为 XCBuild 设置 `IgnoreFileSystemDeviceInodeChanges`，避免缓存解压产生的新文件编号触发全量重编译；内容和修改时间检查仍然保留。该设置仅在临时的 CI 构建机执行，不修改本机 Xcode 偏好。
+
 构建成功后，从运行页面的 **Artifacts** 下载 `Yingxia-iOS-build…-unsigned`，解压得到 IPA、`SHA256SUMS.txt` 和检查报告。IPA 保留 30 天，诊断日志保留 14 天。输出面向 iPhone/iPad、最低 iOS 16.2，安装前需自行签名。此流程不需要 Apple 签名证书或开发者账号，也不会自动发布 Release。
 
 IPA 下载附件只包含安装包和小型检查报告；完整编译日志及链接图在单独的 `iOS-build…-logs-…` 附件。build06 的 IPA 实际约 103 MB，旧的约 197 MB 下载附件还含有大日志。历史失败原因、已补强的检查与真机验证边界见 [构建流程审计](docs/build-pipeline-audit.md)。
