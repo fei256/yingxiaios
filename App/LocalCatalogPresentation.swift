@@ -180,12 +180,14 @@ struct LocalSiteFilterSheet: View {
 
 enum LocalCatalogDetailArtwork {
     static func images(video: Video, details: TMDBMatch.Details?) -> [URL] {
+        images(poster: video.poster, details: details)
+    }
+
+    static func images(poster: URL?, backdrop: URL? = nil, details: TMDBMatch.Details?) -> [URL] {
         var seen = Set<URL>()
-        // Portraits lead the carousel, matching the home detail's text-free cover.
-        // Older deployed services supply heroPoster/poster but no posters array.
-        let portraits = [details?.heroPoster, details?.poster].compactMap { $0 } + (details?.posters ?? [])
-        let fallback = [video.poster, details?.backdrop].compactMap { $0 } + (details?.stills ?? [])
-        return Array((portraits + fallback).filter { seen.insert($0).inserted }.prefix(16))
+        let landscapes = [details?.backdrop, backdrop].compactMap { $0 } + (details?.stills ?? [])
+        let portraits = [poster, details?.heroPoster, details?.poster].compactMap { $0 } + (details?.posters ?? [])
+        return Array((landscapes + portraits).filter { seen.insert($0).inserted }.prefix(16))
     }
 }
 
@@ -230,7 +232,7 @@ struct LocalCatalogSourceMetadata {
     }
 }
 
-/// The same portrait paint as Discover's home detail; image rotation never starts a trailer or playback.
+/// Background rotation uses landscape artwork first and never starts playback.
 struct LocalCatalogArtworkCarousel: View {
     @Environment(Store.self) private var store
     @Environment(\.scenePhase) private var scenePhase
@@ -239,6 +241,7 @@ struct LocalCatalogArtworkCarousel: View {
     let video: Video
     let images: [URL]
     var presented = true
+    var scrollY: CGFloat = 0
     @Binding var selection: Int
     @Binding var paused: Bool
     @Binding var paint: DiscoverPaint?
@@ -253,9 +256,7 @@ struct LocalCatalogArtworkCarousel: View {
         WithPerceptionTracking {
             GeometryReader { geometry in
                 WithPerceptionTracking {
-                    DiscoverBackdrop(paint: paint, width: geometry.size.width, heroHeight: geometry.size.height,
-                                     scrollY: 0, trailer: nil, playsTrailer: false)
-                        .allowsHitTesting(false)
+                    CatalogDetailBackdrop(paint: paint, width: geometry.size.width, heroHeight: geometry.size.height, scrollY: scrollY)
                 }
             }
             .onAppear { visible = true }
@@ -264,13 +265,13 @@ struct LocalCatalogArtworkCarousel: View {
             .task(id: address) {
                 guard let address else { paint = nil; return }
                 let headers = address == video.poster ? video.posterHeaders : [:]
-                let requested = await DiscoverPainter.shared.paint(address, headers: headers, style: .detail)
+                let requested = await DiscoverPainter.shared.paint(address, headers: headers, style: .cinematic)
                 guard !Task.isCancelled else { return }
                 let loaded: DiscoverPaint?
                 if let requested { loaded = requested }
-                else if let source = video.poster, source != address { loaded = await DiscoverPainter.shared.paint(source, headers: video.posterHeaders, style: .detail) }
+                else if let source = video.poster, source != address { loaded = await DiscoverPainter.shared.paint(source, headers: video.posterHeaders, style: .cinematic) }
                 else { loaded = nil }
-                guard let loaded, !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return }
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) { paint = loaded }
             }
             .task(id: rotation) {
@@ -283,36 +284,7 @@ struct LocalCatalogArtworkCarousel: View {
     }
 }
 
-struct LocalCatalogArtworkControls: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let count: Int
-    @Binding var selection: Int
-    @Binding var paused: Bool
-    let choose: () -> Void
-    private var current: Int { count > 0 ? max(0, selection) % count : 0 }
-    var body: some View {
-        HStack(spacing: 0) {
-            if count > 1 {
-                Button { selection = (current + count - 1) % count } label: { Image(systemName: "chevron.left").frame(width: 40, height: 44).iosTouchTarget() }
-                    .accessibilityLabel("上一张海报")
-                Button(action: choose) { Text("\(current + 1)/\(count)").font(.caption.monospacedDigit()).frame(minWidth: 44, minHeight: 44) }
-                    .accessibilityLabel("手动切换海报，第 \(current + 1) 张，共 \(count) 张").accessibilityIdentifier("detail.artwork.choose")
-                Button { selection = (current + 1) % count } label: { Image(systemName: "chevron.right").frame(width: 40, height: 44).iosTouchTarget() }
-                    .accessibilityLabel("下一张海报")
-                if !reduceMotion {
-                    Button { paused.toggle() } label: { Image(systemName: paused ? "play.fill" : "pause.fill").frame(width: 40, height: 44).iosTouchTarget() }
-                        .accessibilityLabel(paused ? "播放海报轮播" : "暂停海报轮播")
-                }
-            } else {
-                Button(action: choose) { Image(systemName: "photo.on.rectangle.angled").frame(width: 44, height: 44) }
-                    .accessibilityLabel("手动切换海报").accessibilityIdentifier("detail.artwork.choose").disabled(count == 0)
-            }
-        }
-        .font(.caption.weight(.semibold)).buttonStyle(.plain)
-    }
-}
-
-struct LocalCatalogPosterPicker: View {
+struct LocalCatalogBackgroundPicker: View {
     @Environment(\.dismiss) private var dismiss
     let images: [URL]
     let video: Video
@@ -321,30 +293,40 @@ struct LocalCatalogPosterPicker: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 115), spacing: 12)], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 144), spacing: 12)], spacing: 12) {
                     ForEach(Array(images.enumerated()), id: \.element) { index, address in
                         Button {
                             selection = index
                             paused = true
                             dismiss()
                         } label: {
-                            Color.clear.aspectRatio(2.0 / 3.0, contentMode: .fit)
-                                .overlay { PosterImage(url: address, headers: address == video.poster ? video.posterHeaders : [:]) }
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                                .overlay(alignment: .topTrailing) {
-                                    if selection == index { Image(systemName: "checkmark.circle.fill").foregroundStyle(.white, Brand.accent).padding(8) }
-                                }
-                        }.buttonStyle(.plain).accessibilityLabel("使用第 \(index + 1) 张海报")
+                            LocalCatalogBackgroundOption(address: address, headers: address == video.poster ? video.posterHeaders : [:], selected: selection == index)
+                        }.buttonStyle(.plain).accessibilityLabel("使用第 \(index + 1) 张背景")
                     }
                 }.padding(20)
             }
-            .navigationTitle("手动切换海报").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("切换背景").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         }.presentationDetents([.medium, .large])
     }
 }
 
-/// Both detail entry points use the home detail's logo slot and its text fallback.
+private struct LocalCatalogBackgroundOption: View {
+    let address: URL
+    let headers: [String: String]
+    let selected: Bool
+    @State private var aspect: CGFloat?
+    var body: some View {
+        Color.clear.aspectRatio(max(0.45, min(2.4, aspect ?? 16.0 / 9.0)), contentMode: .fit)
+            .overlay { PosterImage(url: address, headers: headers, aspect: $aspect) }
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(alignment: .topTrailing) {
+                if selected { Image(systemName: "checkmark.circle.fill").foregroundStyle(.black, Brand.amber).padding(8) }
+            }
+    }
+}
+
+/// A compact identity sits along the artwork's lower edge on both detail entry points.
 struct LocalCatalogDetailTitle: View {
     let title: String
     let logo: URL?
@@ -354,17 +336,17 @@ struct LocalCatalogDetailTitle: View {
         Group {
             if let logo {
                 TMDBArtwork(url: logo, maxPixels: 1000, fill: false, aspect: $logoAspect)
-                    .frame(width: min(width * 0.82, 440), height: 116)
+                    .frame(width: min(width * 0.70, 340), height: 84)
                     .overlay { if logoAspect == nil { titleText } }
                     .id(logo).accessibilityLabel(title)
             } else { titleText }
-        }.frame(maxWidth: .infinity)
-            .shadow(color: .black.opacity(0.8), radius: 4, y: 2)
+        }.frame(maxWidth: .infinity, alignment: .leading)
+            .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
     }
     private var titleText: some View {
-        Text(title).font(.system(size: 38, weight: .semibold))
-            .multilineTextAlignment(.center).lineLimit(3).minimumScaleFactor(0.6)
-            .frame(minHeight: 70).accessibilityAddTraits(.isHeader)
+        Text(title).font(.system(size: width >= 700 ? 34 : 30, weight: .semibold))
+            .multilineTextAlignment(.leading).lineLimit(3).minimumScaleFactor(0.7)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 

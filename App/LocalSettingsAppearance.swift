@@ -51,14 +51,14 @@ private struct LocalSettingsSurface: ViewModifier {
                     if opaque { shape.fill(Color(uiColor: .secondarySystemGroupedBackground)) }
                     else if navigation {
                         shape.fill(.ultraThinMaterial)
-                            .overlay { shape.fill(Color.black.opacity(dark ? 0.08 : 0)) }
+                            .overlay { shape.fill(dark ? Color(white: 0.28).opacity(0.64) : Color.white.opacity(0.12)) }
                     } else { shape.fill(Color.white.opacity(dark ? 0.065 : 0.55)) }
                 }
                 .shadow(color: .black.opacity(navigation ? (dark ? 0.18 : 0.08) : 0), radius: 12, y: 4)
                 .allowsHitTesting(false)
             }
             .overlay {
-                shape.strokeBorder(Color.white.opacity(dark ? 0.06 : 0.3), lineWidth: 0.5)
+                shape.strokeBorder(Color.white.opacity(dark ? (navigation ? 0.18 : 0.06) : 0.3), lineWidth: navigation ? 0.75 : 0.5)
                     .allowsHitTesting(false)
             }
     }

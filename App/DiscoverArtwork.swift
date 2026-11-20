@@ -4,7 +4,7 @@ import CoreImage
 import ImageIO
 import TVCore
 
-enum DiscoverPaintStyle: String, Sendable { case blended, soft, detail }
+enum DiscoverPaintStyle: String, Sendable { case blended, soft, detail, cinematic }
 
 /// Artwork is prepared off the main thread; detail covers keep their original sharp pixels.
 struct DiscoverPaint: @unchecked Sendable {
@@ -55,12 +55,34 @@ actor DiscoverPainter {
               let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: style == .detail ? 2400 : 1600,
+                kCGImageSourceThumbnailMaxPixelSize: style == .detail || style == .cinematic ? 2400 : 1600,
                 kCGImageSourceShouldCacheImmediately: true,
               ] as CFDictionary) else { return nil }
         let rgb = palette(decoded)
         if style == .detail {
             return DiscoverPaint(image: decoded, red: rgb.0 * 0.32, green: rgb.1 * 0.32, blue: rgb.2 * 0.32, style: style)
+        }
+        if style == .cinematic {
+            // Preserve the upper artwork, then soften it into the same color used below the hero.
+            let surface = (rgb.0 * 0.24 + 0.16, rgb.1 * 0.24 + 0.16, rgb.2 * 0.24 + 0.16)
+            let image = CIImage(cgImage: decoded)
+            let rect = image.extent
+            let blurred = image.clampedToExtent()
+                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: rect.width * 0.025]).cropped(to: rect)
+            guard let mask = CIFilter(name: "CILinearGradient", parameters: [
+                "inputPoint0": CIVector(x: 0, y: rect.height * 0.62),
+                "inputPoint1": CIVector(x: 0, y: rect.height * 0.20),
+                "inputColor0": CIColor.black, "inputColor1": CIColor.white,
+            ])?.outputImage?.cropped(to: rect),
+            let fade = CIFilter(name: "CILinearGradient", parameters: [
+                "inputPoint0": CIVector(x: 0, y: rect.height * 0.82),
+                "inputPoint1": CIVector(x: 0, y: rect.height * 0.30),
+                "inputColor0": CIColor(red: surface.0, green: surface.1, blue: surface.2, alpha: 0),
+                "inputColor1": CIColor(red: surface.0, green: surface.1, blue: surface.2),
+            ])?.outputImage?.cropped(to: rect) else { return nil }
+            let progressive = blurred.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: image, kCIInputMaskImageKey: mask])
+            guard let result = context.createCGImage(fade.composited(over: progressive), from: rect) else { return nil }
+            return DiscoverPaint(image: result, red: surface.0, green: surface.1, blue: surface.2, style: style)
         }
         let soft = style == .soft
         let image = CIImage(cgImage: decoded)

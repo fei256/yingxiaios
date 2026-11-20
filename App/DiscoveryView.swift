@@ -190,21 +190,27 @@ struct GlobalSearchView: View {
                 .onDisappear { if !entering { endVisible = false; model.suspend() } }
             #else
             searchResultLayout
-                .topBar(hardEdge: true) {
+                #if os(iOS)
+                .clipped()
+                .safeAreaInset(edge: .top, spacing: 0) {
                     WithPerceptionTracking {
-                        #if os(iOS)
                         VStack(spacing: 0) {
                             globalSearchField
                             if let config = store.subscription, showsHeader { searchHeader(config) }
                         }
-                        #else
-                        if let config = store.subscription, showsHeader { searchHeader(config) }
-                        #endif
                     }
                 }
+                #else
+                .topBar(hardEdge: true) {
+                    WithPerceptionTracking {
+                        if let config = store.subscription, showsHeader { searchHeader(config) }
+                    }
+                }
+                #endif
                 .libraryBackdrop()
                 .screenTitle(L10n.text("Global Search"))
                 #if os(iOS)
+                .toolbarBackground(.hidden, for: .navigationBar)
                 .toolbar { ToolbarItem(placement: .navigationBarTrailing) { searchSettingsButton } }
                 .localGlassDialog(isPresented: $showsSearchSettings, title: "搜索设置", maxWidth: 560, maxHeight: 700, layout: .centered) {
                     WithPerceptionTracking {

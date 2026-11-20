@@ -184,19 +184,20 @@ struct DiscoverDetailView: View {
         GeometryReader { geometry in
             WithPerceptionTracking {
                 let width = geometry.size.width
+                #if os(iOS)
+                let coverHeight = CatalogDetailLayout.heroHeight(in: geometry.size)
+                #else
                 let coverHeight = width < 600 ? width * 1.5 : min(760, width * 0.7)
+                #endif
                 ZStack(alignment: .top) {
                     DiscoverDetailBackground(model: model, width: width, height: coverHeight,
                                              active: previewActive && !trailerShown && !searchShown && still == nil && !overviewShown)
-                    #if os(iOS)
-                    Color.clear.frame(height: coverHeight).detailArtworkToolbarShade().allowsHitTesting(false)
-                    #endif
                     ScrollViewReader { scroll in
                     ScrollView {
                         WithPerceptionTracking {
                             LazyVStack(alignment: .leading, spacing: 30) {
                                 WithPerceptionTracking {
-                                    identity(width: width)
+                                    identity(size: geometry.size)
                                     if model.failed {
                                         Button(L10n.text("Try Again")) { Task { await model.load(item) } }.padding(.horizontal, 20)
                                     }
@@ -212,6 +213,10 @@ struct DiscoverDetailView: View {
                                                       })
                                             .padding(.horizontal, 20).detailReadableContent()
                                     }
+                                    VStack(alignment: .leading, spacing: 12) {
+                                        Text("剧情简介").font(.system(size: 19, weight: .semibold))
+                                        overviewButton
+                                    }.padding(.horizontal, 20).detailReadableContent()
                                     #else
                                     if !seasons.isEmpty { episodes }
                                     #endif
@@ -234,10 +239,23 @@ struct DiscoverDetailView: View {
                                     }
                                 }
                             }.padding(.bottom, 40)
+                            #if os(iOS)
+                            .background {
+                                GeometryReader { position in
+                                    Color.clear.preference(key: CatalogDetailScrollOffset.self,
+                                                           value: -position.frame(in: .named("catalog.home.detail.scroll")).minY)
+                                }
+                            }
+                            #endif
                         }
                     }
                     .scrollIndicators(.hidden)
+                    #if os(iOS)
+                    .coordinateSpace(name: "catalog.home.detail.scroll")
+                    .onPreferenceChange(CatalogDetailScrollOffset.self) { model.scrollY = $0 }
+                    #else
                     .modifier(DiscoverDetailScroll(model: model))
+                    #endif
                     }
                 }
             }
@@ -270,32 +288,38 @@ struct DiscoverDetailView: View {
         #endif
     }
 
-    private func identity(width: CGFloat) -> some View {
+    @ViewBuilder private func identity(size: CGSize) -> some View {
+        #if os(iOS)
+        CatalogDetailHero(size: size) {
+            identityContents(width: size.width).detailReadableContent()
+        } actions: { mobileSourceActions(width: size.width) }
+        .padding(.horizontal, 20)
+        #else
         VStack(spacing: 16) {
-            Color.clear.frame(height: width < 600 ? width * 0.95 : width * 0.25)
-            #if os(iOS)
-            identityContents(width: width).detailReadableContent()
-            #else
-            identityContents(width: width)
-            #endif
+            Color.clear.frame(height: size.width < 600 ? size.width * 0.95 : size.width * 0.25)
+            identityContents(width: size.width)
         }
         .padding(.horizontal, 20).padding(.bottom, 0)
         #if os(macOS)
         .frame(maxWidth: 640)
         #endif
         .frame(maxWidth: .infinity)
+        #endif
     }
 
     private func identityContents(width: CGFloat) -> some View {
-        VStack(spacing: 16) {
-            #if os(iOS)
-            if let original = details?.originalName, !original.isEmpty, original != details?.name {
-                Text(original).font(.system(size: 13)).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).multilineTextAlignment(.center)
-            }
+        #if os(iOS)
+        VStack(alignment: .leading, spacing: 12) {
             LocalCatalogDetailTitle(title: details?.name ?? item.name, logo: details?.logo, width: width)
                 .id(details?.logo)
-            #else
+            if let original = details?.originalName, !original.isEmpty, original != details?.name {
+                Text(original).font(.system(size: 12)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+            }
+            metadataTags
+            if model.loading, details == nil { ProgressView().controlSize(.small) }
+        }
+        #else
+        VStack(spacing: 16) {
             Group {
                 if let logo = details?.logo {
                     TMDBArtwork(url: logo, maxPixels: 1000, fill: false)
@@ -307,25 +331,6 @@ struct DiscoverDetailView: View {
                         .frame(minHeight: 70)
                 }
             }
-            #endif
-            #if os(iOS)
-            metadataTags
-            overviewButton
-            HStack(spacing: 12) {
-                Button { panShown.toggle() } label: {
-                    Label("盘搜", systemImage: "cloud").font(.headline).lineLimit(1)
-                        .frame(maxWidth: .infinity)
-                }.controlButton().controlSize(.large).accessibilityIdentifier("discover.panSearch")
-                    .accessibilityValue(panShown ? "已展开" : "已收起")
-                Button { panSettingsShown = true } label: {
-                    Image(systemName: "slider.horizontal.3").font(.headline)
-                }.controlButton().controlSize(.large).accessibilityLabel("盘搜设置").accessibilityIdentifier("discover.panSettings")
-                Button { store.searchVideos(details?.name ?? item.name) } label: {
-                    Image(systemName: "magnifyingglass").font(.headline)
-                }.controlButton().controlSize(.large).disabled(store.subscription == nil)
-                    .accessibilityLabel("搜索当前作品").accessibilityIdentifier("discover.findSources")
-            }
-            #else
             Text(metadata).font(.system(size: 13)).multilineTextAlignment(.center).opacity(0.88)
             HStack(spacing: 12) {
                 sourceButton
@@ -345,9 +350,9 @@ struct DiscoverDetailView: View {
                     if let votes = details?.voteCount { Text("(\(votes))").font(.system(size: 11, design: .rounded)).opacity(0.6) }
                 }
             }
-            #endif
             if model.loading, details == nil { ProgressView().padding(10) }
         }
+        #endif
     }
 
     @ViewBuilder private var overviewButton: some View {
@@ -370,8 +375,44 @@ struct DiscoverDetailView: View {
     }
 
     #if os(iOS)
+    private func mobileSourceActions(width: CGFloat) -> some View {
+        CatalogDetailActionRow(containerWidth: width) {
+            Button { panShown.toggle() } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "cloud").font(.system(size: 19, weight: .semibold))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("盘搜").font(.system(size: 15, weight: .semibold))
+                        Text("查找这部作品的资源").font(.system(size: 11)).foregroundStyle(.black.opacity(0.58))
+                    }.lineLimit(1)
+                }.foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 58).padding(.horizontal, 16)
+                    .contentShape(Rectangle()).background(.white, in: Capsule())
+            }.buttonStyle(.plain).accessibilityIdentifier("discover.panSearch")
+                .accessibilityValue(panShown ? "已展开" : "已收起")
+        } tools: {
+            CatalogDetailToolStrip {
+                Button { panSettingsShown = true } label: { Image(systemName: "slider.horizontal.3").catalogDetailToolTarget() }
+                    .accessibilityLabel("盘搜设置").accessibilityIdentifier("discover.panSettings")
+                Button { store.searchVideos(details?.name ?? item.name) } label: { Image(systemName: "magnifyingglass").catalogDetailToolTarget() }
+                    .disabled(store.subscription == nil).accessibilityLabel("搜索当前作品").accessibilityIdentifier("discover.findSources")
+                Menu {
+                    WithPerceptionTracking {
+                        Button("剧情简介", systemImage: "text.alignleft") { overviewShown = true }
+                        if details?.mediaType == .tv {
+                            Button("播出日历", systemImage: "calendar") { calendarShown = true }
+                                .accessibilityIdentifier("discover.detail.calendar")
+                        }
+                        ShareLink(item: details?.link ?? URL(string: "https://www.themoviedb.org/\(item.mediaType.rawValue)/\(item.id)")!) {
+                            Label("分享影片", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                } label: { Image(systemName: "ellipsis").catalogDetailToolTarget() }
+                    .accessibilityLabel("更多影片操作").accessibilityIdentifier("discover.detail.more")
+            }
+        }
+    }
+
     private var metadataTags: some View {
-        LocalCatalogMetadataPills(details: details, item: item, calendar: { calendarShown = true })
+        LocalCatalogMetadataPills(details: details, item: item)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("discover.detail.metadata")
     }
@@ -667,18 +708,45 @@ struct DiscoverDetailView: View {
     func load(_ item: TMDBCatalog.Item) async {
         loading = true; failed = false
         defer { loading = false }
+        #if os(iOS)
+        let initialArtwork = Task {
+            guard paint == nil else { return }
+            for address in LocalCatalogDetailArtwork.images(poster: item.poster, backdrop: item.backdrop, details: nil) {
+                let loaded = await DiscoverPainter.shared.paint(address, style: .cinematic)
+                guard !Task.isCancelled else { return }
+                if let loaded {
+                    if paint == nil { paint = loaded }
+                    return
+                }
+            }
+        }
+        defer { initialArtwork.cancel() }
+        #endif
         do {
             let value = try await TMDBMatch.details(item.mediaType, id: item.id, season: nil)
             guard !Task.isCancelled else { return }
             details = value
-            if let poster = value.heroPoster ?? item.poster {
-                #if os(iOS)
-                paint = await DiscoverPainter.shared.paint(poster, style: .detail)
-                #else
-                paint = await DiscoverPainter.shared.paint(poster)
-                #endif
+            #if os(iOS)
+            var seen = Set<URL>()
+            let addresses = [value.backdrop ?? value.stills?.first ?? value.heroPoster ?? value.poster, item.backdrop, item.poster]
+                .compactMap { $0 }.filter { seen.insert($0).inserted }
+            for address in addresses {
+                let loaded = await DiscoverPainter.shared.paint(address, style: .cinematic)
+                guard !Task.isCancelled else { return }
+                if let loaded { paint = loaded; break }
             }
-        } catch { if !Task.isCancelled { failed = true } }
+            #else
+            if let poster = value.heroPoster ?? item.poster {
+                paint = await DiscoverPainter.shared.paint(poster)
+            }
+            #endif
+        } catch {
+            guard !Task.isCancelled else { return }
+            failed = true
+            #if os(iOS)
+            await initialArtwork.value
+            #endif
+        }
     }
 }
 
@@ -689,8 +757,13 @@ private struct DiscoverDetailBackground: View {
     let active: Bool
     var body: some View {
         WithPerceptionTracking {
+            #if os(iOS)
+            CatalogDetailBackdrop(paint: model.paint, width: width, heroHeight: height, scrollY: model.scrollY,
+                                  trailer: model.details?.trailer, playsTrailer: active && model.scrollY < height * 0.35)
+            #else
             DiscoverBackdrop(paint: model.paint, width: width, heroHeight: height, scrollY: model.scrollY,
                              trailer: model.details?.trailer, playsTrailer: active && model.scrollY < height * 0.35)
+            #endif
         }
     }
 }

@@ -20,27 +20,35 @@ struct DetailPlaybackControls: View {
         return min(1, max(0, value))
     }
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                if canResume && !finishedReading {
-                    action(.beginning, title: reading == nil ? "重播" : "重新阅读", subtitle: beginningLabel, symbol: "arrow.counterclockwise")
-                    Rectangle().fill(.primary.opacity(0.1)).frame(width: 1, height: 38).accessibilityHidden(true)
+        HStack(spacing: 8) {
+            if canResume && !finishedReading {
+                Button { start(.beginning) } label: {
+                    Group {
+                        if busy && loadingMode == .beginning { ProgressView().tint(.white) }
+                        else { Image(systemName: "arrow.counterclockwise").font(.system(size: 17, weight: .medium)) }
+                    }.frame(width: 44, height: 58).contentShape(Rectangle())
                 }
-                action(.resume, title: reading == nil ? (canResume ? "继续播放" : "开始播放") : (finishedReading ? "重新阅读" : "继续阅读"),
-                       subtitle: context, symbol: reading == nil ? "play.fill" : "book.fill")
-                    .background(Brand.accent.opacity(0.12))
+                .buttonStyle(.plain).foregroundStyle(.white)
+                .background(.white.opacity(0.10), in: Capsule())
+                .disabled(busy || selection.episode == nil)
+                .accessibilityLabel(reading == nil ? "从头播放" : "重新阅读")
+                .accessibilityValue(beginningLabel).accessibilityIdentifier("detail.playBeginning")
             }
-            if canResume {
-                ProgressView(value: progress).tint(Brand.accent).frame(height: 3)
-                    .accessibilityLabel(reading == nil ? "观看进度" : "阅读进度")
-                    .accessibilityValue("\(Int((progress * 100).rounded()))%")
-            }
+            action(.resume, title: reading == nil ? (canResume ? "继续播放" : "开始播放") : (finishedReading ? "重新阅读" : "继续阅读"),
+                   subtitle: context, symbol: reading == nil ? "play.fill" : "book.fill")
+                .background(.white, in: Capsule())
+                .overlay(alignment: .bottom) {
+                    if canResume {
+                        ProgressView(value: progress).tint(Brand.amber)
+                            .padding(.horizontal, 26).padding(.bottom, 5)
+                            .accessibilityLabel(reading == nil ? "观看进度" : "阅读进度")
+                            .accessibilityValue("\(Int((progress * 100).rounded()))%")
+                    }
+                }
+                .clipShape(Capsule())
         }
         .frame(maxWidth: .infinity)
-        .background(Color(white: 0.08).opacity(0.92), in: RoundedRectangle(cornerRadius: 18))
-        .foregroundStyle(.white).environment(\.colorScheme, .dark)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay { RoundedRectangle(cornerRadius: 18).strokeBorder(.primary.opacity(0.1), lineWidth: 0.5) }
+        .opacity(busy || selection.episode == nil ? 0.65 : 1)
         .accessibilityElement(children: .contain).accessibilityLabel("播放模式")
     }
     private var context: String {
@@ -51,13 +59,13 @@ struct DetailPlaybackControls: View {
     private func action(_ mode: PlaybackResumeMode, title: String, subtitle: String, symbol: String) -> some View {
         Button { start(mode) } label: {
             HStack(spacing: 8) {
-                if busy && loadingMode == mode { ProgressView().controlSize(.small) }
-                else { Image(systemName: symbol).font(.system(size: 17, weight: .semibold)).foregroundStyle(Brand.accent) }
-                VStack(alignment: .leading, spacing: 4) {
+                if busy && loadingMode == mode { ProgressView().controlSize(.small).tint(.black) }
+                else { Image(systemName: symbol).font(.system(size: 19, weight: .semibold)) }
+                VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                    Text(subtitle).font(.system(size: 11)).foregroundStyle(.white.opacity(0.84)).lineLimit(1)
+                    if !subtitle.isEmpty { Text(subtitle).font(.system(size: 11)).foregroundStyle(.black.opacity(0.58)).lineLimit(1) }
                 }
-            }.frame(maxWidth: .infinity, minHeight: 64, alignment: .leading).padding(.horizontal, 13)
+            }.foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 58, alignment: .center).padding(.horizontal, 16)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(busy || selection.episode == nil)

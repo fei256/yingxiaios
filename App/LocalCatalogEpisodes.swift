@@ -33,43 +33,57 @@ struct LocalCatalogDetailEpisode: Identifiable {
 struct LocalCatalogDetailEpisodeCard: View {
     let value: LocalCatalogDetailEpisode
     let video: Video
-    let movieArtwork: URL?
-    let movie: Bool
+    let backdrop: URL?
     let loading: Bool
+    var width: CGFloat = 216
+    var selected = false
+    var progress: Double? = nil
     private var size: String? { value.fileDetail?.components(separatedBy: " · ").last.flatMap { ["M", "G", "T"].contains(where: $0.hasSuffix) ? $0 : nil } }
     private var overview: String { value.info?.overview.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
-    private var artwork: URL? { movieArtwork ?? value.info?.still ?? video.poster }
+    private var artwork: URL? { value.info?.still ?? backdrop ?? video.poster }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if artwork != nil {
                 Color.clear.aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .overlay { LocalCatalogEpisodeArtwork(primary: movieArtwork ?? value.info?.still, fallback: video.poster, headers: video.posterHeaders) }
+                    .overlay { LocalCatalogEpisodeArtwork(primary: value.info?.still ?? backdrop, fallback: video.poster, headers: video.posterHeaders) }
                     .overlay {
                         if loading { ProgressView().tint(.white).padding(12).background(.black.opacity(0.5), in: Circle()) }
-                        else { Image(systemName: "play.fill").font(.system(size: 17)).foregroundStyle(.white).padding(11).background(.black.opacity(0.35), in: Circle()) }
                     }
                     .overlay(alignment: .top) { badges.padding(8) }
                     .overlay(alignment: .bottomTrailing) {
                         if let runtime = value.info?.runtime, runtime.isFinite, runtime > 0 {
                             badge("\(Int(runtime)) 分钟").padding(8)
                         }
-                    }.clipped()
+                    }
+                    .overlay(alignment: .bottom) {
+                        if let progress, progress.isFinite, progress > 0 {
+                            ProgressView(value: min(1, progress)).tint(Brand.amber).padding(.horizontal, 8).padding(.bottom, 5)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
             } else { badges.padding([.top, .horizontal], 9) }
-            VStack(alignment: overview.isEmpty ? .center : .leading, spacing: 6) {
-                Text(value.title).font(.system(size: 13, weight: .medium)).lineLimit(overview.isEmpty ? 2 : 1)
-                    .frame(maxWidth: .infinity, alignment: overview.isEmpty ? .center : .leading)
-                if movie, value.title != value.episode.name {
-                    Text(value.episode.name).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(value.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if value.title != value.episode.name {
+                    Text(value.episode.name).font(.system(size: 11)).foregroundStyle(.white.opacity(0.62)).lineLimit(2)
                 }
-                if !overview.isEmpty { Text(overview).font(.system(size: 11)).lineSpacing(4).foregroundStyle(.secondary).lineLimit(3) }
-            }.padding(.horizontal, 13).padding(.top, 12).padding(.bottom, 14)
+                if let fileDetail = value.fileDetail {
+                    Text(fileDetail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.56)).lineLimit(1)
+                } else if !overview.isEmpty {
+                    Text(overview).font(.system(size: 11)).lineSpacing(3).foregroundStyle(.white.opacity(0.62)).lineLimit(2)
+                }
+            }.padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 12)
         }
-        .frame(width: 216, alignment: .topLeading)
-        .clipShape(RoundedRectangle(cornerRadius: 10)).contentShape(Rectangle())
+        .frame(width: width, alignment: .topLeading)
+        .background(.white.opacity(selected ? 0.09 : 0.035), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(selected ? Brand.amber.opacity(0.7) : .clear, lineWidth: 1).allowsHitTesting(false) }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous)).contentShape(Rectangle())
     }
     private var badges: some View {
         HStack(alignment: .top, spacing: 6) {
-            if let number = value.numberLabel { badge(number) }
+            if let number = value.key.number { badge(String(number)) }
+            else if let number = value.numberLabel { badge(number) }
             Spacer(minLength: 0)
             if let size { badge(size) }
         }
@@ -106,6 +120,7 @@ struct LocalCatalogDetailEpisodeRow: View {
     let value: LocalCatalogDetailEpisode
     let movie: Bool
     let loading: Bool
+    var selected = false
     var body: some View {
         HStack(spacing: 8) {
             if loading { ProgressView().controlSize(.small) } else { Image(systemName: "play.fill").font(.system(size: 12)) }
@@ -117,8 +132,8 @@ struct LocalCatalogDetailEpisodeRow: View {
             }
             Spacer(minLength: 0)
         }.padding(12).frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-            .background(.primary.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
-            .overlay { RoundedRectangle(cornerRadius: 9).strokeBorder(.primary.opacity(0.09), lineWidth: 0.5) }
+            .background(.white.opacity(selected ? 0.10 : 0.045), in: RoundedRectangle(cornerRadius: 11))
+            .overlay { RoundedRectangle(cornerRadius: 11).strokeBorder(selected ? Brand.amber.opacity(0.65) : .white.opacity(0.08), lineWidth: 0.75).allowsHitTesting(false) }
             .contentShape(Rectangle())
     }
 }
