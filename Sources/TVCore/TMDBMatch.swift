@@ -464,8 +464,14 @@ public actor TMDBMatchStore {
     /// The caller still checks manual choices; this never promotes an ambiguous title.
     public func calendarMatch(for key: String) -> TMDBMatch.Answer? {
         guard let entry = loadEntries()[key], entry.version == Self.matchingVersion,
-              entry.answer.status == .matched, entry.answer.match != nil,
+              entry.answer.status == .matched, let match = entry.answer.match,
               entry.answer.details != nil else { return nil }
+        let choice = loadChoices()[key]
+        if case .none? = choice { return nil }
+        if case .work(let type, let id, let season)? = choice {
+            guard match.mediaType == type, match.id == id,
+                  season == nil || match.season == season else { return nil }
+        }
         return entry.answer
     }
 

@@ -64,6 +64,7 @@ struct JournalScheduledEpisode: Identifiable {
     private(set) var matches: [String: TMDBMatch.Match] = [:]
     private(set) var loading = false
     private(set) var failed = Set<String>()
+    @PerceptionIgnored private var loadID = UUID()
 
     private struct Request: Sendable {
         let key: String
@@ -80,9 +81,11 @@ struct JournalScheduledEpisode: Identifiable {
     /// Only confirmed source/video matches supply airing dates. A similar title cannot silently
     /// become a different show, and a user's "none of these" choice is respected.
     func load(_ works: [JournalTrackedWork]) async {
+        let active = UUID()
+        loadID = active
         loading = true
         failed.removeAll()
-        defer { loading = false }
+        defer { if loadID == active { loading = false } }
         let present = Set(works.map(\.id))
         details = details.filter { present.contains($0.key) }
         matches = matches.filter { present.contains($0.key) }
@@ -93,17 +96,18 @@ struct JournalScheduledEpisode: Identifiable {
             let choice = await TMDBMatchStore.shared.choice(for: key)
             if case .none? = choice { details[work.id] = nil; matches[work.id] = nil; continue }
             let answer = await TMDBMatchStore.shared.calendarMatch(for: key)
+            guard !Task.isCancelled else { return }
             if let answer, answer.status == .matched, let cached = answer.details {
                 details[work.id] = cached
                 matches[work.id] = answer.match
+            } else {
+                details[work.id] = nil
+                matches[work.id] = nil
             }
             if case .work(let type, let id, let season)? = choice {
                 requests.append(Request(key: work.id, matchKey: key, type: type, id: id, season: season))
             } else if let match = answer?.match, answer?.status == .matched {
                 requests.append(Request(key: work.id, matchKey: key, type: match.mediaType, id: match.id, season: match.season))
-            } else {
-                details[work.id] = nil
-                matches[work.id] = nil
             }
         }
         await withTaskGroup(of: Response.self) { group in
