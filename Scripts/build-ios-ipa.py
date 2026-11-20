@@ -11,6 +11,7 @@ import sys
 import time
 
 from build_validation import archive_failure_excerpt, require_validation_enabled
+from build_resources import build_resources
 from source_layout import check_source_layout
 from source_snapshot import native_checksums, source_checksums
 
@@ -24,17 +25,10 @@ parser.add_argument('--jobs', type=int, help='Parallel build operations (default
 args = parser.parse_args()
 if args.jobs is not None and not 1 <= args.jobs <= 32:
     parser.error('--jobs must be between 1 and 32')
-def sysctl_number(name, fallback):
-    try:
-        return int(subprocess.check_output(['sysctl', '-n', name], text=True, stderr=subprocess.DEVNULL).strip())
-    except (OSError, ValueError, subprocess.CalledProcessError):
-        return fallback
-physical_cores = sysctl_number('hw.physicalcpu', os.cpu_count() or 4)
-memory_bytes = sysctl_number('hw.memsize', 16 * 1024 ** 3)
-# Leave room for Xcode/SwiftSyntax while each Swift frontend imports the large
-# app module. A user can deliberately override the conservative local default.
-memory_jobs = max(1, int(memory_bytes / (1024 ** 3) - 4) // 3)
-jobs = args.jobs if args.jobs is not None else max(1, min(8, physical_cores, memory_jobs))
+resources = build_resources(args.jobs)
+physical_cores = resources['physical_cores']
+memory_bytes = resources['memory_bytes']
+jobs = resources['jobs']
 host_arch = platform.machine()
 if host_arch not in ('arm64', 'x86_64'):
     parser.error('Unsupported Xcode host architecture: ' + host_arch)

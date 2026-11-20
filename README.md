@@ -16,7 +16,7 @@
 
 ## 编译环境
 
-- macOS，完整安装并选中的 Xcode；维护环境为 **Xcode 16.1 / Swift 6.0.2 / iPhoneOS SDK 18.1**。
+- macOS，完整安装并选中的 Xcode；云端构建环境为 **Xcode 16.4 / Swift 6 / iPhoneOS SDK 18.5**，应用仍以 iOS 16.2 为最低版本。
 - Python 3.10 或以上、Git、curl、XcodeGen、ripgrep、pkg-config。
 - Python 构建会使用独立的 CPython 3.14 工具解释器；FFmpeg 构建会准备固定版本 Meson/Ninja。
 
@@ -50,13 +50,15 @@ python3 Scripts/prepare-ios-dependencies.py --av3a-archive /path/to/av3a-pinned-
 
 打开仓库的 **Actions → Build iOS IPA → Run workflow**，选择 `main` 后运行。`Build number` 留空时采用 Actions 运行编号，也可以填写一个正整数。推送到 `main` 的应用、运行时、原生依赖或构建脚本修改也会自动触发构建；仅修改网站、服务或说明文档不会触发。
 
-工作流使用 `macos-15-intel` 和 Xcode 16.1，补装缺少的 iOS 18.1 平台组件，下载固定版本依赖并校验 SHA-256，再调用下方相同的工程生成、归档和 IPA 检查脚本。AV3A 参考归档从 `Vendor/AV3A/SOURCE-INVENTORY.json` 记录的上游仓库及固定提交下载，源码不提交到本仓库；其原始条款仍适用，见 `Vendor/AV3A/UPSTREAM.md`。首次构建需要编译原生依赖，完成后先保存缓存，再解析 Swift 包和归档应用；网络下载失败会自动重试，后续运行会尝试复用平台下载包和原生依赖缓存。
+工作流使用 `macos-15-intel` 和 Xcode 16.4，优先使用已预装的 iOS 18.5 平台，下载固定版本依赖并校验 SHA-256，再调用下方相同的工程生成、归档和 IPA 检查脚本。AV3A 参考归档从 `Vendor/AV3A/SOURCE-INVENTORY.json` 记录的上游仓库及固定提交下载，源码不提交到本仓库；其原始条款仍适用，见 `Vendor/AV3A/UPSTREAM.md`。首次构建需要编译原生依赖，完成后先保存缓存，再解析 Swift 包和归档应用；网络下载失败会自动重试。
+
+原生缓存键仅计算 Git 跟踪的输入文件、权限和链接目标，忽略预检生成的 Python 字节码及下载后的依赖产物。应用编译缓存保存 DerivedData 和生成的工程，按工具链、依赖配方及构建配置隔离；恢复时仅对内容哈希一致的源码恢复修改时间，让 Xcode 可以复用编译结果。修改源码仍由编译器检查依赖，新增文件仍由 XcodeGen 更新工程。并行度根据物理核心和内存自动选择，完整回归检查和包体校验继续执行。
 
 构建成功后，从运行页面的 **Artifacts** 下载 `Yingxia-iOS-build…-unsigned`，解压得到 IPA、`SHA256SUMS.txt` 和检查报告。IPA 保留 30 天，诊断日志保留 14 天。输出面向 iPhone/iPad、最低 iOS 16.2，安装前需自行签名。此流程不需要 Apple 签名证书或开发者账号，也不会自动发布 Release。
 
 IPA 下载附件只包含安装包和小型检查报告；完整编译日志及链接图在单独的 `iOS-build…-logs-…` 附件。build06 的 IPA 实际约 103 MB，旧的约 197 MB 下载附件还含有大日志。历史失败原因、已补强的检查与真机验证边界见 [构建流程审计](docs/build-pipeline-audit.md)。
 
-在 Windows 推送前可执行 `python Scripts/preflight-ios-source.py` 和 `python -m unittest discover -s Tests/BuildPipeline -v`，先检查 Git 链接、脚本权限和故障处理分支。工作流会在耗时的依赖准备前执行相同预检；修改构建脚本或原生配方会使缓存失效，属于预期行为。
+在 Windows 推送前可执行 `python -B Scripts/preflight-ios-source.py` 和 `python -B -m unittest discover -s Tests/BuildPipeline -v`，先检查 Git 链接、脚本权限和故障处理分支。工作流会在耗时的依赖准备前执行相同预检；修改构建脚本或原生配方会使缓存失效，属于预期行为。
 
 ### 在 macOS 上本地构建
 

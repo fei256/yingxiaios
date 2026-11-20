@@ -43,6 +43,9 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
 concurrency:
   group: ios-ipa-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.build_ipa == false && 'interface-only' || 'full' }}
   cancel-in-progress: false
@@ -188,7 +191,6 @@ jobs:
         shell: bash
     env:
       HOMEBREW_NO_AUTO_UPDATE: '1'
-      JOBS: '2'
       TVBOX_CACHE: ${{ github.workspace }}/build/download-cache
       CI_BUILD_NUMBER: ${{ inputs.build_number || github.run_number }}
     steps:
@@ -206,8 +208,8 @@ jobs:
       - name: Check build environment
         run: |
           mkdir -p build/ci
-          ci_xcode_path=/Applications/Xcode_16.1.app/Contents/Developer
-          test -d "$ci_xcode_path" || { echo 'Xcode 16.1 is missing from this runner image.' >&2; exit 1; }
+          ci_xcode_path=/Applications/Xcode_16.4.app/Contents/Developer
+          test -d "$ci_xcode_path" || { echo 'Xcode 16.4 is missing from this runner image.' >&2; exit 1; }
           sudo xcode-select --switch "$ci_xcode_path"
           xcrun simctl list > /dev/null
           python3 - <<'PY'
@@ -218,9 +220,14 @@ jobs:
               raise SystemExit('Build number must be a positive integer.')
           PY
           xcodebuild -version
+          xcrun swift --version
           xcrun --sdk iphoneos --show-sdk-version
           brew install xcodegen ripgrep pkgconf
           xcodegen --version
+
+      - name: Compute stable cache fingerprints and build concurrency
+        id: cache-keys
+        run: python3 Scripts/ci-build-cache.py keys --report build/ci/cache-keys.json
 
       - name: Type-check native drag provider
         run: |
@@ -260,33 +267,16 @@ jobs:
             Tests/WatchActivity/checks.swift -o build/ci/watch-activity-checks
           build/ci/watch-activity-checks 2>&1 | tee build/ci/watch-activity-checks.log
 
-      - name: Restore iOS 18.1 platform package
-        id: platform-cache
-        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
-        with:
-          key: ios-platform-18.1-${{ runner.os }}-${{ runner.arch }}-v2
-          restore-keys: ios-platform-18.1-${{ runner.os }}-${{ runner.arch }}-v1
-          path: build/ios-platform-cache
-
-      - name: Install iOS 18.1 platform
-        id: ios-platform
+      - name: Verify preinstalled iOS 18.5 platform
         run: |
-          python3 Scripts/prepare-ios-platform.py --version 18.1 --report build/ci/platform-check.json \
+          python3 Scripts/prepare-ios-platform.py --version 18.5 --report build/ci/platform-check.json \
             2>&1 | tee build/ci/ios-platform.log
-
-      - name: Save iOS 18.1 platform package
-        if: steps.platform-cache.outputs.cache-hit != 'true' && steps.ios-platform.outputs.cacheable == 'true'
-        continue-on-error: true
-        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
-        with:
-          key: ${{ steps.platform-cache.outputs.cache-primary-key }}
-          path: build/ios-platform-cache
 
       - name: Restore native dependencies
         id: native-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
         with:
-          key: ios-native-v2-${{ runner.os }}-${{ runner.arch }}-xcode16.1-${{ hashFiles('Scripts/**', 'Vendor/**', 'Runtime/PythonHost/**', 'Config/Python/**', 'Package.resolved') }}
+          key: ios-native-v3-${{ runner.os }}-${{ runner.arch }}-xcode16.4-${{ steps.cache-keys.outputs.native }}
           path: |
             build/tools
             build/download-cache
@@ -302,6 +292,22 @@ jobs:
             Vendor/NativeASR/TVASR.xcframework
             Vendor/AVSNative/sources
             Vendor/DiscNative/sources
+
+      - name: Restore compiled app and project
+        id: build-cache
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
+        with:
+          key: ios-build-v1-${{ runner.os }}-${{ runner.arch }}-xcode16.4-jobs${{ env.JOBS }}-${{ steps.cache-keys.outputs.native }}-${{ steps.cache-keys.outputs.settings }}-${{ github.sha }}
+          restore-keys: ios-build-v1-${{ runner.os }}-${{ runner.arch }}-xcode16.4-jobs${{ env.JOBS }}-${{ steps.cache-keys.outputs.native }}-${{ steps.cache-keys.outputs.settings }}-
+          path: |
+            build/DerivedData-iOS16
+            build/ios-project.json
+            build/ios-project.xcodegen-cache
+            build/ci/source-timestamps.json
+            Yingxia-iOS.xcodeproj
+
+      - name: Restore timestamps of unchanged tracked sources
+        run: python3 Scripts/ci-build-cache.py restore-timestamps --report build/ci/timestamp-restore.json
 
       - name: Select pinned Python build interpreter
         run: |
@@ -352,7 +358,7 @@ jobs:
         id: swift-cache
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
         with:
-          key: ios-swift-v1-${{ runner.os }}-${{ runner.arch }}-xcode16.1-${{ hashFiles('Package.resolved') }}
+          key: ios-swift-v1-${{ runner.os }}-${{ runner.arch }}-xcode16.4-${{ hashFiles('Package.resolved') }}
           path: build/SourcePackages
 
       - name: Resolve pinned Swift packages
@@ -379,6 +385,22 @@ jobs:
         run: |
           python3 Scripts/build-ios-ipa.py --check --build-number "$CI_BUILD_NUMBER" --jobs "$JOBS"
           python3 Scripts/build-ios-ipa.py --build-number "$CI_BUILD_NUMBER" --jobs "$JOBS" 2>&1 | tee build/ci/build.log
+
+      - name: Record source timestamps for the next build
+        run: python3 Scripts/ci-build-cache.py save-timestamps --report build/ci/timestamp-save.json
+
+      - name: Save compiled app and project
+        if: steps.build-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
+        with:
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
+          path: |
+            build/DerivedData-iOS16
+            build/ios-project.json
+            build/ios-project.xcodegen-cache
+            build/ci/source-timestamps.json
+            Yingxia-iOS.xcodeproj
 
       - name: Upload IPA and validation reports
         id: ipa-artifact
