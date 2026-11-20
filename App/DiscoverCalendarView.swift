@@ -118,69 +118,11 @@ struct DiscoverCalendarView: View {
     private var content: some View {
         GeometryReader { proxy in
             WithPerceptionTracking {
-            ScrollView {
-                WithPerceptionTracking {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ScrollView(.horizontal) {
-                            WithPerceptionTracking {
-                                HStack(spacing: 8) {
-                                    ForEach(TMDBCalendar.Kind.allCases, id: \.self) { value in
-                                        WithPerceptionTracking {
-                                            calendarChip(value.title, selected: kind == value) { kind = value }
-                                                .accessibilityIdentifier("calendar.kind.\(value.rawValue)")
-                                        }
-                                    }
-                                    if kind == .tv {
-                                        Divider().frame(height: 18).padding(.horizontal, 4)
-                                        ForEach(TMDBCalendar.Region.allCases, id: \.self) { value in
-                                            WithPerceptionTracking {
-                                                calendarChip(value.title, selected: region == value) { region = value }
-                                                    .accessibilityIdentifier("calendar.region.\(value.rawValue)")
-                                            }
-                                        }
-                                    }
-                                }.padding(.horizontal, DiscoverLayout.gutter)
-                            }
-                        }.scrollIndicators(.hidden)
-                        if let week {
-                            ScrollView(.horizontal) {
-                                WithPerceptionTracking {
-                                    HStack(spacing: 8) {
-                                        ForEach(week.days) { value in
-                                            WithPerceptionTracking {
-                                                calendarChip(DiscoverAiring.dayName(value.date, in: week), selected: value.date == date) { picked[key] = value.date }
-                                                    .accessibilityIdentifier("calendar.day.\(value.weekday)")
-                                            }
-                                        }
-                                    }.padding(.horizontal, DiscoverLayout.gutter)
-                                }
-                            }.scrollIndicators(.hidden)
-                        }
-                        if let day, !day.items.isEmpty {
-                            LazyVGrid(columns: [GridItem(.adaptive(minimum: DiscoverLayout.posterWidth), spacing: DiscoverLayout.spacing)], alignment: .leading, spacing: 22) {
-                                WithPerceptionTracking {
-                                    ForEach(day.items) { item in
-                                        WithPerceptionTracking {
-                                            DiscoverAiringLink(item: item) { DiscoverAiringTile(item: item, next: item.id == next) }
-                                                .accessibilityIdentifier("calendar.item.\(item.id)")
-                                        }
-                                    }
-                                }
-                            }
-                            .padding(.horizontal, DiscoverLayout.gutter).padding(.top, 8)
-                        }
-                        status.frame(maxWidth: .infinity)
-                        if let week { DiscoverCalendarCredits(week: week).padding(.horizontal, DiscoverLayout.gutter) }
+                ScrollView {
+                    WithPerceptionTracking {
+                        calendarContent(height: proxy.size.height)
                     }
-                    .padding(.vertical, DiscoverLayout.gutter)
-                    #if os(iOS)
-                    .frame(minHeight: glassDialog ? nil : proxy.size.height, alignment: .top)
-                    .localDialogContentHeight()
-                    #else
-                    .frame(minHeight: proxy.size.height, alignment: .top)
-                    #endif
                 }
-            }
             }
         }
         .navigationTitle(L10n.text("Airing Schedule"))
@@ -189,6 +131,76 @@ struct DiscoverCalendarView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar(glassDialog ? .hidden : .visible, for: .navigationBar)
         #endif
+    }
+
+    private func calendarContent(height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            calendarFilters
+            if let week { calendarDays(week) }
+            if let day, !day.items.isEmpty { calendarItems(day) }
+            status.frame(maxWidth: .infinity)
+            if let week { DiscoverCalendarCredits(week: week).padding(.horizontal, DiscoverLayout.gutter) }
+        }
+        .padding(.vertical, DiscoverLayout.gutter)
+        #if os(iOS)
+        .frame(minHeight: glassDialog ? nil : height, alignment: .top)
+        .localDialogContentHeight()
+        #else
+        .frame(minHeight: height, alignment: .top)
+        #endif
+    }
+
+    private var calendarFilters: some View {
+        ScrollView(.horizontal) {
+            WithPerceptionTracking {
+                HStack(spacing: 8) {
+                    ForEach(TMDBCalendar.Kind.allCases, id: \.self) { value in
+                        WithPerceptionTracking {
+                            calendarChip(value.title, selected: kind == value) { kind = value }
+                                .accessibilityIdentifier("calendar.kind.\(value.rawValue)")
+                        }
+                    }
+                    if kind == .tv {
+                        Divider().frame(height: 18).padding(.horizontal, 4)
+                        ForEach(TMDBCalendar.Region.allCases, id: \.self) { value in
+                            WithPerceptionTracking {
+                                calendarChip(value.title, selected: region == value) { region = value }
+                                    .accessibilityIdentifier("calendar.region.\(value.rawValue)")
+                            }
+                        }
+                    }
+                }.padding(.horizontal, DiscoverLayout.gutter)
+            }
+        }.scrollIndicators(.hidden)
+    }
+
+    private func calendarDays(_ week: TMDBCalendar.Week) -> some View {
+        ScrollView(.horizontal) {
+            WithPerceptionTracking {
+                HStack(spacing: 8) {
+                    ForEach(week.days) { value in
+                        WithPerceptionTracking {
+                            calendarChip(DiscoverAiring.dayName(value.date, in: week), selected: value.date == date) { picked[key] = value.date }
+                                .accessibilityIdentifier("calendar.day.\(value.weekday)")
+                        }
+                    }
+                }.padding(.horizontal, DiscoverLayout.gutter)
+            }
+        }.scrollIndicators(.hidden)
+    }
+
+    private func calendarItems(_ day: TMDBCalendar.Day) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: DiscoverLayout.posterWidth), spacing: DiscoverLayout.spacing)], alignment: .leading, spacing: 22) {
+            WithPerceptionTracking {
+                ForEach(day.items) { item in
+                    WithPerceptionTracking {
+                        DiscoverAiringLink(item: item) { DiscoverAiringTile(item: item, next: item.id == next) }
+                            .accessibilityIdentifier("calendar.item.\(item.id)")
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, DiscoverLayout.gutter).padding(.top, 8)
     }
     #endif
 
