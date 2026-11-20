@@ -140,6 +140,7 @@ export class MediaCache {
     this.baseUrl = typeof baseUrl === 'function' ? baseUrl : () => baseUrl;
     Object.assign(this, { blockBytes, reserveBytes, idleTimeoutMs, writeBufferBytes, request });
     this.pendingBytes = 0; this.videoMaxBytes = GiB; this.useOrder = 0;
+    this.foregroundReads = 0; this.filePrefetchActive = null; this.prefetchOwner = null;
     // libavformat opens a seek/tail request before closing its previous read.
     // One slot deadlocks that handover on moov-at-end MP4 and resume/seek.
     this.requestBudget = new RequestBudget({ perResource: 2 });
@@ -167,7 +168,8 @@ export class MediaCache {
       if (maxBytes === undefined) this.videoMaxBytes = policy.enabled ? policy.sizeGB * GiB : 0;
       owner = { id, enabled: policy.enabled, maxBytes: maxBytes ?? policy.sizeGB * GiB, bytes: 0,
         blocks: new Map(), resources: new Map(), controller: new AbortController(), closed: false, hits: 0, written: 0, networkBytes: 0, nativeFallback: false, cacheRevision: 0,
-        forwardReaders: new Set(), forwardBytes: 0 };
+        forwardReaders: new Set(), forwardBytes: 0, prefetchJobs: new Set(), playbackRequested: false,
+        prefetchReady: false, readGeneration: 0 };
       this.owners.set(id, owner);
     }
     return owner;
@@ -194,6 +196,7 @@ export class MediaCache {
   }
   async update(settings) {
     const policy = videoCacheSettings(settings);
+    this.stopFilePrefetch();
     this.videoPolicy = policy;
     this.videoMaxBytes = policy.enabled ? policy.sizeGB * GiB : 0;
     for (const owner of this.owners.values()) {
@@ -208,8 +211,88 @@ export class MediaCache {
       await this.trimVideos(0);
     });
     this.wakeForward();
+    this.drainFilePrefetch();
   }
   wakeForward() { for (const wake of this.forwardWaiters) wake(); this.forwardWaiters.clear(); }
+  stopFilePrefetch(owner) {
+    const job = this.filePrefetchActive;
+    if (job && (!owner || job.resource.owner === owner)) job.controller.abort();
+  }
+  requestFilePrefetch(owner, revision = owner.cacheRevision) {
+    if (owner.closed || !owner.enabled || !owner.playbackRequested || revision !== owner.cacheRevision
+      || this.prefetchOwner && this.prefetchOwner !== owner) return;
+    owner.prefetchReady = true; this.prefetchOwner = owner; this.drainFilePrefetch();
+  }
+  storedRanges(resource, total = resource.meta?.total) {
+    return [...resource.pages.values()].flatMap(page => [...page.values()])
+      .map(block => ({ start: block.start, end: Math.min(total, block.start + block.length) }))
+      .sort((a, b) => a.start - b.start || a.end - b.end);
+  }
+  missingFileRange(resource) {
+    const total = resource.meta?.total;
+    if (!Number.isSafeInteger(total) || total <= 0) return null;
+    let position = 0;
+    for (const range of this.storedRanges(resource, total)) {
+      if (range.start > position) return { start: position, end: range.start - 1 };
+      position = Math.max(position, range.end);
+    }
+    return position < total ? { start: position, end: total - 1 } : null;
+  }
+  drainFilePrefetch() {
+    const owner = this.prefetchOwner;
+    if (this.closed || this.foregroundReads || this.filePrefetchActive || !owner
+      || owner.closed || !owner.enabled || !owner.prefetchReady) return;
+    const resource = [...owner.resources.values()].find(value => value.forwardCache && !value.manifestURL
+      && value.meta?.validator && value.meta.total <= Math.min(owner.maxBytes, this.videoMaxBytes)
+      && this.missingFileRange(value));
+    if (!resource) return;
+    const job = { resource, revision: owner.cacheRevision, controller: new AbortController() };
+    job.signal = AbortSignal.any([owner.controller.signal, job.controller.signal]);
+    this.filePrefetchActive = job; owner.prefetchJobs.add(job);
+    job.finished = this.prefetchFile(job).catch(() => {
+      if (!job.signal.aborted) owner.prefetchReady = false;
+    }).finally(() => {
+      owner.prefetchJobs.delete(job);
+      if (this.filePrefetchActive === job) this.filePrefetchActive = null;
+      this.drainFilePrefetch();
+    });
+  }
+  async prefetchFile(job) {
+    const { resource, signal, revision } = job, owner = resource.owner;
+    const total = resource.meta.total, validator = resource.meta.validator;
+    let failures = 0;
+    while (true) {
+      signal.throwIfAborted();
+      await this.tail;
+      signal.throwIfAborted();
+      if (this.foregroundReads || !owner.enabled || revision !== owner.cacheRevision
+        || total > Math.min(owner.maxBytes, this.videoMaxBytes)) return;
+      const gap = this.missingFileRange(resource);
+      if (!gap) return;
+      // Small sequential windows let capped 206 origins complete a file without
+      // turning one probe into a giant server-side batch or adding source threads.
+      const end = Math.min(gap.end, gap.start + 8 * this.blockBytes - 1);
+      let upstream;
+      try {
+        upstream = await this.open(resource, 'GET', `bytes=${gap.start}-${end}`, validator, signal, { speculative: true });
+        if (!upstream) throw new Error('file prefetch yielded to playback');
+        const meta = this.accept(resource, upstream.response);
+        if (upstream.response.status !== 206 || !meta || meta.start !== gap.start || meta.end > end
+          || meta.total !== total || meta.validator !== validator) throw new Error('file prefetch range rejected');
+        for await (const _ of this.body(resource, upstream, meta, signal, Infinity, { writeThrough: true })) { /* Store the validated range. */ }
+        if (!this.covers(resource, meta.start, meta.end)) throw new Error('file prefetch cache unavailable');
+        failures = 0;
+      } catch (error) {
+        signal.throwIfAborted();
+        if (/media changed|invalid media length|file prefetch/.test(error.message) || failures++ >= 2) throw error;
+        await delay(250 * failures, undefined, { signal });
+      } finally {
+        upstream?.controller.abort();
+        await upstream?.response.body?.cancel().catch(() => {});
+        upstream?.releaseBudget?.();
+      }
+    }
+  }
   async reserveForward(owner, bytes, signal, urgent = () => false, revision = owner.cacheRevision) {
     while (true) {
       signal.throwIfAborted();
@@ -260,7 +343,7 @@ export class MediaCache {
       size -= oldest.length; await this.remove(oldest.resource.owner, oldest);
     }
   }
-  async put(resource, start, bytes, revision = resource.owner.cacheRevision, { pin = false } = {}) {
+  async put(resource, start, bytes, revision = resource.owner.cacheRevision, { pin = false, evict = true } = {}) {
     const owner = resource.owner;
     if (!owner.enabled || owner.closed || !bytes.length || bytes.length > owner.maxBytes) return;
     return await this.serial(async () => {
@@ -282,8 +365,10 @@ export class MediaCache {
           if (pin) existing.pins = (existing.pins || 0) + 1;
           return existing;
         }
-        await this.trim(owner, bytes.length);
-        if (!owner.music && !owner.speculative) await this.trimVideos(bytes.length);
+        if (evict) {
+          await this.trim(owner, bytes.length);
+          if (!owner.music && !owner.speculative) await this.trimVideos(bytes.length);
+        }
         const videoBytes = [...this.owners.values()].filter(value => !value.music && !value.speculative).reduce((size, value) => size + value.bytes, 0);
         if (owner.bytes + bytes.length > owner.maxBytes || !owner.music && !owner.speculative && videoBytes + bytes.length > this.videoMaxBytes) return;
         file = path.join(this.directory, id);
@@ -379,16 +464,28 @@ export class MediaCache {
       this.wakeForward();
     });
   }
-  async open(resource, method, range, ifRange, signal) {
+  async open(resource, method, range, ifRange, signal, { speculative = false } = {}) {
     const headers = new Headers(resource.headers);
     headers.set('accept-encoding', 'identity'); headers.delete('range'); headers.delete('if-range');
     if (range) headers.set('range', range);
     if (ifRange) headers.set('if-range', ifRange);
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
-    const lease = await this.requestBudget.acquire(resource.key, { signal: combined });
+    if (!speculative) {
+      resource.owner.prefetchReady = false;
+      this.stopFilePrefetch();
+      this.foregroundReads++;
+    }
+    let lease, released = false;
+    const releaseBudget = () => {
+      if (released) return;
+      released = true; lease?.release();
+      if (!speculative) { this.foregroundReads--; this.drainFilePrefetch(); }
+    };
     let result;
     try {
+      lease = await this.requestBudget.acquire(resource.key, { signal: combined, speculative });
+      if (!lease) { releaseBudget(); return null; }
       const options = { headers, signal: combined, method, timeoutMs: this.idleTimeoutMs, allowInsecureRedirect: true };
       for (let attempt = 0; ; attempt++) {
         result = resource.scopedCredentials || resource.sniffManifest ? await fetchScopedMedia(resource.address, options, this.request)
@@ -401,11 +498,11 @@ export class MediaCache {
         // a 32 s recovery window; never turn a persistent rejection into a loop.
         await delay(4000, undefined, { signal: combined });
       }
-    } catch (error) { result?.release(); lease.release(); throw error; }
+    } catch (error) { result?.release(); releaseBudget(); throw error; }
     // A movie can stream for hours. Only an idle read has a deadline, rather
     // than aborting a healthy connection after a fixed total duration.
     result.release();
-    return { ...result, controller, signal: combined, releaseBudget: lease.release };
+    return { ...result, controller, signal: combined, releaseBudget };
   }
   accept(resource, remote) {
     const meta = description(remote);
@@ -416,7 +513,7 @@ export class MediaCache {
     resource.meta = { ...meta, ranges: meta.ranges || before?.ranges };
     return meta;
   }
-  async *body(resource, upstream, meta, signal, maxBytes = Infinity) {
+  async *body(resource, upstream, meta, signal, maxBytes = Infinity, { writeThrough = false } = {}) {
     const iterator = upstream.response.body?.[Symbol.asyncIterator]();
     if (!iterator) return;
     let savedAt = meta?.start || 0, pending = Buffer.alloc(0), received = 0;
@@ -438,7 +535,11 @@ export class MediaCache {
             const part = bytes.subarray(offset, offset + remaining); offset += part.length;
             pending = pending.length ? Buffer.concat([pending, part]) : part;
             if (pending.length === this.blockBytes - (savedAt % this.blockBytes)) {
-              this.enqueue(resource, savedAt, pending, revision); savedAt += pending.length; pending = Buffer.alloc(0);
+              if (writeThrough) {
+                if (!await this.put(resource, savedAt, pending, revision, { evict: false }))
+                  throw new Error('file prefetch cache unavailable');
+              } else this.enqueue(resource, savedAt, pending, revision);
+              savedAt += pending.length; pending = Buffer.alloc(0);
             }
           }
         }
@@ -450,10 +551,16 @@ export class MediaCache {
       // A demuxer often stops its header/tail read before a full cache block.
       // Keep the validated bytes already received, as we do for full blocks,
       // so a following seek does not reopen the same upstream header again.
-      if (meta && pending.length) this.enqueue(resource, savedAt, pending, revision);
-      upstream.controller.abort();
-      await iterator.return?.().catch(() => {});
-      upstream.releaseBudget?.();
+      try {
+        if (meta && pending.length) {
+          if (writeThrough) await this.put(resource, savedAt, pending, revision, { evict: false });
+          else this.enqueue(resource, savedAt, pending, revision);
+        }
+      } finally {
+        upstream.controller.abort();
+        await iterator.return?.().catch(() => {});
+        upstream.releaseBudget?.();
+      }
     }
   }
   async *resumableBody(resource, upstream, meta, signal) {
@@ -483,22 +590,34 @@ export class MediaCache {
       current.releaseBudget?.();
     }
   }
-  playbackBody(resource, upstream, meta, signal, range) {
+  playbackBody(resource, upstream, meta, signal) {
     if (resource.resumeOnTruncation && meta) return this.resumableBody(resource, upstream, meta, signal);
-    if (resource.forwardCache && meta && resource.owner.enabled && !resource.owner.music && !resource.owner.speculative
-      && (!range || /^bytes=\d+-$/.test(range)))
+    // Native demuxers also request bounded ranges. Their decode queue must not
+    // limit disk pre-reading; the producer still respects this exact response.
+    if (resource.forwardCache && meta && resource.owner.enabled && !resource.owner.music && !resource.owner.speculative) {
+      resource.owner.playbackRequested = true;
+      resource.owner.prefetchReady = false;
+      this.prefetchOwner = resource.owner;
       return new ForwardMediaReader(this, resource, upstream, meta, signal).body();
+    }
     return this.body(resource, upstream, meta, signal);
   }
   async transfer(owner, address, headers, request, response, externalSignal) {
     const resource = typeof address === 'object' ? address : this.resource(owner, address, headers);
+    this.stopFilePrefetch();
+    const revision = owner.cacheRevision;
+    const generation = request.method === 'GET' ? ++owner.readGeneration : owner.readGeneration;
+    owner.prefetchReady = false;
+    if (request.method === 'GET' && !owner.music && !owner.speculative) {
+      owner.playbackRequested = true; this.prefetchOwner = owner;
+    }
     const disconnected = new AbortController();
     const close = () => { if (!response.writableEnded) disconnected.abort(); };
     response.once('close', close);
     const signal = AbortSignal.any([owner.controller.signal, disconnected.signal, ...(externalSignal ? [externalSignal] : [])]);
     const range = typeof request.headers.range === 'string' ? request.headers.range : '';
     const ifRange = request.headers['if-range'];
-    let upstream, cachedLease;
+    let upstream, cachedLease, transferred = false;
     try {
       signal.throwIfAborted();
       if (resource.manifestURL && this.handleManifest) {
@@ -534,6 +653,7 @@ export class MediaCache {
         if (meta.modified) outgoing['Last-Modified'] = meta.modified;
         response.writeHead(range ? 206 : 200, outgoing);
         if (request.method === 'HEAD') { response.end(); return; }
+        this.requestFilePrefetch(owner, revision);
         const self = this;
         await pipeline(Readable.from((async function* () {
           let position = cached.start;
@@ -559,9 +679,9 @@ export class MediaCache {
             const end = !range || /^bytes=\d+-$/.test(range) ? '' : cached.end;
             upstream = await self.open(resource, 'GET', `bytes=${position}-${end}`, meta.validator, signal);
             const next = self.accept(resource, upstream.response);
-            if (upstream.response.status !== 206 || !next || next.start !== position || next.end !== cached.end)
+            if (upstream.response.status !== 206 || !next || next.start !== position || next.end > cached.end)
               throw new Error('upstream rejected cached media range');
-            const body = self.playbackBody(resource, upstream, next, signal, range);
+            const body = self.playbackBody(resource, upstream, next, signal);
             for await (const chunk of body) { position += chunk.length; yield chunk; }
           }
         })()), response, { signal });
@@ -580,9 +700,10 @@ export class MediaCache {
         const meta = owner.enabled ? this.accept(resource, remote) : null;
         response.writeHead(remote.status, outgoing);
         if (request.method === 'HEAD') { response.end(); return; }
-        const body = this.playbackBody(resource, upstream, meta, signal, range);
+        const body = this.playbackBody(resource, upstream, meta, signal);
         await pipeline(Readable.from(body), response, { signal });
       }
+      transferred = true;
     } catch {
       if (response.headersSent || signal.aborted) response.destroy();
       else response.writeHead(502, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' }).end('视频读取失败，请重试');
@@ -592,6 +713,9 @@ export class MediaCache {
       upstream?.releaseBudget?.();
       await this.unpinCachedRange(cachedLease);
       response.removeListener('close', close);
+      if (owner.readGeneration === generation && (request.method === 'GET' && (transferred || disconnected.signal.aborted)
+        || request.method === 'HEAD' && response.writableEnded && response.statusCode >= 200 && response.statusCode < 300))
+        this.requestFilePrefetch(owner, revision);
     }
   }
   async revalidate(resource, signal) {
@@ -718,16 +842,43 @@ export class MediaCache {
     const owner = this.owners.get(id);
     if (!owner) return Promise.resolve();
     owner.closed = true; owner.controller.abort(); this.owners.delete(id);
+    this.stopFilePrefetch(owner);
+    if (this.prefetchOwner === owner) this.prefetchOwner = null;
     for (const resource of owner.resources.values()) this.routes.delete(resource.token);
     this.wakeForward();
-    const cleanup = Promise.allSettled([...owner.forwardReaders].map(reader => reader.finished)).then(() =>
+    const cleanup = Promise.allSettled([...owner.forwardReaders].map(reader => reader.finished)
+      .concat([...owner.prefetchJobs].map(job => job.finished))).then(() =>
       this.serial(async () => { for (const block of [...owner.blocks.values()]) await this.remove(owner, block); }));
     this.cleanups.add(cleanup); void cleanup.finally(() => this.cleanups.delete(cleanup)).catch(() => {});
     return cleanup;
   }
   statistics(id) {
     const owner = this.owners.get(id);
-    return owner ? { bytes: owner.bytes, maxBytes: owner.maxBytes, hits: owner.hits, written: owner.written, networkBytes: owner.networkBytes, nativeFallback: owner.nativeFallback } : null;
+    return owner ? { bytes: owner.bytes, maxBytes: owner.maxBytes, hits: owner.hits, written: owner.written,
+      networkBytes: owner.networkBytes, nativeFallback: owner.nativeFallback,
+      cacheEnabled: owner.enabled && owner.maxBytes > 0, ...this.fileStatistics(owner) } : null;
+  }
+  fileStatistics(owner) {
+    const resources = [...owner.resources.values()].filter(resource => resource.forwardCache && !resource.manifestURL);
+    if (!resources.length) return { cachedMediaBytes: owner.bytes, mediaBytes: null, complete: false };
+    let cachedMediaBytes = 0, mediaBytes = 0, known = true, complete = true;
+    for (const resource of resources) {
+      const total = resource.meta?.total;
+      if (!Number.isSafeInteger(total) || total <= 0) { known = false; complete = false; continue; }
+      mediaBytes += total;
+      // Probe, seek and retry blocks can overlap. Count their byte union rather
+      // than disk usage so repeated headers cannot falsely report a full file.
+      const ranges = this.storedRanges(resource, total);
+      let cursor = 0, acquired = 0;
+      for (const range of ranges) {
+        acquired += Math.max(0, range.end - Math.max(cursor, range.start));
+        cursor = Math.max(cursor, range.end);
+      }
+      cachedMediaBytes += acquired;
+      complete &&= acquired === total;
+    }
+    known &&= Number.isSafeInteger(mediaBytes);
+    return { cachedMediaBytes, mediaBytes: known ? mediaBytes : null, complete: known && complete };
   }
   videoStatistics() {
     const owners = [...this.owners.values()].filter(owner => !owner.music && !owner.speculative);
@@ -737,11 +888,14 @@ export class MediaCache {
   }
   async clearVideos() {
     const owners = [...this.owners.values()].filter(owner => !owner.music && !owner.speculative);
+    this.prefetchOwner = null; this.stopFilePrefetch();
     for (const owner of owners) {
       owner.cacheRevision++;
+      owner.prefetchReady = false;
       for (const resource of owner.resources.values()) resource.pending.clear();
     }
     this.wakeForward();
+    await Promise.allSettled(owners.flatMap(owner => [...owner.prefetchJobs].map(job => job.finished)));
     await this.serial(async () => {
       for (const owner of owners) for (const block of [...owner.blocks.values()]) if (!block.pins) await this.remove(owner, block);
     });

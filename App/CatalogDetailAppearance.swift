@@ -3,23 +3,6 @@ import Perception
 import TVCore
 
 #if os(iOS)
-enum CatalogDetailLayout {
-    static func heroHeight(in size: CGSize) -> CGFloat {
-        if size.width >= 700 {
-            return min(size.height * 0.84, max(480, size.width * 0.57))
-        }
-        return min(580, max(410, size.width * 1.18))
-    }
-
-    static func cardWidth(in width: CGFloat) -> CGFloat {
-        width >= 700 ? min(280, max(216, (width - 40) / 4.5)) : min(216, max(180, width * 0.55))
-    }
-
-    static func actionsWidth(in width: CGFloat, wide: Bool) -> CGFloat {
-        wide ? min(480, (width - 40) * 0.48) : max(0, width - 40)
-    }
-}
-
 struct CatalogDetailScrollOffset: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
@@ -41,7 +24,7 @@ struct CatalogDetailBackdrop: View {
         ZStack(alignment: .top) {
             (paint?.color ?? Color(white: 0.22)).ignoresSafeArea()
             if let paint {
-                Image(decorative: paint.image, scale: 1).resizable().scaledToFill()
+                artwork(paint)
                     .id(ObjectIdentifier(paint.image)).transition(.opacity)
                     .opacity(showsTrailer && videoReady ? 0 : 1)
                     .frame(width: width, height: heroHeight)
@@ -79,6 +62,30 @@ struct CatalogDetailBackdrop: View {
         .appOnChange(of: showsTrailer) { _, plays in if !plays { videoReady = false } }
         .allowsHitTesting(false).accessibilityHidden(true)
     }
+
+    @ViewBuilder private func artwork(_ paint: DiscoverPaint) -> some View {
+        if paint.image.width >= paint.image.height {
+            Image(decorative: paint.image, scale: 1).resizable().scaledToFill()
+                .frame(width: width, height: heroHeight, alignment: .top)
+        } else {
+            ZStack(alignment: .topTrailing) {
+                Image(decorative: paint.image, scale: 1).resizable().scaledToFill()
+                    .frame(width: width, height: heroHeight).blur(radius: 32)
+                    .overlay(paint.color.opacity(0.35))
+                Image(decorative: paint.image, scale: 1).resizable().scaledToFit()
+                    .frame(width: min(width, heroHeight * CGFloat(paint.image.width) / CGFloat(paint.image.height)),
+                           height: heroHeight)
+                    .mask {
+                        LinearGradient(stops: [.init(color: .clear, location: 0),
+                                               .init(color: .black, location: 0.18),
+                                               .init(color: .black, location: 0.88),
+                                               .init(color: .clear, location: 1)],
+                                       startPoint: .leading, endPoint: .trailing)
+                    }
+                    .padding(.trailing, width >= 700 ? width * 0.12 : 0)
+            }.frame(width: width, height: heroHeight).clipped()
+        }
+    }
 }
 
 struct CatalogDetailHero<Identity: View, Actions: View>: View {
@@ -87,15 +94,15 @@ struct CatalogDetailHero<Identity: View, Actions: View>: View {
     @ViewBuilder let identity: () -> Identity
     @ViewBuilder let actions: () -> Actions
 
-    private var wide: Bool { size.width >= 700 && !typeSize.isAccessibilitySize }
+    private var wide: Bool { CatalogDetailLayout.usesWideHero(in: size) && !typeSize.isAccessibilitySize }
 
     var body: some View {
         WithPerceptionTracking {
             VStack(alignment: .leading, spacing: 0) {
-                Color.clear.frame(height: max(96, CatalogDetailLayout.heroHeight(in: size) * (wide ? 0.57 : 0.46)))
+                Color.clear.frame(height: CatalogDetailLayout.identityTopInset(in: size))
                 if wide {
-                    HStack(alignment: .bottom, spacing: 28) {
-                        identity().frame(maxWidth: .infinity, alignment: .leading)
+                    HStack(alignment: .bottom, spacing: 24) {
+                        identity().frame(maxWidth: .infinity, alignment: .center)
                         actions().frame(width: CatalogDetailLayout.actionsWidth(in: size.width, wide: true), alignment: .trailing)
                     }
                 } else {
@@ -114,11 +121,11 @@ struct CatalogDetailToolStrip<Content: View>: View {
     var body: some View {
         WithPerceptionTracking {
             HStack(spacing: 0) { content() }
-                .font(.system(size: 19, weight: .regular)).foregroundStyle(.white.opacity(0.85))
+                .font(.system(size: 19, weight: .regular)).foregroundStyle(.white.opacity(0.9))
                 .buttonStyle(.plain)
                 .background {
                     if opaque { Capsule().fill(Color(white: 0.26)) }
-                    else { Capsule().fill(.ultraThinMaterial).overlay { Capsule().fill(.white.opacity(0.06)) } }
+                    else { Capsule().fill(.ultraThinMaterial).overlay { Capsule().fill(.white.opacity(0.04)) } }
                 }
                 .overlay { Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 0.75).allowsHitTesting(false) }
                 .clipShape(Capsule())
@@ -127,21 +134,20 @@ struct CatalogDetailToolStrip<Content: View>: View {
 }
 
 struct CatalogDetailActionRow<Primary: View, Tools: View>: View {
-    @Environment(\.dynamicTypeSize) private var typeSize
-    let containerWidth: CGFloat
     @ViewBuilder let primary: () -> Primary
     @ViewBuilder let tools: () -> Tools
 
     var body: some View {
         WithPerceptionTracking {
-            let width = CatalogDetailLayout.actionsWidth(in: containerWidth, wide: containerWidth >= 700 && !typeSize.isAccessibilitySize)
-            if width >= 324 {
+            ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) {
                     primary().frame(minWidth: 180, maxWidth: .infinity)
                     tools().fixedSize()
                 }
-            } else {
-                VStack(alignment: .trailing, spacing: 10) { primary(); tools() }
+                VStack(alignment: .leading, spacing: 10) {
+                    primary().frame(maxWidth: .infinity)
+                    tools().frame(maxWidth: .infinity, alignment: .trailing)
+                }
             }
         }
     }
@@ -149,7 +155,7 @@ struct CatalogDetailActionRow<Primary: View, Tools: View>: View {
 
 extension View {
     func catalogDetailToolTarget() -> some View {
-        frame(width: 44, height: 52).contentShape(Rectangle())
+        frame(width: 44, height: 48).contentShape(Rectangle())
     }
 }
 #endif

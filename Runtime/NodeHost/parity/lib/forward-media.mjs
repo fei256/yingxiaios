@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 
 // One producer reads the connection already selected by the subscription. The
 // decoder consumes its bounded disk queue independently, so its small packet
@@ -8,6 +9,7 @@ export class ForwardMediaReader {
     Object.assign(this, { cache, resource, upstream, meta });
     this.owner = resource.owner;
     this.revision = this.owner.cacheRevision;
+    this.readGeneration = this.owner.readGeneration;
     this.controller = new AbortController();
     this.signal = AbortSignal.any([signal, this.controller.signal]);
     this.nodes = []; this.waiters = new Set(); this.done = false; this.error = null;
@@ -54,40 +56,61 @@ export class ForwardMediaReader {
   }
 
   async produce() {
-    const iterator = this.upstream.response.body?.[Symbol.asyncIterator]();
-    let position = this.meta.start, node;
+    let iterator = this.upstream.response.body?.[Symbol.asyncIterator]();
+    let position = this.meta.start, node, retries = 0;
+    const closeInput = async () => {
+      this.upstream.controller.abort();
+      await iterator?.return?.().catch(() => {});
+      this.upstream.releaseBudget?.();
+    };
     try {
-      if (!iterator) return;
       while (position <= this.meta.end) {
-        if (!node) node = await this.allocate(position);
-        const timer = setTimeout(() => this.upstream.controller.abort(), this.cache.idleTimeoutMs);
-        timer.unref?.();
-        let next;
-        try { next = await iterator.next(); } finally { clearTimeout(timer); }
-        this.signal.throwIfAborted();
-        if (next.done) break;
-        const bytes = Buffer.from(next.value);
-        this.owner.networkBytes += bytes.length;
-        if (position + bytes.length > this.meta.end + 1) throw new Error('invalid media length');
-        let offset = 0;
-        while (offset < bytes.length) {
-          this.signal.throwIfAborted();
+        try {
+          if (!iterator) throw new Error('truncated media response');
           if (!node) node = await this.allocate(position);
-          const length = Math.min(node.capacity - node.length, bytes.length - offset);
-          bytes.copy(node.data, node.length, offset, offset + length);
-          node.length += length; offset += length; position += length; this.wake();
-          if (node.length === node.capacity) { await this.seal(node); node = null; }
+          const timer = setTimeout(() => this.upstream.controller.abort(), this.cache.idleTimeoutMs);
+          timer.unref?.();
+          let next;
+          try { next = await iterator.next(); } finally { clearTimeout(timer); }
+          this.signal.throwIfAborted();
+          if (next.done) throw new Error('truncated media response');
+          const bytes = Buffer.from(next.value);
+          this.owner.networkBytes += bytes.length;
+          if (position + bytes.length > this.meta.end + 1) throw new Error('invalid media length');
+          let offset = 0;
+          while (offset < bytes.length) {
+            this.signal.throwIfAborted();
+            if (!node) node = await this.allocate(position);
+            const length = Math.min(node.capacity - node.length, bytes.length - offset);
+            bytes.copy(node.data, node.length, offset, offset + length);
+            node.length += length; offset += length; position += length; this.wake();
+            if (node.length === node.capacity) { await this.seal(node); node = null; }
+          }
+        } catch (error) {
+          this.signal.throwIfAborted();
+          if (!this.meta.validator || position <= this.meta.start || position > this.meta.end
+            || retries++ >= 2 || error.message === 'invalid media length') throw error;
+          // A healthy forward queue must survive an idle/reset connection before
+          // the decoder reaches its tail. Join only an If-Range validated entity.
+          await closeInput();
+          await delay(250 * retries, undefined, { signal: this.signal });
+          this.upstream = await this.cache.open(this.resource, 'GET',
+            `bytes=${position}-${this.meta.end}`, this.meta.validator, this.signal);
+          iterator = this.upstream.response.body?.[Symbol.asyncIterator]();
+          const resumed = this.cache.accept(this.resource, this.upstream.response);
+          if (this.upstream.response.status !== 206 || !resumed || resumed.start !== position
+            || resumed.end !== this.meta.end || resumed.validator !== this.meta.validator)
+            throw new Error('upstream rejected resumed media range');
         }
       }
-      if (position !== this.meta.end + 1) throw new Error('truncated media response');
     } finally {
       // Header/tail probes are frequently interrupted mid-block. Retain their
       // already received bytes for a subsequent seek, just like ordinary reads.
       if (node?.length) await this.seal(node);
       else if (node) { this.releaseNode(node); this.nodes = this.nodes.filter(value => value !== node); }
-      this.upstream.controller.abort();
-      await iterator?.return?.().catch(() => {});
-      this.upstream.releaseBudget?.();
+      await closeInput();
+      if (position > this.meta.end && this.readGeneration === this.owner.readGeneration)
+        this.cache.requestFilePrefetch(this.owner, this.revision);
     }
   }
 

@@ -34,6 +34,8 @@ on:
       - 'Runtime/**'
       - 'Scripts/**'
       - 'Tests/BuildPipeline/**'
+      - 'Tests/DetailAppearance/**'
+      - 'Tests/PlaybackCache/**'
       - 'Sources/**'
       - 'Vendor/**'
       - 'Package.swift'
@@ -205,6 +207,11 @@ jobs:
           python3 Scripts/preflight-ios-source.py --report build/ci/source-preflight.json
           python3 -m unittest discover -s Tests/BuildPipeline -v 2>&1 | tee build/ci/pipeline-tests.log
 
+      - name: Check playback cache and range recovery
+        run: |
+          node --version
+          node --test Tests/PlaybackCache/forward-cache.test.mjs
+
       - name: Check build environment
         run: |
           mkdir -p build/ci
@@ -260,6 +267,12 @@ jobs:
           build/ci/search-suggestion-checks
           xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
             -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" App/GlobalSearchInput.swift
+
+      - name: Check detail layout across iPhone and iPad
+        run: |
+          xcrun swiftc -swift-version 6 -parse-as-library App/CatalogDetailMetrics.swift \
+            Tests/DetailAppearance/checks.swift -o build/ci/detail-layout-checks
+          build/ci/detail-layout-checks
 
       - name: Check measured watching activity
         run: |

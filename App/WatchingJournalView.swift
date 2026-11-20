@@ -13,7 +13,6 @@ struct WatchingJournalView: View {
     @State private var selectedDate = Date()
     @State private var section: JournalLibrarySection = .history
     @State private var period: JournalStatisticsPeriod = .week
-    @State private var query = ""
     @State private var editing = false
     @State private var confirmsClear = false
     @State private var calendarShown = false
@@ -31,15 +30,11 @@ struct WatchingJournalView: View {
         var seen = Set<String>()
         return (works + later).filter { seen.insert($0.id).inserted }
     }
-    private var filtered: [JournalTrackedWork] {
-        let selected: [JournalTrackedWork]
+    private var libraryWorks: [JournalTrackedWork] {
         switch section {
-        case .history, .watching: selected = works
-        case .favorites: selected = favorites
-        case .later: selected = later
-        }
-        return selected.filter {
-            query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) || $0.sourceName.localizedCaseInsensitiveContains(query)
+        case .history, .watching: works
+        case .favorites: favorites
+        case .later: later
         }
     }
     private var canInteract: Bool { isEnabled && pageActive && store.section == .history }
@@ -98,10 +93,9 @@ struct WatchingJournalView: View {
                 }
             }
             .scrollIndicators(.hidden)
-            .catalogSearchable(text: $query, prompt: "搜索你的观影手账")
             .libraryBackdrop()
             .navigationTitle("").navigationBarTitleDisplayMode(.inline)
-            .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbar(.hidden, for: .navigationBar)
             .disabled(!canInteract)
             .task(id: requestKey) {
                 guard pageActive else { return }
@@ -205,16 +199,16 @@ struct WatchingJournalView: View {
                 HStack {
                     Text(section == .history ? "最近观看" : section.title).font(.headline)
                     Spacer()
-                    Text("\(filtered.count) 部").font(.caption).foregroundStyle(.white.opacity(0.5))
+                    Text("\(libraryWorks.count) 部").font(.caption).foregroundStyle(.white.opacity(0.5))
                 }
-                if filtered.isEmpty {
-                    Text(query.isEmpty ? (section == .later ? "收藏尚未开始观看的作品，会出现在待看中。" : "这里还没有记录，开始观看后会自动保存进度。") : "没有找到相符的记录。")
+                if libraryWorks.isEmpty {
+                    Text(section == .later ? "收藏尚未开始观看的作品，会出现在待看中。" : "这里还没有记录，开始观看后会自动保存进度。")
                         .font(.subheadline).foregroundStyle(.white.opacity(0.6)).padding(.vertical, 14)
                 } else {
-                    ForEach(filtered) { work in
+                    ForEach(libraryWorks) { work in
                         WithPerceptionTracking {
                             showRow(work)
-                            if work.id != filtered.last?.id { Divider().overlay(.white.opacity(0.04)) }
+                            if work.id != libraryWorks.last?.id { Divider().overlay(.white.opacity(0.04)) }
                         }
                     }
                 }

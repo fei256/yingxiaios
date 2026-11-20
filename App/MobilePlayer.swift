@@ -758,14 +758,24 @@ struct MobilePlayerView: View {
                             .foregroundStyle(.white.opacity(0.8)).lineLimit(1)
                             .accessibilityIdentifier("player.episodeTitle")
                     }
+                    if playerSize.width <= 600, let status = session.cacheStatus {
+                        Text(status).font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                            .accessibilityIdentifier("player.cacheStatus")
+                    }
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 if playerSize.width > 600 {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        WithPerceptionTracking {
-                            HStack(spacing: 8) {
-                                Text(ByteCountFormatter.string(fromByteCount: Int64(max(0, session.transfer.bytesPerSecond ?? 0)), countStyle: .file) + "/s")
-                                Text(context.date, style: .time)
-                            }.font(.caption2.monospacedDigit()).lineLimit(1)
+                    VStack(alignment: .trailing, spacing: 3) {
+                        if let status = session.cacheStatus {
+                            Text(status).font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+                                .accessibilityIdentifier("player.cacheStatus")
+                        }
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            WithPerceptionTracking {
+                                HStack(spacing: 8) {
+                                    Text(ByteCountFormatter.string(fromByteCount: Int64(max(0, session.transfer.bytesPerSecond ?? 0)), countStyle: .file) + "/s")
+                                    Text(context.date, style: .time)
+                                }.font(.caption2.monospacedDigit()).lineLimit(1)
+                            }
                         }
                     }
                 }

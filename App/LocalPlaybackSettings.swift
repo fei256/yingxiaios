@@ -11,7 +11,7 @@ struct LocalCacheSettingsView: View {
     @State private var clearing = false
     var body: some View {
         SettingsPage(title: "视频缓存", symbol: "internaldrive") {
-            SettingsGroup(title: "视频缓存", footer: "按播放请求缓存媒体数据，切换媒体和退出后释放。用户下载单独保留。") {
+            SettingsGroup(title: "视频缓存", footer: "播放时在容量上限内提前缓存媒体数据；播放器顶部显示实际缓存量。切换媒体和退出后释放，用户下载单独保留。") {
                 Toggle("开启视频缓存", isOn: $enabled)
                 Picker("缓存容量", selection: $size) { ForEach(1...4, id: \.self) { Text("\($0) GB").tag($0) } }.disabled(!enabled)
                 Toggle("预加载下一集", isOn: $prefetch)

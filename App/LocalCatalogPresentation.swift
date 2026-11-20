@@ -185,9 +185,15 @@ enum LocalCatalogDetailArtwork {
 
     static func images(poster: URL?, backdrop: URL? = nil, details: TMDBMatch.Details?) -> [URL] {
         var seen = Set<URL>()
-        let landscapes = [details?.backdrop, backdrop].compactMap { $0 } + (details?.stills ?? [])
+        let landscapes = Self.landscapes(backdrop: backdrop, details: details)
         let portraits = [poster, details?.heroPoster, details?.poster].compactMap { $0 } + (details?.posters ?? [])
         return Array((landscapes + portraits).filter { seen.insert($0).inserted }.prefix(16))
+    }
+
+    static func landscapes(backdrop: URL? = nil, details: TMDBMatch.Details?) -> [URL] {
+        var seen = Set<URL>()
+        return Array(([details?.backdrop, backdrop].compactMap { $0 } + (details?.stills ?? []))
+            .filter { seen.insert($0).inserted }.prefix(16))
     }
 }
 
@@ -240,6 +246,7 @@ struct LocalCatalogArtworkCarousel: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let video: Video
     let images: [URL]
+    var rotatingImages: [URL]? = nil
     var presented = true
     var scrollY: CGFloat = 0
     @Binding var selection: Int
@@ -250,7 +257,8 @@ struct LocalCatalogArtworkCarousel: View {
     private var current: Int { images.isEmpty ? 0 : max(0, selection) % images.count }
     private var address: URL? { images.isEmpty ? nil : images[current] }
     private var active: Bool { visible && presented && pageActive && scenePhase == .active && store.playing == nil && store.music.track == nil }
-    private var rotation: String { "\(active)|\(paused)|\(reduceMotion)|\(current)|\(images)" }
+    private var rotations: [URL] { rotatingImages ?? images }
+    private var rotation: String { "\(active)|\(paused)|\(reduceMotion)|\(current)|\(rotations)" }
 
     var body: some View {
         WithPerceptionTracking {
@@ -275,10 +283,11 @@ struct LocalCatalogArtworkCarousel: View {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) { paint = loaded }
             }
             .task(id: rotation) {
-                guard active, !paused, !reduceMotion, images.count > 1 else { return }
+                guard active, !paused, !reduceMotion, rotations.count > 1 else { return }
                 try? await Task.sleep(for: .seconds(8))
                 guard !Task.isCancelled else { return }
-                selection = (current + 1) % images.count
+                let currentRotation = address.flatMap { rotations.firstIndex(of: $0) } ?? -1
+                if let next = images.firstIndex(of: rotations[(currentRotation + 1) % rotations.count]) { selection = next }
             }
         }
     }
@@ -326,60 +335,58 @@ private struct LocalCatalogBackgroundOption: View {
     }
 }
 
-/// A compact identity sits along the artwork's lower edge on both detail entry points.
 struct LocalCatalogDetailTitle: View {
     let title: String
     let logo: URL?
     let width: CGFloat
+    var centered = false
     @State private var logoAspect: CGFloat?
     var body: some View {
         Group {
             if let logo {
                 TMDBArtwork(url: logo, maxPixels: 1000, fill: false, aspect: $logoAspect)
-                    .frame(width: min(width * 0.70, 340), height: 84)
+                    .frame(width: min(width * 0.70, centered ? 260 : 300), height: centered ? 92 : 84)
                     .overlay { if logoAspect == nil { titleText } }
                     .id(logo).accessibilityLabel(title)
             } else { titleText }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(maxWidth: .infinity, minHeight: 76, alignment: centered ? .center : .leading)
             .shadow(color: .black.opacity(0.45), radius: 4, y: 2)
     }
     private var titleText: some View {
         Text(title).font(.system(size: width >= 700 ? 34 : 30, weight: .semibold))
-            .multilineTextAlignment(.leading).lineLimit(3).minimumScaleFactor(0.7)
+            .multilineTextAlignment(centered ? .center : .leading).lineLimit(2).minimumScaleFactor(0.7)
             .accessibilityAddTraits(.isHeader)
     }
 }
 
-/// Mirrors MacCat's FilmMetadataPills: source year/area win, values deduplicate, language stays visible.
 struct LocalCatalogMetadataPills: View {
     let details: TMDBMatch.Details?
     var item: TMDBCatalog.Item? = nil
     var year: String? = nil
     var area: String? = nil
     var remarks: String? = nil
+    var source: String? = nil
+    var category: String? = nil
+    var centered = false
     var calendar: (() -> Void)? = nil
     private var releaseYear: String? { clean(year) ?? details?.year.map(String.init) ?? item?.year.map(String.init) }
     private var tags: [String] {
         let seasons = details?.seasons.filter { $0.number > 0 } ?? []
         let episodeCount = details?.episodeCount.flatMap { $0 > 0 ? $0 : nil } ?? seasons.reduce(0) { $0 + $1.episodeCount }
-        let count = seasons.isEmpty ? nil : "\(seasons.count)季" + (episodeCount > 0 ? " \(episodeCount)集" : "")
+        let count = seasons.count > 1 ? "\(seasons.count)季" + (episodeCount > 0 ? " \(episodeCount)集" : "") : nil
         let locale = Locale(identifier: TMDBMatch.language)
         let countries = details?.countries.map { locale.localizedString(forRegionCode: $0) ?? $0 }.joined(separator: " / ")
         let runtime = details?.runtime.flatMap { $0 > 0 && $0.isFinite ? "\(NSNumber(value: $0).stringValue) min" : nil }
-        let values: [String?] = [releaseYear, runtime, count, clean(area) ?? clean(countries), clean(details?.originalLanguage)?.uppercased()]
-            + (details?.genres ?? []).map(Optional.some) + [remarks]
+        let mediaType = details?.mediaType ?? item?.mediaType
+        let type = mediaType.map { $0 == .tv ? "剧集" : "电影" }
+        let matchedGenres = details?.genres ?? []
+        let genres = matchedGenres.isEmpty ? [clean(category)] : matchedGenres.prefix(3).map(Optional.some)
+        let values: [String?] = [source, type, releaseYear] + genres + [runtime, count, clean(area) ?? clean(countries), remarks]
         var seen = Set<String>()
         return values.compactMap(clean).filter { seen.insert($0).inserted }
     }
     var body: some View {
-        LocalCatalogTagFlow(spacing: 6) {
-            if let rating = details?.rating ?? item?.rating, rating > 0, rating.isFinite {
-                Label(rating.formatted(.number.precision(.fractionLength(1))), systemImage: "star.fill")
-                    .foregroundStyle(Brand.amber).modifier(LocalCatalogFilmPill(highlight: true))
-            }
-            if let type = details?.mediaType ?? item?.mediaType, let id = details?.id ?? item?.id {
-                LocalDoubanRatingPill(mediaType: type, id: id)
-            }
+        LocalCatalogTagFlow(spacing: 6, alignment: centered ? .center : .leading) {
             ForEach(tags, id: \.self) { tag in
                 Text(tag).fontWeight(tag == releaseYear ? .semibold : .regular).modifier(LocalCatalogFilmPill())
             }
@@ -393,7 +400,7 @@ struct LocalCatalogMetadataPills: View {
                 .buttonStyle(.plain).accessibilityIdentifier("detail.calendar")
                 .accessibilityLabel("播出日历：\(calendarLabel)")
             }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
     }
     private var calendarLabel: String {
         guard let next = details?.nextEpisode, LocalCatalogDetailRules.date(next.date) != nil,
@@ -406,8 +413,32 @@ struct LocalCatalogMetadataPills: View {
     }
 }
 
-/// Optional metadata is loaded independently; failure never blocks details or playback.
-private struct LocalDoubanRatingPill: View {
+struct LocalCatalogRatingsRow: View {
+    let details: TMDBMatch.Details?
+    var item: TMDBCatalog.Item? = nil
+    var centered = false
+    var body: some View {
+        HStack(spacing: 12) {
+            if let rating = details?.rating ?? item?.rating, rating > 0, rating.isFinite {
+                HStack(spacing: 5) {
+                    Text("TMDB").font(.system(size: 9, weight: .heavy)).foregroundStyle(.black)
+                        .padding(.horizontal, 4).padding(.vertical, 3)
+                        .background(Color(red: 0.38, green: 0.84, blue: 0.66), in: RoundedRectangle(cornerRadius: 3))
+                    Text(rating.formatted(.number.precision(.fractionLength(1))))
+                }.accessibilityElement(children: .ignore)
+                    .accessibilityLabel("TMDB 评分 \(rating.formatted(.number.precision(.fractionLength(1))))")
+            }
+            if let type = details?.mediaType ?? item?.mediaType, let id = details?.id ?? item?.id {
+                LocalDoubanRatingBadge(mediaType: type, id: id)
+            }
+        }.font(.system(size: 13)).foregroundStyle(.white.opacity(0.95))
+            .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
+            .accessibilityIdentifier("detail.ratings")
+    }
+}
+
+/// Optional scores load independently and never block details or playback.
+private struct LocalDoubanRatingBadge: View {
     let mediaType: TMDBMatch.MediaType
     let id: Int
     @State private var score: DoubanRating.Score?
@@ -416,8 +447,10 @@ private struct LocalDoubanRatingPill: View {
     var body: some View {
         Group {
             if scoreKey == key, let score {
-                Text(L10n.text("Douban") + " " + score.value.formatted(.number.precision(.fractionLength(1))))
-                    .foregroundStyle(.green).modifier(LocalCatalogFilmPill(highlight: true))
+                HStack(spacing: 5) {
+                    Text("豆").font(.system(size: 18, weight: .bold)).foregroundStyle(.green)
+                    Text(score.value.formatted(.number.precision(.fractionLength(1))))
+                }
                     .accessibilityLabel("豆瓣评分 \(score.value.formatted(.number.precision(.fractionLength(1))))，\(score.count) 人评价")
             } else { Color.clear.frame(width: 0, height: 0).accessibilityHidden(true) }
         }
@@ -431,12 +464,10 @@ private struct LocalDoubanRatingPill: View {
 }
 
 private struct LocalCatalogFilmPill: ViewModifier {
-    var highlight = false
     func body(content: Content) -> some View {
         content.font(.system(size: 12)).fixedSize(horizontal: false, vertical: true)
-            .padding(.horizontal, 10).padding(.vertical, 4)
-            .background((highlight ? Brand.amber : Color.primary).opacity(highlight ? 0.12 : 0.08), in: Capsule())
-            .overlay { Capsule().strokeBorder((highlight ? Brand.amber : Color.primary).opacity(highlight ? 0.45 : 0.22), lineWidth: 1) }
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
     }
 }
 

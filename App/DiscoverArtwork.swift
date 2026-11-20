@@ -63,24 +63,29 @@ actor DiscoverPainter {
             return DiscoverPaint(image: decoded, red: rgb.0 * 0.32, green: rgb.1 * 0.32, blue: rgb.2 * 0.32, style: style)
         }
         if style == .cinematic {
-            // Preserve the upper artwork, then soften it into the same color used below the hero.
-            let surface = (rgb.0 * 0.24 + 0.16, rgb.1 * 0.24 + 0.16, rgb.2 * 0.24 + 0.16)
+            let surface = (rgb.0 * 0.42 + 0.07, rgb.1 * 0.42 + 0.07, rgb.2 * 0.42 + 0.07)
             let image = CIImage(cgImage: decoded)
             let rect = image.extent
-            let blurred = image.clampedToExtent()
-                .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: rect.width * 0.025]).cropped(to: rect)
-            guard let mask = CIFilter(name: "CILinearGradient", parameters: [
-                "inputPoint0": CIVector(x: 0, y: rect.height * 0.62),
-                "inputPoint1": CIVector(x: 0, y: rect.height * 0.20),
-                "inputColor0": CIColor.black, "inputColor1": CIColor.white,
-            ])?.outputImage?.cropped(to: rect),
-            let fade = CIFilter(name: "CILinearGradient", parameters: [
-                "inputPoint0": CIVector(x: 0, y: rect.height * 0.82),
-                "inputPoint1": CIVector(x: 0, y: rect.height * 0.30),
+            var progressive = image
+            // Core Image's vertical coordinates start at the bottom.
+            let layers: [(CGFloat, CGFloat, CGFloat)] = [(0.008, 0.72, 0.42), (0.022, 0.54, 0.18), (0.045, 0.32, 0.02)]
+            for (radius, start, end) in layers {
+                let blurred = image.clampedToExtent()
+                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: rect.width * radius]).cropped(to: rect)
+                guard let mask = CIFilter(name: "CILinearGradient", parameters: [
+                    "inputPoint0": CIVector(x: 0, y: rect.height * start),
+                    "inputPoint1": CIVector(x: 0, y: rect.height * end),
+                    "inputColor0": CIColor.black, "inputColor1": CIColor.white,
+                ])?.outputImage?.cropped(to: rect) else { return nil }
+                progressive = blurred.applyingFilter("CIBlendWithMask",
+                    parameters: [kCIInputBackgroundImageKey: progressive, kCIInputMaskImageKey: mask])
+            }
+            guard let fade = CIFilter(name: "CILinearGradient", parameters: [
+                "inputPoint0": CIVector(x: 0, y: rect.height * 0.72),
+                "inputPoint1": CIVector(x: 0, y: rect.height * 0.08),
                 "inputColor0": CIColor(red: surface.0, green: surface.1, blue: surface.2, alpha: 0),
                 "inputColor1": CIColor(red: surface.0, green: surface.1, blue: surface.2),
             ])?.outputImage?.cropped(to: rect) else { return nil }
-            let progressive = blurred.applyingFilter("CIBlendWithMask", parameters: [kCIInputBackgroundImageKey: image, kCIInputMaskImageKey: mask])
             guard let result = context.createCGImage(fade.composited(over: progressive), from: rect) else { return nil }
             return DiscoverPaint(image: result, red: surface.0, green: surface.1, blue: surface.2, style: style)
         }

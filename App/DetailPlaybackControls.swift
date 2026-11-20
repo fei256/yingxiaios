@@ -3,11 +3,12 @@ import Foundation
 import TVCore
 
 #if os(iOS)
-/// An unwatched episode has one action. Resumable history adds an explicit zero-time replay.
+/// History selects Play or Resume; replay can sit beside it or in the caller's menu.
 struct DetailPlaybackControls: View {
     let selection: DetailPlaybackSelection
     let busy: Bool
     let loadingMode: PlaybackResumeMode?
+    var showsBeginningButton = true
     let start: (PlaybackResumeMode) -> Void
 
     private var resumePosition: Double? { selection.position(for: .resume) }
@@ -21,12 +22,12 @@ struct DetailPlaybackControls: View {
     }
     var body: some View {
         HStack(spacing: 8) {
-            if canResume && !finishedReading {
+            if showsBeginningButton && canResume && !finishedReading {
                 Button { start(.beginning) } label: {
                     Group {
                         if busy && loadingMode == .beginning { ProgressView().tint(.white) }
                         else { Image(systemName: "arrow.counterclockwise").font(.system(size: 17, weight: .medium)) }
-                    }.frame(width: 44, height: 58).contentShape(Rectangle())
+                    }.frame(width: 44, height: 48).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundStyle(.white)
                 .background(.white.opacity(0.10), in: Capsule())
@@ -52,9 +53,15 @@ struct DetailPlaybackControls: View {
         .accessibilityElement(children: .contain).accessibilityLabel("播放模式")
     }
     private var context: String {
-        if finishedReading { return [selection.episode?.name, beginningLabel].compactMap { $0 }.joined(separator: " · ") }
+        if finishedReading { return [episodeContext, beginningLabel].compactMap { $0 }.joined(separator: " · ") }
         let position = reading.map { "第 \($0.page + 1) / \($0.totalPages) 页" } ?? resumePosition.map(time)
-        return [selection.episode?.name, position].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        return [episodeContext, position].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+    private var episodeContext: String? {
+        guard let episode = selection.episode else { return nil }
+        guard reading == nil, let number = LocalDetailEpisodeNumbers.numbers(episode.name).episode else { return episode.name }
+        let season = LocalDetailEpisodeNumbers.numbers(episode.name).season
+        return (season.flatMap { $0 > 1 ? "第 \($0) 季 · " : nil } ?? "") + "第 \(number) 集"
     }
     private func action(_ mode: PlaybackResumeMode, title: String, subtitle: String, symbol: String) -> some View {
         Button { start(mode) } label: {
@@ -65,7 +72,7 @@ struct DetailPlaybackControls: View {
                     Text(title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
                     if !subtitle.isEmpty { Text(subtitle).font(.system(size: 11)).foregroundStyle(.black.opacity(0.58)).lineLimit(1) }
                 }
-            }.foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 58, alignment: .center).padding(.horizontal, 16)
+            }.foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 48, alignment: .center).padding(.horizontal, 16)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(busy || selection.episode == nil)

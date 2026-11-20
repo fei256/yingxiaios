@@ -134,6 +134,18 @@ import TVCore
         var host: String?
         var failure: String?
         var httpStatus: Int?
+        var cachedBytes: Int64?
+        var totalBytes: Int64?
+        var cacheComplete = false
+    }
+    var cacheStatus: String? {
+        guard let bytes = transfer.cachedBytes else { return nil }
+        let cached = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        if transfer.cacheComplete { return "缓存完成 · \(cached)" }
+        if let total = transfer.totalBytes {
+            return "已缓存 \(cached) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))"
+        }
+        return "已缓存 \(cached)"
     }
     var danmaku: [Danmaku] {
         guard catalogDanmaku.enabled else { return [] }
@@ -402,15 +414,20 @@ import TVCore
                 let input = self.engine.inputRevision
                 let owner = self.currentPrepared?.owner
                 var bytes = self.engine.bytesRead, originStatistics = false
+                var cacheStatistics: MobileMediaServices.VideoCacheStatistics?
                 if let owner, let statistics = try? await MobileMediaServices.videoCacheStatistics(owner), !statistics.nativeFallback {
                     bytes = statistics.networkBytes
                     originStatistics = true
+                    cacheStatistics = statistics
                 }
                 guard !Task.isCancelled, self.generation == active, self.engine.inputRevision == input,
                       self.currentPrepared?.owner == owner else { return }
                 if previousInput != input || previousOrigin != originStatistics {
                     rateIdentity = UUID(); previousInput = input; previousOrigin = originStatistics
                 }
+                self.transfer.cachedBytes = cacheStatistics.flatMap { $0.cacheEnabled ? $0.cachedMediaBytes : nil }
+                self.transfer.totalBytes = cacheStatistics?.mediaBytes
+                self.transfer.cacheComplete = cacheStatistics?.complete ?? false
                 self.transfer.bytesPerSecond = rate.sample(bytes: bytes, at: ProcessInfo.processInfo.systemUptime,
                     identity: rateIdentity)
                 try? await Task.sleep(for: .seconds(1))

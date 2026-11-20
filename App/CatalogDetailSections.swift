@@ -9,6 +9,8 @@ struct CatalogDetailSections: View {
     @Environment(\.isLocalPageActive) private var pageActive
     @Environment(\.scenePhase) private var scenePhase
     let details: TMDBMatch.Details
+    var overview = ""
+    var openOverview: (() -> Void)? = nil
     var presentationChanged: (Bool) -> Void = { _ in }
     @State private var still: CatalogDetailStill?
     @State private var calendarShown = false
@@ -35,8 +37,14 @@ struct CatalogDetailSections: View {
 
     var body: some View {
         WithPerceptionTracking {
-            VStack(alignment: .leading, spacing: 30) {
+            VStack(alignment: .leading, spacing: 24) {
                 if !credits.isEmpty { people }
+                if !overview.isEmpty, let openOverview {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("剧情简介").font(.system(size: 19, weight: .semibold))
+                        LocalCatalogSynopsisButton(overview: overview, open: openOverview)
+                    }.padding(.horizontal, 20)
+                }
                 if let studios = details.studios, !studios.isEmpty { studioRail(studios) }
                 if !details.genres.isEmpty || details.genreItems?.isEmpty == false { genres }
                 if details.mediaType == .tv, !seasons.isEmpty || details.nextEpisode != nil { calendarAction }
@@ -72,9 +80,12 @@ struct CatalogDetailSections: View {
 
     private var people: some View {
         VStack(alignment: .leading, spacing: 14) {
-            heading("主演与导演")
-            DiscoverRail(arrowCenter: 41.5) {
-                LazyHStack(alignment: .top, spacing: 13) {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                Text("团队").font(.system(size: 19, weight: .semibold))
+                Text("\(credits.count) 位演职人员").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+            }.padding(.horizontal, 20)
+            DiscoverRail(arrowCenter: 36) {
+                LazyHStack(alignment: .top, spacing: 12) {
                     ForEach(Array(credits.enumerated()), id: \.offset) { _, person in
                         if let id = person.id, id > 0 {
                             RouteLink { DiscoverPersonView(id: id, name: person.name, profile: person.profile) } label: { personCard(person) }
@@ -88,12 +99,12 @@ struct CatalogDetailSections: View {
     }
     private func personCard(_ person: TMDBMatch.Person) -> some View {
         VStack(spacing: 7) {
-            PosterImage(url: person.profile, symbol: "person.fill").frame(width: 83, height: 83).clipShape(Circle())
+            PosterImage(url: person.profile, symbol: "person.fill").frame(width: 72, height: 72).clipShape(Circle())
             VStack(spacing: 2) {
-                Text(person.name).font(.system(size: 13)).lineLimit(1)
-                if let role = person.role { Text(role).font(.system(size: 11)).lineLimit(1).opacity(0.55) }
+                Text(person.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
+                if let role = person.role { Text(role).font(.system(size: 11)).lineLimit(2).opacity(0.55) }
             }
-        }.frame(width: 99).contentShape(Rectangle())
+        }.frame(width: 90, alignment: .top).contentShape(Rectangle())
     }
     private func studioRail(_ studios: [TMDBMatch.Studio]) -> some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -257,14 +268,22 @@ private struct CatalogDetailStill: Identifiable { let url: URL; var id: URL { ur
 struct CatalogSourceDetailSections: View {
     let video: Video
     let sourceName: String
+    var overview = ""
+    var openOverview: (() -> Void)? = nil
     private var metadata: LocalCatalogSourceMetadata { LocalCatalogSourceMetadata(video) }
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             if metadata.actor != nil || metadata.director != nil {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("主演与导演").font(.system(size: 19, weight: .semibold))
+                    Text("团队").font(.system(size: 19, weight: .semibold))
                     if let actor = metadata.actor { sourceFact("主演", actor) }
                     if let director = metadata.director { sourceFact("导演", director) }
+                }
+            }
+            if !overview.isEmpty, let openOverview {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("剧情简介").font(.system(size: 19, weight: .semibold))
+                    LocalCatalogSynopsisButton(overview: overview, open: openOverview)
                 }
             }
             VStack(alignment: .leading, spacing: 14) {

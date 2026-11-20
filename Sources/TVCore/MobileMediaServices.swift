@@ -14,6 +14,10 @@ public enum MobileMediaServices {
         public let hits: Int64
         public let bytes: Int64
         public let nativeFallback: Bool
+        public let cachedMediaBytes: Int64
+        public let mediaBytes: Int64?
+        public let complete: Bool
+        public let cacheEnabled: Bool
     }
     public struct PreparedPlaybackMedia: Sendable {
         public var url: URL
@@ -118,7 +122,14 @@ public enum MobileMediaServices {
         }
         let fallback: Bool
         if case .bool(let value) = values["nativeFallback"] { fallback = value } else { fallback = false }
-        return VideoCacheStatistics(networkBytes: count("networkBytes"), hits: count("hits"), bytes: count("bytes"), nativeFallback: fallback)
+        let complete: Bool
+        if case .bool(let value) = values["complete"] { complete = value } else { complete = false }
+        let enabled: Bool
+        if case .bool(let value) = values["cacheEnabled"] { enabled = value } else { enabled = true }
+        let total = count("mediaBytes")
+        return VideoCacheStatistics(networkBytes: count("networkBytes"), hits: count("hits"), bytes: count("bytes"),
+            nativeFallback: fallback, cachedMediaBytes: count("cachedMediaBytes"), mediaBytes: total > 0 ? total : nil,
+            complete: complete, cacheEnabled: enabled)
     }
     /// Cancelling this call stops speculative I/O while completed cache blocks remain reusable.
     public static func prefetchPlayback(_ ownerID: String, maxBytes: Int = 15 * 1024 * 1024) async throws {

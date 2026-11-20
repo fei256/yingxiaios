@@ -28,6 +28,18 @@ struct LocalCatalogDetailEpisode: Identifiable {
                         key: .init(index: index, season: season, number: number, extra: extra))
         }
     }
+
+    static func histories(_ episodes: [Episode], entries: [PlaybackHistoryEntry]) -> [Episode.ID: PlaybackHistoryEntry] {
+        let byName = Dictionary(grouping: episodes, by: \.name)
+        var result: [Episode.ID: PlaybackHistoryEntry] = [:]
+        for entry in entries {
+            let matches = (byName[entry.context.episodeName] ?? []).filter { $0.flag == entry.context.episodeFlag }
+            let episode = matches.first { $0.id == entry.context.episodeID } ?? (matches.count == 1 ? matches.first : nil)
+            guard let episode else { continue }
+            if result[episode.id].map({ $0.updatedAt < entry.updatedAt }) ?? true { result[episode.id] = entry }
+        }
+        return result
+    }
 }
 
 struct LocalCatalogDetailEpisodeCard: View {
@@ -38,47 +50,63 @@ struct LocalCatalogDetailEpisodeCard: View {
     var width: CGFloat = 216
     var selected = false
     var progress: Double? = nil
+    var watched = false
+    @ScaledMetric(relativeTo: .caption) private var captionSize: CGFloat = 12
     private var size: String? { value.fileDetail?.components(separatedBy: " · ").last.flatMap { ["M", "G", "T"].contains(where: $0.hasSuffix) ? $0 : nil } }
     private var overview: String { value.info?.overview.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
-    private var artwork: URL? { value.info?.still ?? backdrop ?? video.poster }
+    private var description: String {
+        value.episode.name != value.title || overview.isEmpty ? value.episode.name : overview
+    }
+    private var metadata: String {
+        var parts: [String] = []
+        if let date = value.info?.airDate, LocalCatalogDetailRules.date(date) != nil { parts.append(date) }
+        if let runtime = value.info?.runtime, runtime.isFinite, runtime > 0 {
+            parts.append(runtime.formatted(.number.precision(.fractionLength(0))) + " 分钟")
+        }
+        if watched { parts.append("已观看") }
+        return parts.joined(separator: " · ")
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if artwork != nil {
-                Color.clear.aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .overlay { LocalCatalogEpisodeArtwork(primary: value.info?.still ?? backdrop, fallback: video.poster, headers: video.posterHeaders) }
-                    .overlay {
-                        if loading { ProgressView().tint(.white).padding(12).background(.black.opacity(0.5), in: Circle()) }
-                    }
-                    .overlay(alignment: .top) { badges.padding(8) }
-                    .overlay(alignment: .bottomTrailing) {
-                        if let runtime = value.info?.runtime, runtime.isFinite, runtime > 0 {
-                            badge("\(Int(runtime)) 分钟").padding(8)
+            LocalCatalogEpisodeArtwork(primary: value.info?.still ?? backdrop, fallback: video.poster, headers: video.posterHeaders)
+                .frame(width: width, height: width * 9 / 16).clipped()
+                .overlay {
+                    if loading { ProgressView().tint(.white).padding(12).background(.black.opacity(0.5), in: Circle()) }
+                }
+                .overlay(alignment: .top) { badges.padding(7) }
+                .overlay(alignment: .bottomLeading) {
+                    Text(value.title == value.episode.name ? value.numberLabel ?? value.title : value.title)
+                        .font(.system(size: captionSize, weight: .medium)).lineLimit(1)
+                        .padding(.horizontal, 8).padding(.top, 18).padding(.bottom, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background {
+                            LinearGradient(colors: [.clear, .black.opacity(0.72)], startPoint: .top, endPoint: .bottom)
                         }
+                }
+                .overlay(alignment: .bottom) {
+                    if let progress, progress.isFinite, progress > 0 {
+                        ProgressView(value: min(1, progress)).tint(Brand.amber).padding(.horizontal, 8).padding(.bottom, 2)
                     }
-                    .overlay(alignment: .bottom) {
-                        if let progress, progress.isFinite, progress > 0 {
-                            ProgressView(value: min(1, progress)).tint(Brand.amber).padding(.horizontal, 8).padding(.bottom, 5)
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-            } else { badges.padding([.top, .horizontal], 9) }
+                }
             VStack(alignment: .leading, spacing: 5) {
-                Text(value.title).font(.system(size: 13, weight: .medium)).lineLimit(2)
+                Text(metadata.isEmpty ? " " : metadata).font(.system(size: captionSize - 1))
+                    .foregroundStyle(.white.opacity(0.58)).lineLimit(1, reservesSpace: true)
+                Text(description).font(.system(size: captionSize)).foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(4, reservesSpace: true).fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if value.title != value.episode.name {
-                    Text(value.episode.name).font(.system(size: 11)).foregroundStyle(.white.opacity(0.62)).lineLimit(2)
-                }
-                if let fileDetail = value.fileDetail {
-                    Text(fileDetail).font(.system(size: 11)).foregroundStyle(.white.opacity(0.56)).lineLimit(1)
-                } else if !overview.isEmpty {
-                    Text(overview).font(.system(size: 11)).lineSpacing(3).foregroundStyle(.white.opacity(0.62)).lineLimit(2)
-                }
-            }.padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 12)
+                Text(value.fileDetail ?? " ").font(.system(size: captionSize - 1))
+                    .foregroundStyle(.white.opacity(0.55)).lineLimit(1, reservesSpace: true)
+            }.padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 8)
         }
         .frame(width: width, alignment: .topLeading)
-        .background(.white.opacity(selected ? 0.09 : 0.035), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(selected ? Brand.amber.opacity(0.7) : .clear, lineWidth: 1).allowsHitTesting(false) }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous)).contentShape(Rectangle())
+        .foregroundStyle(.white)
+        .background(.white.opacity(selected ? 0.09 : 0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(selected ? .white.opacity(0.95) : .white.opacity(0.06), lineWidth: selected ? 2 : 0.5)
+                .allowsHitTesting(false)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous)).contentShape(Rectangle())
     }
     private var badges: some View {
         HStack(alignment: .top, spacing: 6) {
@@ -89,8 +117,8 @@ struct LocalCatalogDetailEpisodeCard: View {
         }
     }
     private func badge(_ title: String) -> some View {
-        Text(title).font(.system(size: 10, weight: .medium)).monospacedDigit().lineLimit(1).foregroundStyle(.white)
-            .padding(.horizontal, 6).padding(.vertical, 3).background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 5))
+        Text(title).font(.system(size: 11, weight: .medium)).monospacedDigit().lineLimit(1).foregroundStyle(.white)
+            .padding(.horizontal, 5).padding(.vertical, 3).background(.black.opacity(0.76), in: RoundedRectangle(cornerRadius: 4))
     }
 }
 

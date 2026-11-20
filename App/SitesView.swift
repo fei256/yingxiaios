@@ -2428,6 +2428,7 @@ struct VideoDetailView: View {
             #endif
             #if os(iOS)
             .navigationTitle("").navigationBarTitleDisplayMode(.inline)
+            .toolbar(.visible, for: .navigationBar)
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
             #else
@@ -2696,7 +2697,8 @@ struct VideoDetailView: View {
     @ViewBuilder private var tmdbExtras: some View {
         if let details = tmdb.details {
             #if os(iOS)
-            CatalogDetailSections(details: details) { detailSectionsPresented = $0 }
+            CatalogDetailSections(details: details, overview: mobileDetailOverview,
+                                  openOverview: { showingDetailOverview = true }) { detailSectionsPresented = $0 }
                 .id("\(details.mediaType.rawValue):\(details.id)")
                 .padding(.horizontal, -20)
             #else
@@ -2712,7 +2714,8 @@ struct VideoDetailView: View {
             #endif
         } else if let detail {
             #if os(iOS)
-            CatalogSourceDetailSections(video: detail, sourceName: client.site.name)
+            CatalogSourceDetailSections(video: detail, sourceName: client.site.name, overview: mobileDetailOverview,
+                                        openOverview: { showingDetailOverview = true })
             #else
             VStack(alignment: .leading, spacing: 10) {
                 Text(L10n.text("Information")).font(.headline)
@@ -2870,8 +2873,9 @@ struct VideoDetailView: View {
                                                     selectedEpisode: selectedEpisode, history: watchHistories)
             if let first = selection.episode {
                 #if os(iOS)
-                CatalogDetailActionRow(containerWidth: containerWidth) {
-                    DetailPlaybackControls(selection: selection, busy: busy, loadingMode: loadingMode) { mode in
+                CatalogDetailActionRow {
+                    DetailPlaybackControls(selection: selection, busy: busy, loadingMode: loadingMode,
+                                           showsBeginningButton: false) { mode in
                         selectedEpisode = first
                         startRequest { await play(first, mode: mode) }
                     }
@@ -3047,23 +3051,18 @@ struct VideoDetailView: View {
                 ZStack(alignment: .top) {
                     (detailArtworkPaint?.color ?? Color(white: 0.22)).ignoresSafeArea()
                     LocalCatalogArtworkCarousel(video: currentVideo(), images: mobileDetailArtwork,
+                                                rotatingImages: LocalCatalogDetailArtwork.landscapes(details: tmdb.details),
                                                 presented: !choosingDetailArtwork && !choosingDetailMatch && !showingDetailOverview && !showingDetailCalendar && !detailSectionsPresented,
                                                 scrollY: detailScrollY,
                                                 selection: $detailArtworkSelection, paused: $detailArtworkPaused, paint: $detailArtworkPaint)
                         .frame(width: width, height: height).accessibilityIdentifier("detail.poster")
                     ScrollView {
                         WithPerceptionTracking {
-                            VStack(alignment: .leading, spacing: 24) {
+                            VStack(alignment: .leading, spacing: 20) {
                                 mobileDetailHeader(size: geometry.size)
                                 if detail != nil {
                                     VStack(alignment: .leading, spacing: 24) {
                                         episodePanel
-                                        if !mobileDetailOverview.isEmpty {
-                                            VStack(alignment: .leading, spacing: 12) {
-                                                Text("剧情简介").font(.system(size: 19, weight: .semibold))
-                                                LocalCatalogSynopsisButton(overview: mobileDetailOverview) { showingDetailOverview = true }
-                                            }
-                                        }
                                         tmdbExtras
                                     }.detailReadableContent()
                                 } else if let error { errorCard(error).padding(.top, 12) }
@@ -3090,17 +3089,18 @@ struct VideoDetailView: View {
 
     private func mobileDetailHeader(size: CGSize) -> some View {
         WithPerceptionTracking {
+            let centered = CatalogDetailLayout.usesWideHero(in: size)
             VStack(alignment: .leading, spacing: 16) {
                 CatalogDetailHero(size: size) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        LocalCatalogDetailTitle(title: tmdb.details?.name ?? currentVideo().name, logo: tmdb.details?.logo, width: size.width)
+                    VStack(alignment: centered ? .center : .leading, spacing: 10) {
+                        LocalCatalogDetailTitle(title: tmdb.details?.name ?? currentVideo().name, logo: tmdb.details?.logo,
+                                                width: size.width, centered: centered)
                             .id(tmdb.details?.logo)
-                        if let original = tmdb.details?.originalName, !original.isEmpty, original != tmdb.details?.name {
-                            Text(original).font(.system(size: 12)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
-                        }
+                        LocalCatalogRatingsRow(details: tmdb.details, centered: centered)
                         LocalCatalogMetadataPills(details: tmdb.details, year: mobileSourceMetadata.year,
-                                                  area: mobileSourceMetadata.area, remarks: mobileSourceMetadata.remarks)
-                        Text(SourceLabel(client.site.name).text).font(.system(size: 12)).foregroundStyle(.white.opacity(0.8))
+                                                  area: mobileSourceMetadata.area, remarks: mobileSourceMetadata.remarks,
+                                                  source: SourceLabel(client.site.name).text, category: mobileSourceMetadata.type,
+                                                  centered: centered)
                             .accessibilityValue(mobileTMDBStatus)
                     }.detailReadableContent()
                 } actions: { playControl }
@@ -3113,19 +3113,32 @@ struct VideoDetailView: View {
         CatalogDetailToolStrip {
             let saved = store.favorites.contains(videoFavorite())
             Button { store.favorites.toggle(videoFavorite()) } label: {
-                Image(systemName: saved ? "heart.fill" : "heart").foregroundStyle(saved ? Brand.rose : .white.opacity(0.85))
+                Image(systemName: saved ? "rectangle.stack.fill" : "rectangle.stack").foregroundStyle(saved ? Brand.rose : .white.opacity(0.85))
                     .catalogDetailToolTarget()
             }.accessibilityLabel(saved ? "取消收藏" : "收藏影片").accessibilityIdentifier("detail.favorite")
             Button { choosingDownloads = true } label: { Image(systemName: "arrow.down.circle").catalogDetailToolTarget() }
                 .disabled(detail?.episodes.isEmpty != false).accessibilityLabel("下载剧集").accessibilityIdentifier("detail.download")
+            if tmdb.details?.mediaType == .tv {
+                Button { showingDetailCalendar = true } label: { Image(systemName: "calendar").catalogDetailToolTarget() }
+                    .accessibilityLabel("播出日历").accessibilityIdentifier("detail.calendar")
+            } else if let link = tmdb.details?.link {
+                ShareLink(item: link) { Image(systemName: "link").catalogDetailToolTarget() }
+                    .accessibilityLabel("分享影片")
+            }
             Menu {
                 WithPerceptionTracking {
+                    if let detail {
+                        let selection = DetailPlaybackSelection(episodes: detail.episodes, activeFlag: activeFlag,
+                                                                selectedEpisode: selectedEpisode, history: watchHistories)
+                        if let episode = selection.episode {
+                            Button("从头播放", systemImage: "arrow.counterclockwise") {
+                                selectedEpisode = episode
+                                startRequest { await play(episode, mode: .beginning) }
+                            }.disabled(busy).accessibilityIdentifier("detail.playBeginning")
+                        }
+                    }
                     if !mobileDetailOverview.isEmpty {
                         Button("剧情简介", systemImage: "text.alignleft") { showingDetailOverview = true }
-                    }
-                    if tmdb.details?.mediaType == .tv {
-                        Button("播出日历", systemImage: "calendar") { showingDetailCalendar = true }
-                            .accessibilityIdentifier("detail.calendar")
                     }
                     Button("切换背景", systemImage: "photo.on.rectangle.angled") { choosingDetailArtwork = true }
                         .disabled(mobileDetailArtwork.isEmpty).accessibilityIdentifier("detail.artwork.choose")
@@ -3216,13 +3229,14 @@ struct VideoDetailView: View {
         let metadata = tmdb.episodes(items)
         let entries = LocalCatalogDetailEpisode.entries(items, metadata: metadata, details: tmdb.details,
                                                         sourceTitle: currentVideo().name, flag: activeFlag, fileDetails: episodeDetails)
+        let histories = LocalCatalogDetailEpisode.histories(items, entries: watchHistories)
         let ordered = LocalCatalogDetailRules.ordered(entries.map(\.key))
         let count = (entries.count + LocalCatalogDetailRules.groupSize - 1) / LocalCatalogDetailRules.groupSize
         let selection = DetailPlaybackSelection(episodes: items, activeFlag: activeFlag, selectedEpisode: selectedEpisode, history: watchHistories)
         let continuationIndex = ordered.firstIndex { entries[$0.index].id == selection.episode?.id } ?? 0
         let group = mobileEpisodeGroupFlag == activeFlag ? min(mobileEpisodeGroup, max(0, count - 1)) : continuationIndex / LocalCatalogDetailRules.groupSize
         let visible = LocalCatalogDetailRules.page(ordered, group: group, descending: reversesEpisodes).map { entries[$0.index] }
-        return VStack(alignment: .leading, spacing: 16) {
+        return VStack(alignment: .leading, spacing: 12) {
             mobileFlagPicker
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 4) {
@@ -3277,13 +3291,13 @@ struct VideoDetailView: View {
             }
             if mobileEpisodeList {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10, alignment: .top)], spacing: 10) {
-                    ForEach(visible) { value in WithPerceptionTracking { mobileEpisodeButton(value, list: true, selection: selection) } }
+                    ForEach(visible) { value in WithPerceptionTracking { mobileEpisodeButton(value, list: true, selection: selection, history: histories[value.id]) } }
                 }
             } else {
                 ScrollViewReader { rail in
                     ScrollView(.horizontal, showsIndicators: false) {
                         LazyHStack(alignment: .top, spacing: 14) {
-                            ForEach(visible) { value in WithPerceptionTracking { mobileEpisodeButton(value, list: false, selection: selection).id(value.id) } }
+                            ForEach(visible) { value in WithPerceptionTracking { mobileEpisodeButton(value, list: false, selection: selection, history: histories[value.id]).id(value.id) } }
                         }.padding(.horizontal, 20).padding(.vertical, 2)
                     }
                     .onAppear {
@@ -3299,7 +3313,8 @@ struct VideoDetailView: View {
         .accessibilityIdentifier("detail.episodes")
     }
 
-    private func mobileEpisodeButton(_ value: LocalCatalogDetailEpisode, list: Bool, selection: DetailPlaybackSelection) -> some View {
+    private func mobileEpisodeButton(_ value: LocalCatalogDetailEpisode, list: Bool, selection: DetailPlaybackSelection,
+                                     history: PlaybackHistoryEntry?) -> some View {
         let episode = value.episode
         let saved = download(episode)
         let movie = tmdb.details?.mediaType == .movie
@@ -3311,7 +3326,8 @@ struct VideoDetailView: View {
                                               loading: loadingEpisode == episode.id,
                                               width: CatalogDetailLayout.cardWidth(in: containerWidth),
                                               selected: selection.episode?.id == episode.id,
-                                              progress: selection.episode?.id == episode.id ? selection.history?.progress : nil)
+                                              progress: history?.progress,
+                                              watched: history.map { $0.completed || $0.position > 0 } ?? false)
             }
         }
         .buttonStyle(.plain).disabled(loadingEpisode != nil)
@@ -3364,8 +3380,8 @@ struct VideoDetailView: View {
                             .accessibilityAddTraits(flag == activeFlag ? .isSelected : [])
                         }
                     }
-                }
-            }.scrollIndicators(.hidden)
+                }.padding(.horizontal, 20)
+            }.scrollIndicators(.hidden).padding(.horizontal, -20)
         }
     }
     #endif

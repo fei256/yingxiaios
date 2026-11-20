@@ -213,16 +213,19 @@ struct DiscoverDetailView: View {
                                                       })
                                             .padding(.horizontal, 20).detailReadableContent()
                                     }
-                                    VStack(alignment: .leading, spacing: 12) {
-                                        Text("剧情简介").font(.system(size: 19, weight: .semibold))
-                                        overviewButton
-                                    }.padding(.horizontal, 20).detailReadableContent()
+                                    if details == nil {
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            Text("剧情简介").font(.system(size: 19, weight: .semibold))
+                                            overviewButton
+                                        }.padding(.horizontal, 20).detailReadableContent()
+                                    }
                                     #else
                                     if !seasons.isEmpty { episodes }
                                     #endif
                                     if let details {
                                         #if os(iOS)
-                                        CatalogDetailSections(details: details) { detailSectionsPresented = $0 }
+                                        CatalogDetailSections(details: details, overview: detailOverview,
+                                                              openOverview: { overviewShown = true }) { detailSectionsPresented = $0 }
                                             .id(item.key).detailReadableContent()
                                         #else
                                         if !details.cast.isEmpty { people(details.cast, title: L10n.text("Cast")) }
@@ -291,8 +294,8 @@ struct DiscoverDetailView: View {
     @ViewBuilder private func identity(size: CGSize) -> some View {
         #if os(iOS)
         CatalogDetailHero(size: size) {
-            identityContents(width: size.width).detailReadableContent()
-        } actions: { mobileSourceActions(width: size.width) }
+            identityContents(width: size.width, centered: CatalogDetailLayout.usesWideHero(in: size)).detailReadableContent()
+        } actions: { mobileSourceActions }
         .padding(.horizontal, 20)
         #else
         VStack(spacing: 16) {
@@ -307,15 +310,13 @@ struct DiscoverDetailView: View {
         #endif
     }
 
-    private func identityContents(width: CGFloat) -> some View {
+    private func identityContents(width: CGFloat, centered: Bool = false) -> some View {
         #if os(iOS)
-        VStack(alignment: .leading, spacing: 12) {
-            LocalCatalogDetailTitle(title: details?.name ?? item.name, logo: details?.logo, width: width)
+        VStack(alignment: centered ? .center : .leading, spacing: 10) {
+            LocalCatalogDetailTitle(title: details?.name ?? item.name, logo: details?.logo, width: width, centered: centered)
                 .id(details?.logo)
-            if let original = details?.originalName, !original.isEmpty, original != details?.name {
-                Text(original).font(.system(size: 12)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
-            }
-            metadataTags
+            LocalCatalogRatingsRow(details: details, item: item, centered: centered)
+            metadataTags(centered: centered)
             if model.loading, details == nil { ProgressView().controlSize(.small) }
         }
         #else
@@ -375,8 +376,8 @@ struct DiscoverDetailView: View {
     }
 
     #if os(iOS)
-    private func mobileSourceActions(width: CGFloat) -> some View {
-        CatalogDetailActionRow(containerWidth: width) {
+    private var mobileSourceActions: some View {
+        CatalogDetailActionRow {
             Button { panShown.toggle() } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "cloud").font(.system(size: 19, weight: .semibold))
@@ -384,7 +385,7 @@ struct DiscoverDetailView: View {
                         Text("盘搜").font(.system(size: 15, weight: .semibold))
                         Text("查找这部作品的资源").font(.system(size: 11)).foregroundStyle(.black.opacity(0.58))
                     }.lineLimit(1)
-                }.foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 58).padding(.horizontal, 16)
+                }.foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 48).padding(.horizontal, 16)
                     .contentShape(Rectangle()).background(.white, in: Capsule())
             }.buttonStyle(.plain).accessibilityIdentifier("discover.panSearch")
                 .accessibilityValue(panShown ? "已展开" : "已收起")
@@ -394,13 +395,13 @@ struct DiscoverDetailView: View {
                     .accessibilityLabel("盘搜设置").accessibilityIdentifier("discover.panSettings")
                 Button { store.searchVideos(details?.name ?? item.name) } label: { Image(systemName: "magnifyingglass").catalogDetailToolTarget() }
                     .disabled(store.subscription == nil).accessibilityLabel("搜索当前作品").accessibilityIdentifier("discover.findSources")
+                if details?.mediaType == .tv {
+                    Button { calendarShown = true } label: { Image(systemName: "calendar").catalogDetailToolTarget() }
+                        .accessibilityLabel("播出日历").accessibilityIdentifier("discover.detail.calendar")
+                }
                 Menu {
                     WithPerceptionTracking {
                         Button("剧情简介", systemImage: "text.alignleft") { overviewShown = true }
-                        if details?.mediaType == .tv {
-                            Button("播出日历", systemImage: "calendar") { calendarShown = true }
-                                .accessibilityIdentifier("discover.detail.calendar")
-                        }
                         ShareLink(item: details?.link ?? URL(string: "https://www.themoviedb.org/\(item.mediaType.rawValue)/\(item.id)")!) {
                             Label("分享影片", systemImage: "square.and.arrow.up")
                         }
@@ -411,8 +412,8 @@ struct DiscoverDetailView: View {
         }
     }
 
-    private var metadataTags: some View {
-        LocalCatalogMetadataPills(details: details, item: item)
+    private func metadataTags(centered: Bool) -> some View {
+        LocalCatalogMetadataPills(details: details, item: item, centered: centered)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("discover.detail.metadata")
     }
