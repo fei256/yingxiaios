@@ -10,6 +10,7 @@ import zipfile
 import argparse
 
 from build_validation import require_validation_enabled
+from ipa_archive import write_payload_zip
 from source_snapshot import changed_inputs, native_checksums, source_checksums
 
 require_validation_enabled()
@@ -106,7 +107,7 @@ shutil.copytree(app, payload / app.name, symlinks=True)
 build_label = str(info['CFBundleVersion']).zfill(2)
 ipa = out / f"Yingxia-{info['CFBundleShortVersionString']}-build{build_label}-iOS16.1-NoJava-unsigned.ipa"
 assert not ipa.exists(), ipa
-subprocess.run(['ditto', '-c', '-k', '--norsrc', '--keepParent', 'Payload', str(ipa)], cwd=stage, check=True)
+write_payload_zip(payload, ipa)
 with zipfile.ZipFile(ipa) as z:
     assert z.testzip() is None
     assert all(name.startswith('Payload/') for name in z.namelist())

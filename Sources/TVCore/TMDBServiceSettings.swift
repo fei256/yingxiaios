@@ -3,6 +3,7 @@ import CryptoKit
 
 /// The switch selects the service independently from the retained custom configuration.
 public struct TMDBServiceSettings: Codable, Equatable, Sendable {
+    public enum CredentialType: String, CaseIterable, Sendable { case apiKey, token }
     public static let defaultAPIBase = "https://api.themoviedb.org/3"
     public static let defaultImageBase = "https://image.tmdb.org/t/p"
     public var enabled: Bool
@@ -71,6 +72,14 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
         }
     }
     public var custom: Self? { enabled ? cleaned : nil }
+    public func formConfiguration(credentialType: CredentialType) -> Self {
+        var value = self
+        switch credentialType {
+        case .apiKey: value.token = ""
+        case .token: value.apiKey = ""
+        }
+        return value.cleaned
+    }
     private var cleaned: Self {
         func trim(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
         var api = trim(apiBase).isEmpty ? Self.defaultAPIBase : trim(apiBase)

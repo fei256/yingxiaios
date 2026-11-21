@@ -1,7 +1,6 @@
 #if os(iOS)
 import Foundation
 import TVCore
-import Perception
 
 @MainActor enum LocalBackupCoordinator {
     private static var recoveryInProgress = false
@@ -11,37 +10,50 @@ import Perception
     static var undoAvailable: Bool { FileManager.default.fileExists(atPath: undoFile.path) }
 
     static func snapshot(_ store: Store, portable: Bool) async throws -> LocalBackupPayload {
-        var value = LocalBackupPayload()
-        func encode<T: Encodable>(_ item: T) throws -> Data {
-            let data = try JSONEncoder().encode(item)
-            return portable ? try LocalBackupArchive.portable(data) : data
-        }
-        value.history = try store.playbackHistory.entries.map { try encode($0) }
-        value.favorites = try store.favorites.items.map { try encode($0) }
+        let history = store.playbackHistory.entries, favorites = store.favorites.items
+        let subscriptions = store.subscriptions, sourceGroups = store.localSourceGroups
+        let documents = portable ? [:] : store.documents
+        var settings: [String: Data] = [:]
         for (key, item) in store.backupDefaults.dictionaryRepresentation() where LocalBackupArchive.isAllowedSetting(key) {
-            value.settings[key] = try PropertyListSerialization.data(fromPropertyList: ["value": item], format: .binary, options: 0)
+            settings[key] = try PropertyListSerialization.data(fromPropertyList: ["value": item], format: .binary, options: 0)
         }
-        value.subscriptions = try encode(store.subscriptions)
-        let portableEntries = try JSONDecoder().decode([SubscriptionEntry].self, from: value.subscriptions)
-        let groups = Dictionary(zip(store.subscriptions, portableEntries).map { original, saved in
-            (saved.address, store.localSourceGroups[original.address] ?? .subscription)
-        }, uniquingKeysWith: { first, _ in first })
-        value.sourceGroups = try JSONEncoder().encode(groups)
-        value.sources = try await LocalSourceLibrary.shared.backupSources(portable: portable)
-        if !portable { value.documents = try store.documents.mapValues { try JSONEncoder().encode($0) } }
-        return value
+        let savedSettings = settings
+        let sources = try await LocalSourceLibrary.shared.backupSources(portable: portable)
+        return try await Task.detached(priority: .userInitiated) {
+            func encode<T: Encodable>(_ item: T) throws -> Data {
+                let data = try JSONEncoder().encode(item)
+                return portable ? try LocalBackupArchive.portable(data) : data
+            }
+            var value = LocalBackupPayload()
+            value.history = try history.map { try encode($0) }
+            value.favorites = try favorites.map { try encode($0) }
+            value.settings = savedSettings
+            value.subscriptions = try encode(subscriptions)
+            let portableEntries = try JSONDecoder().decode([SubscriptionEntry].self, from: value.subscriptions)
+            let groups = Dictionary(zip(subscriptions, portableEntries).map { original, saved in
+                (saved.address, sourceGroups[original.address] ?? .subscription)
+            }, uniquingKeysWith: { first, _ in first })
+            value.sourceGroups = try JSONEncoder().encode(groups)
+            value.sources = sources
+            value.documents = try documents.mapValues { try JSONEncoder().encode($0) }
+            return value
+        }.value
     }
     static func export(_ store: Store) async throws -> Data {
         let value = try await snapshot(store, portable: true)
-        try validate(value)
-        return try LocalBackupArchive(value).encoded()
+        return try await Task.detached(priority: .userInitiated) {
+            try validate(value)
+            return try LocalBackupArchive(value).encoded()
+        }.value
     }
-    static func inspect(_ data: Data) throws -> (LocalBackupArchive, LocalBackupPayload) {
-        let result = try LocalBackupArchive.read(data)
-        try validate(result.1)
-        return result
+    nonisolated static func inspect(_ data: Data) async throws -> (LocalBackupArchive, LocalBackupPayload) {
+        try await Task.detached(priority: .userInitiated) {
+            let result = try LocalBackupArchive.read(data)
+            try validate(result.1)
+            return result
+        }.value
     }
-    static func validate(_ value: LocalBackupPayload) throws {
+    nonisolated static func validate(_ value: LocalBackupPayload) throws {
         let decoder = JSONDecoder()
         for row in value.history {
             let item = try decoder.decode(PlaybackHistoryEntry.self, from: row)
@@ -66,7 +78,7 @@ import Perception
     }
     static func restore(_ incoming: LocalBackupPayload, categories: Set<LocalBackupCategory>, replacing: Bool, store: Store) async throws {
         guard !categories.isEmpty else { return }
-        try validate(incoming)
+        try await Task.detached(priority: .userInitiated) { try validate(incoming) }.value
         try beginRestore(store)
         defer { finishRestore(store) }
         store.stopForBackupRestore()
@@ -76,8 +88,7 @@ import Perception
         }
     }
     static func undo(_ store: Store) async throws {
-        let previous = try JSONDecoder().decode(LocalBackupPayload.self, from: Data(contentsOf: undoFile))
-        try validate(previous)
+        let previous = try await readJournal(undoFile)
         try beginRestore(store)
         defer { finishRestore(store) }
         store.stopForBackupRestore()
@@ -85,7 +96,7 @@ import Perception
         try await transaction(before: before, store: store) {
             try await apply(previous, categories: Set(LocalBackupCategory.allCases), replacing: true, activate: true, store: store)
         }
-        try FileManager.default.removeItem(at: undoFile)
+        try await removeJournal(undoFile)
     }
     static func recover(_ store: Store) async -> Bool {
         guard !recoveryInProgress else { return false }
@@ -96,13 +107,12 @@ import Perception
         recoveryInProgress = true
         defer { recoveryInProgress = false }
         do {
-            let previous = try JSONDecoder().decode(LocalBackupPayload.self, from: Data(contentsOf: pendingFile))
-            try validate(previous)
             if !store.restoringBackup { try beginRestore(store) }
             store.cloudSync?.suspendForLocalRestore(true)
+            let previous = try await readJournal(pendingFile)
             try await apply(previous, categories: Set(LocalBackupCategory.allCases), replacing: true, activate: true, store: store)
             try synchronizeDefaults(store)
-            try FileManager.default.removeItem(at: pendingFile)
+            try await removeJournal(pendingFile)
             finishRestore(store)
             return true
         } catch {
@@ -125,6 +135,7 @@ import Perception
         store.importing = pending; store.restoringBackup = pending; store.backupRecoveryRequired = pending
         store.cloudSync?.suspendForLocalRestore(pending)
         if pending { store.error = "备份恢复尚未完成，已暂停数据修改与同步。请重试恢复，原始日志已保留。" }
+        else { LocalDanmakuPreferences.restored() }
     }
     private static func synchronizeDefaults(_ store: Store) throws {
         guard store.backupDefaults.synchronize() else {
@@ -135,48 +146,76 @@ import Perception
         guard !FileManager.default.fileExists(atPath: pendingFile.path) else {
             throw NSError(domain: "LocalBackup", code: 3, userInfo: [NSLocalizedDescriptionKey: "上次恢复日志尚未处理完成，请重新打开应用后重试。原始数据恢复日志已保留。"])
         }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let bytes = try JSONEncoder().encode(before)
-        try bytes.write(to: pendingFile, options: .atomic)
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: pendingFile.path)
+        let bytes = try await Task.detached(priority: .utility) { try JSONEncoder().encode(before) }.value
+        try await writeJournal(bytes, to: pendingFile)
         do {
             try await operation()
             try synchronizeDefaults(store)
-            try bytes.write(to: undoFile, options: .atomic)
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: undoFile.path)
-            try FileManager.default.removeItem(at: pendingFile)
+            try await writeJournal(bytes, to: undoFile)
+            try await removeJournal(pendingFile)
         } catch {
             let original = error
             do {
                 try await apply(before, categories: Set(LocalBackupCategory.allCases), replacing: true, activate: true, store: store)
                 try synchronizeDefaults(store)
-                try FileManager.default.removeItem(at: pendingFile)
+                try await removeJournal(pendingFile)
             } catch { throw error }
             throw original
         }
     }
+    nonisolated private static func readJournal(_ url: URL) async throws -> LocalBackupPayload {
+        try await Task.detached(priority: .utility) {
+            let value = try JSONDecoder().decode(LocalBackupPayload.self, from: Data(contentsOf: url))
+            try validate(value)
+            return value
+        }.value
+    }
+    nonisolated private static func writeJournal(_ bytes: Data, to url: URL) async throws {
+        try await Task.detached(priority: .utility) {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try bytes.write(to: url, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }.value
+    }
+    nonisolated private static func removeJournal(_ url: URL) async throws {
+        try await Task.detached(priority: .utility) { try FileManager.default.removeItem(at: url) }.value
+    }
     private static func apply(_ value: LocalBackupPayload, categories: Set<LocalBackupCategory>, replacing: Bool, activate: Bool, store: Store) async throws {
-        let decoder = JSONDecoder()
         if categories.contains(.sources) {
+            let (entries, groups, documents) = try await Task.detached(priority: .userInitiated) {
+                let decoder = JSONDecoder()
+                return (try decoder.decode([SubscriptionEntry].self, from: value.subscriptions),
+                    try decoder.decode([String: LocalSourceGroup].self, from: value.sourceGroups),
+                    activate ? try value.documents.mapValues { try decoder.decode(Subscription.self, from: $0) } : nil)
+            }.value
             try await LocalSourceLibrary.shared.restoreBackupSources(value.sources, replacing: replacing)
-            try store.applyBackupSubscriptions(decoder.decode([SubscriptionEntry].self, from: value.subscriptions),
-                groups: decoder.decode([String: LocalSourceGroup].self, from: value.sourceGroups), replacing: replacing, activate: activate,
-                restoredDocuments: activate ? try value.documents.mapValues { try decoder.decode(Subscription.self, from: $0) } : nil)
+            try store.applyBackupSubscriptions(entries, groups: groups, replacing: replacing, activate: activate, restoredDocuments: documents)
         }
         if categories.contains(.history) {
-            let incoming = try value.history.map { try decoder.decode(PlaybackHistoryEntry.self, from: $0) }
-            var rows = replacing ? [:] : Dictionary(store.playbackHistory.entries.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.updatedAt >= b.updatedAt ? a : b })
-            for row in incoming where rows[row.id] == nil || rows[row.id]!.updatedAt < row.updatedAt { rows[row.id] = row }
-            store.playbackHistory.adopt(Array(rows.values))
+            let existing = store.playbackHistory.entries
+            let rows = try await Task.detached(priority: .userInitiated) {
+                let decoder = JSONDecoder()
+                let incoming = try value.history.map { try decoder.decode(PlaybackHistoryEntry.self, from: $0) }
+                var rows = replacing ? [:] : Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { a, b in a.updatedAt >= b.updatedAt ? a : b })
+                for row in incoming where rows[row.id] == nil || rows[row.id]!.updatedAt < row.updatedAt { rows[row.id] = row }
+                return Array(rows.values)
+            }.value
+            store.playbackHistory.adopt(rows)
             guard await store.playbackHistory.flushPersistence() else {
                 throw NSError(domain: "LocalBackup", code: 1, userInfo: [NSLocalizedDescriptionKey: store.playbackHistory.persistenceError ?? "历史记录尚未写入存储，恢复日志已保留。"])
             }
             store.cloudSync?.changed("history")
         }
         if categories.contains(.favorites) {
-            let incoming = try value.favorites.map { try decoder.decode(FavoriteItem.self, from: $0) }
-            var items = replacing ? [] : store.favorites.items
-            for item in incoming where !items.contains(where: { $0.key == item.key }) { items.append(item) }
+            let existing = store.favorites.items
+            let items = try await Task.detached(priority: .userInitiated) {
+                let decoder = JSONDecoder()
+                let incoming = try value.favorites.map { try decoder.decode(FavoriteItem.self, from: $0) }
+                var items = replacing ? [] : existing
+                var keys = Set(items.map(\.key))
+                for item in incoming where keys.insert(item.key).inserted { items.append(item) }
+                return items
+            }.value
             store.favorites.adopt(items.enumerated().map { CloudSyncItem(id: $0.element.key, value: $0.element, stamp: Date(timeIntervalSince1970: Double(items.count - $0.offset))) })
             if let error = store.favorites.persistenceError { throw NSError(domain: "LocalBackup", code: 2, userInfo: [NSLocalizedDescriptionKey: error]) }
             store.cloudSync?.changed("favorites")

@@ -34,6 +34,8 @@ class SubtitleDecode: DecodeProtocol {
 
     func decode() {}
 
+    deinit { shutdown() }
+
     func decodeFrame(from packet: Packet, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
         guard let codecContext else {
             return

@@ -23,6 +23,7 @@ public class KSMEPlayer: NSObject {
     private var pendingSeekPicture: Int?
     private var outputsPaused = true
     private var failedSource = false
+    public private(set) var isAudioInterrupted = false
     public private(set) var videoOutput: (VideoOutput & UIView)? {
         didSet {
             oldValue?.invalidate()
@@ -99,9 +100,9 @@ public class KSMEPlayer: NSObject {
                     options.audioFilters = audioFilters
                 }
             }
-            options.updateVideoClockPlayback(isPlaying: playbackState == .playing && loadState == .playable,
+            options.updateVideoClockPlayback(isPlaying: playbackState == .playing && loadState == .playable && !isAudioInterrupted,
                                              rate: Double(audioOutput.playbackRate))
-            playerItem.updateAudioClockPlayback(isPlaying: playbackState == .playing && loadState == .playable,
+            playerItem.updateAudioClockPlayback(isPlaying: playbackState == .playing && loadState == .playable && !isAudioInterrupted,
                                                rate: Double(audioOutput.playbackRate))
         }
     }
@@ -145,6 +146,7 @@ public class KSMEPlayer: NSObject {
         videoOutput?.displayLayerDelegate = self
         #if !os(macOS)
         NotificationCenter.default.addObserver(self, selector: #selector(audioRouteChange), name: AVAudioSession.routeChangeNotification, object: AVAudioSession.sharedInstance())
+        NotificationCenter.default.addObserver(self, selector: #selector(audioInterrupted), name: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance())
         if #available(tvOS 15.0, iOS 15.0, *) {
             NotificationCenter.default.addObserver(self, selector: #selector(spatialCapabilityChange), name: AVAudioSession.spatialPlaybackCapabilitiesChangedNotification, object: nil)
         }
@@ -167,7 +169,7 @@ private extension KSMEPlayer {
     func playOrPause() {
         runOnMainThread { [weak self] in
             guard let self else { return }
-            let isPaused = !(self.playbackState == .playing && self.loadState == .playable)
+            let isPaused = !(self.playbackState == .playing && self.loadState == .playable) || self.isAudioInterrupted
             self.options.updateVideoClockPlayback(isPlaying: !isPaused, rate: Double(self.audioOutput.playbackRate))
             self.playerItem.updateAudioClockPlayback(isPlaying: !isPaused, rate: Double(self.audioOutput.playbackRate))
             // loadState and transport can publish in the same run-loop turn.
@@ -182,6 +184,10 @@ private extension KSMEPlayer {
                     self.audioOutput.play()
                     self.videoOutput?.play()
                 }
+            } else if !isPaused {
+                // AVAudioEngine can stop independently after a hardware format
+                // change. Renderer-based audio still starts only on transitions.
+                (self.audioOutput as? AudioEnginePlayer)?.ensureRunningIfRequested()
             }
             self.delegate?.changeLoadState(player: self)
         }
@@ -196,18 +202,47 @@ private extension KSMEPlayer {
 
     #if !os(macOS)
     @objc private func audioRouteChange(notification: Notification) {
-        KSLog("[audio] audioRouteChange")
-        guard let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt else {
-            return
+        guard notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt != nil else { return }
+        runOnMainThread { [weak self] in
+            guard let self else { return }
+            KSLog("[audio] audioRouteChange")
+            let tracks = self.tracks(mediaType: .audio)
+            for track in tracks { (track as? FFmpegAssetTrack)?.audioDescriptor?.updateAudioFormat() }
+            self.audioOutput.flush()
+            // Buffered frames can still have the preceding channel layout.
+            // The input node follows the actual rendered frame; the engine's
+            // configuration observer independently reconnects hardware output.
+            self.playOrPause()
         }
-//        let routeChangeReason = AVAudioSession.RouteChangeReason(rawValue: reason)
-//        guard [AVAudioSession.RouteChangeReason.newDeviceAvailable, .oldDeviceUnavailable, .routeConfigurationChange].contains(routeChangeReason) else {
-//            return
-//        }
-        for track in tracks(mediaType: .audio) {
-            (track as? FFmpegAssetTrack)?.audioDescriptor?.updateAudioFormat()
+    }
+
+    @objc private func audioInterrupted(notification: Notification) {
+        guard let value = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: value) else { return }
+        let resume = (notification.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
+            .map { AVAudioSession.InterruptionOptions(rawValue: $0).contains(.shouldResume) } ?? false
+        runOnMainThread { [weak self] in
+            guard let self else { return }
+            switch type {
+            case .began:
+                self.isAudioInterrupted = true
+                (self.audioOutput as? AudioEnginePlayer)?.setAudioSessionInterrupted(true)
+                // Keep transport intent. A user pause during the interruption
+                // changes playbackState and prevents resumption below.
+                self.playOrPause()
+            case .ended:
+                self.isAudioInterrupted = false
+                (self.audioOutput as? AudioEnginePlayer)?.setAudioSessionInterrupted(false)
+                if !resume {
+                    self.playbackState = .paused
+                    self.playbackCommand?(false)
+                } else {
+                    if resume, self.playbackState == .playing { KSOptions.activateAudioSession() }
+                    self.playOrPause()
+                }
+            @unknown default: break
+            }
         }
-        audioOutput.flush()
     }
     #endif
 }
@@ -458,7 +493,7 @@ extension KSMEPlayer: MediaPlayerProtocol {
         KSLog("play \(self)")
         // Same reason as `KSAVPlayer.play()`: iOS deactivates the session on an
         // interruption or a suspension, and only construction re-activated it.
-        KSOptions.activateAudioSession()
+        if !isAudioInterrupted { KSOptions.activateAudioSession() }
         pendingSeekPicture = nil
         playbackState = .playing
         if #available(iOS 15.0, tvOS 15.0, macOS 12.0, *) {
@@ -477,6 +512,8 @@ extension KSMEPlayer: MediaPlayerProtocol {
     public func shutdown() {
         KSLog("shutdown \(self)")
         seekPictureRevision &+= 1; pendingSeekPicture = nil
+        isAudioInterrupted = false
+        (audioOutput as? AudioEnginePlayer)?.setAudioSessionInterrupted(false)
         playbackState = .stopped
         loadState = .idle
         runOnMainThread { [weak self] in
@@ -527,7 +564,7 @@ extension KSMEPlayer: MediaPlayerProtocol {
                self.videoOutput?.displayLayer.requiresFlushToResumeDecoding == true {
                 self.videoOutput?.displayLayer.flush()
             }
-            if self.playbackState == .playing && self.loadState == .playable {
+            if self.playbackState == .playing && self.loadState == .playable && !self.isAudioInterrupted {
                 KSOptions.activateAudioSession()
                 // PiP already owns a running audio output. Repeating play()
                 // installs another periodic observer and loses the old token.
@@ -535,6 +572,8 @@ extension KSMEPlayer: MediaPlayerProtocol {
                 if self.outputsPaused {
                     self.outputsPaused = false
                     self.audioOutput.play()
+                } else {
+                    (self.audioOutput as? AudioEnginePlayer)?.ensureRunningIfRequested()
                 }
                 self.videoOutput?.play()
             }

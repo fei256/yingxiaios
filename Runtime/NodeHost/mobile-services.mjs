@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { HomeLibrary } from './parity/lib/home-library.mjs';
 import { PanLinkChecker } from './parity/lib/pan-link-checker.mjs';
 import { LiveDanmakuService } from './parity/lib/live-danmaku.mjs';
@@ -29,8 +30,8 @@ const defaults = {
 export class MobileServices {
   constructor(directory, baseURL) {
     this.directory = directory;
-    this.configuration = structuredClone(defaults); this.revision = 0;
-    this.settings = { private: async () => ({ ...this.configuration, revision: this.revision }) };
+    this.configuration = structuredClone(defaults); this.revision = 0; this.aiRevision = 0;
+    this.settings = { private: async () => this.settingsSnapshot() };
     this.session = null; this.events = []; this.document = null; this.danmakuRevision = 0; this.operations = new Map();
     this.home = new HomeLibrary(null, this.settings);
     this.checker = new PanLinkChecker(this.settings);
@@ -69,6 +70,9 @@ export class MobileServices {
     this.introSkip = new IntroSkip();
   }
 
+  settingsSnapshot() {
+    return { ...this.configuration, revision: this.revision, aiRevision: this.aiRevision };
+  }
   assertSession(params) {
     if (!this.session || params.sessionId !== this.session.id) throw new Error('播放媒体已改变');
     return this.session;
@@ -226,14 +230,17 @@ export class MobileServices {
       case 'settings.set': {
         if (params.videoCache) await this.cache.update(params.videoCache);
         if (params.tmdb) {
-          const config = { ...defaults.tmdb, ...params.tmdb };
+          const config = { ...defaults.tmdb, ...this.configuration.tmdb, ...params.tmdb };
           const url = new URL(config.panApiBase);
           if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || /[\r\n\0]/.test(config.panToken || '')) throw new Error('盘搜地址或令牌无效');
           params = { ...params, tmdb: { ...config, ...normalizePanOptions(config) } };
         }
-        for (const key of Object.keys(defaults)) if (params[key] && typeof params[key] === 'object')
-          this.configuration[key] = { ...defaults[key], ...params[key] };
-        this.revision++; return { revision: this.revision };
+        for (const key of Object.keys(defaults)) if (params[key] && typeof params[key] === 'object' && !Array.isArray(params[key])) {
+          const next = { ...defaults[key], ...this.configuration[key], ...params[key] };
+          if (key === 'ai' && !isDeepStrictEqual(this.configuration.ai, next)) this.aiRevision = (this.aiRevision ?? 0) + 1;
+          this.configuration[key] = next;
+        }
+        this.revision++; return { revision: this.revision, aiRevision: this.aiRevision };
       }
       case 'operation.cancel': this.operations.get(params.id)?.abort(); return { cancelled: true };
       case 'session.set': {

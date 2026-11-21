@@ -10,16 +10,14 @@ import FFmpegKit
 import VideoToolbox
 
 class VideoToolboxDecode: DecodeProtocol {
-    private var session: DecompressionSession {
-        didSet {
-            VTDecompressionSessionInvalidate(oldValue.decompressionSession)
-        }
-    }
+    private var session: DecompressionSession
 
     private let options: KSOptions
     private var startTime = Int64(0)
     private var lastPosition = Int64(0)
     private var needReconfig = false
+    private let timingLock = NSLock()
+    private var closed = false
 
     init(options: KSOptions, session: DecompressionSession) {
         self.options = options
@@ -27,6 +25,7 @@ class VideoToolboxDecode: DecodeProtocol {
     }
 
     func decodeFrame(from packet: Packet, completionHandler: @escaping (Result<MEFrame, Error>) -> Void) {
+        guard !closed else { return }
         if needReconfig {
             // 解决从后台切换到前台，解码失败的问题
             guard let replacement = DecompressionSession(assetTrack: session.assetTrack, options: options,
@@ -34,7 +33,7 @@ class VideoToolboxDecode: DecodeProtocol {
                 completionHandler(.failure(NSError(errorCode: .codecVideoReceiveFrame, avErrorCode: kVTInvalidSessionErr)))
                 return
             }
-            session = replacement
+            replaceSession(replacement)
             doFlushCodec()
             needReconfig = false
         }
@@ -48,12 +47,11 @@ class VideoToolboxDecode: DecodeProtocol {
                 // Drain old callbacks before invalidating their native session.
                 // They keep their own format/timing metadata; the current packet
                 // must be decoded exactly once with the new SPS/PPS.
-                VTDecompressionSessionWaitForAsynchronousFrames(session.decompressionSession)
                 guard let replacement = DecompressionSession(assetTrack: session.assetTrack, options: options,
                     formatDescription: updated) else {
                     throw NSError(errorCode: .codecVideoReceiveFrame, avErrorCode: kVTVideoDecoderUnsupportedDataFormatErr)
                 }
-                session = replacement
+                replaceSession(replacement)
             }
             let decodingSession = session
             let sampleBuffer = try decodingSession.formatDescription.getSampleBuffer(annexB: decodingSession.assetTrack.isAnnexB,
@@ -80,15 +78,18 @@ class VideoToolboxDecode: DecodeProtocol {
                 let frame = VideoVTBFrame(fps: decodingSession.assetTrack.nominalFrameRate, isDovi: decodingSession.assetTrack.dovi != nil)
                 frame.corePixelBuffer = imageBuffer
                 frame.timebase = decodingSession.assetTrack.timebase
-                if packet.isKeyFrame, packetFlags & AV_PKT_FLAG_DISCARD != 0, self.lastPosition > 0 {
-                    self.startTime = self.lastPosition - timestamp
-                }
-                self.lastPosition = max(self.lastPosition, timestamp)
                 frame.position = packet.position
-                frame.timestamp = self.startTime + timestamp
                 frame.duration = duration
                 frame.size = size
-                self.lastPosition += frame.duration
+                frame.timestamp = self.timingLock.withLock {
+                    if packet.isKeyFrame, packetFlags & AV_PKT_FLAG_DISCARD != 0, self.lastPosition > 0 {
+                        self.startTime = self.lastPosition - timestamp
+                    }
+                    self.lastPosition = max(self.lastPosition, timestamp)
+                    let result = self.startTime + timestamp
+                    self.lastPosition += frame.duration
+                    return result
+                }
                 completionHandler(.success(frame))
             }
             if status == noErr {
@@ -115,17 +116,32 @@ class VideoToolboxDecode: DecodeProtocol {
         // output generation. Drain native callbacks before resetting their
         // timestamp basis; they must not modify the next seek's state later.
         VTDecompressionSessionWaitForAsynchronousFrames(session.decompressionSession)
-        lastPosition = 0
-        startTime = 0
+        timingLock.withLock { lastPosition = 0; startTime = 0 }
+    }
+
+    private func replaceSession(_ replacement: DecompressionSession) {
+        // A retired session's callbacks retain its format and may still read
+        // stream metadata. Drain it before the media close barrier can finish.
+        VTDecompressionSessionWaitForAsynchronousFrames(session.decompressionSession)
+        VTDecompressionSessionInvalidate(session.decompressionSession)
+        session = replacement
+    }
+
+    func drain() {
+        guard !closed else { return }
+        VTDecompressionSessionFinishDelayedFrames(session.decompressionSession)
+        VTDecompressionSessionWaitForAsynchronousFrames(session.decompressionSession)
     }
 
     func shutdown() {
+        guard !closed else { return }
+        drain()
         VTDecompressionSessionInvalidate(session.decompressionSession)
+        closed = true
     }
 
     func decode() {
-        lastPosition = 0
-        startTime = 0
+        timingLock.withLock { lastPosition = 0; startTime = 0 }
     }
 }
 

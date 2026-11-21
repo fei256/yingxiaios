@@ -10,11 +10,20 @@ public actor ScriptRuntime {
     public static var available: Bool { ScriptAssets.root != nil }
     private var sessions: [String: ScriptSession] = [:]
     private var recent: [String] = []
+    private var active: [String: Int] = [:]
+    private let startup = RuntimeStartupRegistry<ScriptSession>()
     private static let maximumSessions = 10
 
     public func request(site: Site, scriptURL: URL, params: [String: String], http: HTTPClient, origin: URL) async throws -> [String: JSONValue] {
         let started = ContinuousClock.now
-        let session = try await self.session(site: site, scriptURL: scriptURL, origin: origin, http: http)
+        let configuration = try self.configuration(site: site, scriptURL: scriptURL, origin: origin)
+        active[configuration.key, default: 0] += 1
+        defer {
+            active[configuration.key, default: 1] -= 1
+            if active[configuration.key] == 0 { active[configuration.key] = nil }
+            trimIdleSessions()
+        }
+        let session = try await self.session(configuration)
         try Task.checkCancellation()
         let envelope = try await session.call(params)
         if let message = PluginFailure.message(envelope) {
@@ -28,7 +37,11 @@ public actor ScriptRuntime {
         return try JSONDecoder().decode([String: JSONValue].self, from: Data(text.utf8))
     }
 
-    private func session(site: Site, scriptURL: URL, origin: URL, http: HTTPClient) async throws -> ScriptSession {
+    private struct Configuration: Sendable {
+        let key: String, api: String, sourceKey: String, ext: String, profile: URL, label: String
+    }
+
+    private func configuration(site: Site, scriptURL: URL, origin: URL) throws -> Configuration {
         var ext: String
         if let value = try site.pluginExtension(origin: origin) {
             ext = try value.string ?? String(decoding: JSONEncoder().encode(value), as: UTF8.self)
@@ -37,19 +50,52 @@ public actor ScriptRuntime {
         // its JAR spider's configuration (possibly encrypted text), so it reaches the port unchanged.
         if !ext.isEmpty, !ext.hasPrefix("{"), site.liteScript == nil { ext = (try? WebAddress.resolve(ext, relativeTo: origin).absoluteString) ?? ext }
         let key = PluginChecksum.sha256(Data((scriptURL.absoluteString + "\n" + site.key + "\n" + ext).utf8))
-        if let existing = sessions[key] {
-            recent.removeAll { $0 == key }; recent.append(key)
+        let profile = ScriptAssets.profiles.appendingPathComponent(PluginChecksum.sha256(Data((site.key + "\n" + origin.absoluteString).utf8)), isDirectory: true)
+        return Configuration(key: key, api: scriptURL.absoluteString, sourceKey: site.sourceKey,
+                             ext: ext, profile: profile, label: site.key)
+    }
+
+    private func session(_ configuration: Configuration) async throws -> ScriptSession {
+        if let existing = sessions[configuration.key] {
+            touch(configuration.key)
             return existing
         }
-        let profile = ScriptAssets.profiles.appendingPathComponent(PluginChecksum.sha256(Data((site.key + "\n" + origin.absoluteString).utf8)), isDirectory: true)
-        let session = try await ScriptSession.start(api: scriptURL.absoluteString, key: site.sourceKey, ext: ext, profile: profile, label: site.key)
+        return try await startup.value(for: configuration.key) {
+            if let cached = await self.cachedSession(configuration.key) { return cached }
+            let session = try await ScriptSession.start(api: configuration.api, key: configuration.sourceKey,
+                ext: configuration.ext, profile: configuration.profile, label: configuration.label)
+            do {
+                try Task.checkCancellation()
+                try await self.keep(session, for: configuration.key)
+                return session
+            } catch {
+                await session.closeAndWait()
+                throw error
+            }
+        }
+    }
+
+    private func cachedSession(_ key: String) -> ScriptSession? {
+        guard let session = sessions[key] else { return nil }
+        touch(key)
+        return session
+    }
+
+    private func keep(_ session: ScriptSession, for key: String) throws {
+        try Task.checkCancellation()
         sessions[key] = session
-        recent.append(key)
-        while recent.count > Self.maximumSessions {
-            let evicted = recent.removeFirst()
+        touch(key)
+        trimIdleSessions()
+    }
+
+    private func touch(_ key: String) { recent.removeAll { $0 == key }; recent.append(key) }
+
+    private func trimIdleSessions() {
+        while sessions.count > Self.maximumSessions,
+              let evicted = recent.first(where: { active[$0, default: 0] == 0 }) {
+            recent.removeAll { $0 == evicted }
             sessions.removeValue(forKey: evicted)?.close()
         }
-        return session
     }
 }
 
@@ -100,14 +146,14 @@ final class ScriptSession: @unchecked Sendable {
         session.thread.start()
         let bootFailure: String? = await session.thread.run(stopped: Optional("The script runtime stopped")) { session.boot() }
         if let bootFailure {
-            session.close()
+            await session.closeAndWait()
             throw TVError.unsupported(L10n.text("Plugin error: %@", String(bootFailure.prefix(300))))
         }
         let input = (try? String(decoding: JSONSerialization.data(withJSONObject: ["api": api, "key": key, "ext": ext]), as: UTF8.self)) ?? "{}"
         let envelope = await session.evaluate("__tvbox.init(\(input))", within: 60, cancellable: true)
-        if Task.isCancelled { session.close(); throw CancellationError() }
+        if Task.isCancelled { await session.closeAndWait(); throw CancellationError() }
         if envelope["value"]?.object?["ready"] == nil {
-            session.close()
+            await session.closeAndWait()
             let failure = envelope["value"]?.object?["error"]?.string ?? envelope["error"]?.string ?? "The script did not start"
             throw TVError.unsupported(L10n.text("Plugin error: %@", String(failure.prefix(300))))
         }
@@ -126,7 +172,7 @@ final class ScriptSession: @unchecked Sendable {
             return nil
         }
         if let failure {
-            session.close()
+            await session.closeAndWait()
             throw TVError.unsupported(L10n.text("Plugin error: %@", String(failure.prefix(300))))
         }
         return session
@@ -190,6 +236,20 @@ final class ScriptSession: @unchecked Sendable {
         thread.run {
             if let script = self.script { tv_script_free(script); self.script = nil }
         } then: { self.thread.cancel() }
+    }
+
+    func closeAndWait() async {
+        await thread.run(stopped: ()) {
+            if let script = self.script { tv_script_free(script); self.script = nil }
+        }
+        thread.cancel()
+    }
+
+    deinit {
+        let thread = thread, bridge = bridge, script = script
+        thread.run {
+            withExtendedLifetime(bridge) { if let script { tv_script_free(script) } }
+        } then: { thread.cancel() }
     }
 }
 

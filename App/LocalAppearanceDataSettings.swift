@@ -99,7 +99,7 @@ struct LocalBackupSettingsView: View {
                 run {
                     defer { selection.release() }
                     let data = try await selection.readData(maxBytes: LocalBackupArchive.maximumBytes)
-                    let (archive, payload) = try LocalBackupCoordinator.inspect(data)
+                    let (archive, payload) = try await LocalBackupCoordinator.inspect(data)
                     preview = payload; createdAt = archive.createdAt; selected = Set(LocalBackupCategory.allCases); status = ""
                 }
             }

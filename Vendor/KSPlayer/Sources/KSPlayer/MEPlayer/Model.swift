@@ -12,20 +12,6 @@ import FFmpegKit
 import UIKit
 #endif
 
-// MARK: enum
-
-enum MESourceState {
-    case idle
-    case opening
-    case opened
-    case reading
-    case seeking
-    case paused
-    case finished
-    case closed
-    case failed
-}
-
 // MARK: delegate
 
 public protocol OutputRenderSourceDelegate: AnyObject {
@@ -37,6 +23,7 @@ public protocol OutputRenderSourceDelegate: AnyObject {
 
 protocol CodecCapacityDelegate: AnyObject {
     func codecDidFinished(track: some CapacityProtocol)
+    func codecDidFailed(error: NSError)
 }
 
 protocol MEPlayerDelegate: AnyObject {
@@ -49,7 +36,7 @@ protocol MEPlayerDelegate: AnyObject {
 
 // MARK: protocol
 
-public protocol ObjectQueueItem {
+public protocol ObjectQueueItem: TimestampedQueueItem {
     var timebase: Timebase { get }
     var timestamp: Int64 { get set }
     var duration: Int64 { get set }
@@ -163,15 +150,6 @@ public extension KSOptions {
             return .bgra8Unorm
         }
     }
-}
-
-enum MECodecState {
-    case idle
-    case decoding
-    case flush
-    case closed
-    case failed
-    case finished
 }
 
 public struct Timebase {

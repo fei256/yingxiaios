@@ -2,6 +2,10 @@ import SwiftUI
 import TVCore
 
 struct LocalCacheSettingsView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @Environment(\.isLocalPageActive) private var pageActive
+    #endif
     @AppStorage("local.videoCache.enabled") private var enabled = true
     @AppStorage("local.videoCache.sizeGB") private var size = 1
     @AppStorage("local.playback.prefetchNext") private var prefetch = true
@@ -9,6 +13,13 @@ struct LocalCacheSettingsView: View {
     @State private var reusedBytes = 0
     @State private var cacheStatus: String?
     @State private var clearing = false
+    private var refreshActive: Bool {
+        #if os(iOS)
+        pageActive && scenePhase == .active
+        #else
+        scenePhase == .active
+        #endif
+    }
     var body: some View {
         SettingsPage(title: "视频缓存", symbol: "internaldrive") {
             SettingsGroup(title: "视频缓存", footer: "播放时在容量上限内提前缓存媒体数据；播放器顶部显示实际缓存量。切换媒体和退出后释放，用户下载单独保留。") {
@@ -34,12 +45,17 @@ struct LocalCacheSettingsView: View {
                 SettingsLinkRow(symbol: "arrow.down.circle", title: "已下载视频") { DownloadsView() }
             }
         }
-        .task(id: "\(enabled):\(size)") {
+        .task(id: "\(enabled):\(size):\(refreshActive)") {
+            guard refreshActive else { return }
             do {
                 try await MobileMediaServices.configureVideoCache(enabled: enabled, sizeGB: size)
+                guard !Task.isCancelled else { return }
                 cacheStatus = nil
-            } catch { cacheStatus = "缓存服务暂不可用，下次播放会按当前设置重试。" }
-            while !Task.isCancelled {
+            } catch {
+                guard !Task.isCancelled else { return }
+                cacheStatus = "缓存服务暂不可用，下次播放会按当前设置重试。"
+            }
+            while refreshActive && !Task.isCancelled {
                 await refreshUsage()
                 do { try await Task.sleep(nanoseconds: 2_000_000_000) } catch { return }
             }

@@ -12,19 +12,26 @@ import UniformTypeIdentifiers
     @PerceptionIgnored var nativeSourceReload: (() async -> Void)?
     @PerceptionIgnored private var settingsObserver: NSObjectProtocol?
     @PerceptionIgnored private var reloadingSettings = false
-    init() {
+    @PerceptionIgnored private let defaults: UserDefaults
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let preferences = LocalDanmakuPreferences.load(defaults: defaults)
+        enabled = preferences.enabled; automatic = preferences.automatic
+        opacity = preferences.opacity; fontSize = preferences.fontSize
         settingsObserver = NotificationCenter.default.addObserver(forName: LocalDanmakuPreferences.changed, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.reloadSettings() }
+            MainActor.assumeIsolated { self?.reloadSettings() }
         }
     }
     private func reloadSettings() {
         reloadingSettings = true
-        let defaults = UserDefaults.standard
-        let nextEnabled = LocalDanmakuPreferences.enabled()
-        let nextAutomatic = defaults.object(forKey: "danmakuAutoMatch") as? Bool ?? true
-        if enabled != nextEnabled { enabled = nextEnabled }
-        if automatic != nextAutomatic { automatic = nextAutomatic }
+        let preferences = LocalDanmakuPreferences.load(defaults: defaults)
+        if enabled != preferences.enabled { enabled = preferences.enabled }
+        if automatic != preferences.automatic { automatic = preferences.automatic }
+        if opacity != preferences.opacity { opacity = preferences.opacity }
+        if fontSize != preferences.fontSize { fontSize = preferences.fontSize }
         reloadingSettings = false
+        if !enabled || !automatic { cancelAutomatic() }
+        else if comments.isEmpty { startAutomatic(automaticContext) }
         nativeAutomatic?()
     }
     func sourceSelected() { cancelAutomatic(); selection.select(.source) }
@@ -36,28 +43,30 @@ import UniformTypeIdentifiers
     private(set) var track = ""
     private(set) var revision = UUID()
     var offset = 0.0
-    var enabled = UserDefaults.standard.object(forKey: "danmakuEnabled") == nil ? true : UserDefaults.standard.bool(forKey: "danmakuEnabled") {
+    var enabled: Bool {
         didSet {
-            UserDefaults.standard.set(enabled, forKey: "danmakuEnabled")
+            guard !reloadingSettings else { return }
+            defaults.set(enabled, forKey: "danmakuEnabled")
             if !enabled { cancelAutomatic() }
             else if comments.isEmpty { startAutomatic(automaticContext) }
-            if !reloadingSettings { nativeAutomatic?() }
+            nativeAutomatic?()
         }
     }
-    var automatic = UserDefaults.standard.object(forKey: "danmakuAutoMatch") == nil ? true : UserDefaults.standard.bool(forKey: "danmakuAutoMatch") {
+    var automatic: Bool {
         didSet {
-            UserDefaults.standard.set(automatic, forKey: "danmakuAutoMatch")
+            guard !reloadingSettings else { return }
+            defaults.set(automatic, forKey: "danmakuAutoMatch")
             if automatic { startAutomatic(automaticContext) } else { cancelAutomatic() }
-            if !reloadingSettings { nativeAutomatic?() }
+            nativeAutomatic?()
         }
     }
     /// Applies to every track, Bilibili's own and live rooms included; the player's danmaku menu sets it too.
-    var opacity = UserDefaults.standard.object(forKey: DanmakuStyle.opacityKey) as? Double ?? DanmakuStyle.standardOpacity {
-        didSet { UserDefaults.standard.set(opacity, forKey: DanmakuStyle.opacityKey) }
+    var opacity: Double {
+        didSet { if !reloadingSettings { defaults.set(opacity, forKey: DanmakuStyle.opacityKey) } }
     }
     /// Read by `DanmakuOverlay` from the same key, so it sizes every track, not only these comments.
-    var fontSize = UserDefaults.standard.object(forKey: DanmakuStyle.fontSizeKey) as? Double ?? DanmakuStyle.standardFontSize {
-        didSet { UserDefaults.standard.set(fontSize, forKey: DanmakuStyle.fontSizeKey) }
+    var fontSize: Double {
+        didSet { if !reloadingSettings { defaults.set(fontSize, forKey: DanmakuStyle.fontSizeKey) } }
     }
     private var generation = UUID()
     private var automaticTask: Task<Void, Never>?

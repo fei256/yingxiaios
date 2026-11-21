@@ -59,12 +59,13 @@ struct LocalMediaBadgeStore: Codable, Sendable {
         else { sources.append(source) }
     }
     enum BadgeError: LocalizedError {
-        case invalidAddress, emptyCatalog, tooMany
+        case invalidAddress, emptyCatalog, tooMany, changed
         var errorDescription: String? {
             switch self {
             case .invalidAddress: "请填写 HTTP / HTTPS 徽章 JSON 地址，文件不得超过 4 MB。"
             case .emptyCatalog: "该地址没有可用的媒体徽章规则。"
             case .tooMany: "最多可保存 30 个自定义徽章方案。"
+            case .changed: "该徽章方案已改变，请重新导入。"
             }
         }
     }

@@ -34,6 +34,7 @@ struct TransferPlan: Codable, Sendable {
         var name: String
         /// MPEG-TS that some hosts disguise behind an image header.
         var transportStream: Bool
+        var encryptionKey: Bool?
     }
     var kind: Kind
     var headers: [String: String]
@@ -41,6 +42,9 @@ struct TransferPlan: Codable, Sendable {
     var parts: [Part] = []
     /// The local HLS playlist, naming `parts` by their file names.
     var playlist: String?
+    /// Companion media playlists when `playlist` is a local master. Optional for saved v1 plans.
+    var playlists: [String: String]?
+    var hlsRevision: Int?
     var fileExtension: String?
     var quality: Int?
     /// DASH: the master playlist's EXT-X-STREAM-INF attributes.
@@ -59,7 +63,7 @@ enum TransferError: LocalizedError, Equatable {
     /// The address answered 401/403/404/410: links from most sources expire, so the episode is resolved again.
     case expired(Int)
     case http(Int)
-    case live, protected, notMedia, rangeLost, incomplete, noSpace(needed: Int64, available: Int64)
+    case live, protected, notMedia, rangeLost, incomplete, unsupportedHLS(String), noSpace(needed: Int64, available: Int64)
     var retriable: Bool {
         switch self {
         case .http(let status): status == 429 || status >= 500 || status == 0
@@ -76,6 +80,7 @@ enum TransferError: LocalizedError, Equatable {
         case .notMedia: L10n.text("This link didn't return a video.")
         case .rangeLost: L10n.text("The server stopped allowing resumed downloads. Retry to start again.")
         case .incomplete: L10n.text("The server closed the connection early.")
+        case .unsupportedHLS(let feature): L10n.text("This HLS playlist uses %@, which can't be downloaded yet.", feature)
         case .noSpace(let needed, let available):
             L10n.text("Not enough storage: this needs %@ more, and %@ is free.", Self.size(needed), Self.size(available))
         }
@@ -95,6 +100,7 @@ struct Transfer: Sendable {
     static let chunk: Int64 = 4 << 20
     /// Connections per download. Parallel ranges get past per-connection throttling on CDNs.
     static let connections = 4
+    private static let hlsRevision = 2
     let folder: URL
     let meter: DownloadMeter
     let session: URLSession
@@ -105,10 +111,17 @@ struct Transfer: Sendable {
 
     /// Downloads everything and returns the playable file's path inside the folder.
     func run() async throws -> String {
+        try Task.checkCancellation()
         try FileManager.default.createDirectory(at: folder.appending(path: "parts"), withIntermediateDirectories: true)
         var plan: TransferPlan
         if let data = try? Data(contentsOf: planFile), let saved = try? JSONDecoder().decode(TransferPlan.self, from: data) { plan = saved }
         else { plan = try await prepare(try await resolve()); try save(plan) }
+        // Old plans discarded the master, so they cannot say whether audio was external.
+        if plan.kind == .hls, plan.hlsRevision != Self.hlsRevision {
+            plan = try await renew(plan)
+            try Task.checkCancellation()
+            try save(plan)
+        }
         var renewals = 0
         while finishedFile(plan) == nil {
             try Task.checkCancellation()
@@ -117,6 +130,7 @@ struct Transfer: Sendable {
             let box = PlanBox(plan, file: planFile)
             do {
                 try await fetch(box)
+                try Task.checkCancellation()
                 plan = box.plan
                 try save(plan)
                 break
@@ -134,6 +148,7 @@ struct Transfer: Sendable {
             }
         }
         await note(.finishing)
+        try Task.checkCancellation()
         return try await finish(plan)
     }
 
@@ -156,8 +171,8 @@ struct Transfer: Sendable {
         }
         let mime = response.mimeType?.lowercased() ?? ""
         if mime.hasPrefix("text/html") || mime.hasPrefix("application/json") { throw TransferError.notMedia }
-        let ranged = response.statusCode == 206
-        let length = ranged ? Self.total(response) : (response.expectedContentLength > 0 ? response.expectedContentLength : nil)
+        let ranged = response.statusCode == 206 && Self.plainBody(response)
+        let length = ranged ? Self.total(response) : Self.bodyLength(response)
         let file = TransferPlan.RemoteFile(urls: [base], name: "media.part", length: length, ranged: ranged && length != nil)
         return TransferPlan(kind: .file, headers: headers, files: [file], fileExtension: Self.fileExtension(base, mime: mime, head: head))
     }
@@ -179,16 +194,53 @@ struct Transfer: Sendable {
 
     private func prepareHLS(_ playlist: String, base: URL, headers: [String: String]) async throws -> TransferPlan {
         var text = playlist, base = base, label: String?
+        var audio: [HLS.Rendition] = [], stream: [String: String] = [:]
         // A master playlist: take the best variant (by bandwidth), which may itself be a master.
         for _ in 0..<3 {
+            try HLS.checkFeatures(text)
             guard let best = HLS.variants(text, base: base).max(by: { $0.bandwidth < $1.bandwidth }) else { break }
+            if let group = best.attributes["VIDEO"],
+               try HLS.renditions(text, type: "VIDEO", group: group, base: base).contains(where: { $0.url != nil }) {
+                throw TransferError.unsupportedHLS("external video renditions")
+            }
+            if let group = best.attributes["AUDIO"] {
+                let renditions = try HLS.renditions(text, type: "AUDIO", group: group, base: base)
+                guard !renditions.isEmpty else { throw TransferError.notMedia }
+                if !audio.isEmpty, audio != renditions { throw TransferError.unsupportedHLS("nested audio groups") }
+                audio = renditions
+            }
+            stream = best.attributes
             label = best.height.map { "\($0)P" } ?? label
             let (data, response) = try await get([best.url], headers: headers, counts: false)
             guard Self.isPlaylist(data) else { throw TransferError.notMedia }
             text = String(decoding: data, as: UTF8.self); base = response.url ?? best.url
         }
-        let local = try HLS.localize(text, base: base)
-        return TransferPlan(kind: .hls, headers: headers, parts: local.parts, playlist: local.playlist, label: label)
+        guard HLS.variants(text, base: base).isEmpty else { throw TransferError.unsupportedHLS("deeply nested master playlists") }
+        var local = HLS.Localizer()
+        let video = try local.localize(text, base: base)
+        var failure: Error = TransferError.notMedia
+        for rendition in audio {
+            // With no URI, this rendition is already present in every video variant.
+            guard let address = rendition.url else {
+                return TransferPlan(kind: .hls, headers: headers, parts: local.parts, playlist: video,
+                                    hlsRevision: Self.hlsRevision, label: label)
+            }
+            do {
+                let (data, response) = try await get([address], headers: headers, counts: false)
+                guard Self.isPlaylist(data) else { throw TransferError.notMedia }
+                var candidate = local
+                let sound = try candidate.localize(String(decoding: data, as: UTF8.self), base: response.url ?? address, prefix: "audio-")
+                let master = try HLS.master(stream: stream, audio: rendition.attributes)
+                return TransferPlan(kind: .hls, headers: headers, parts: candidate.parts, playlist: master,
+                                    playlists: ["video.m3u8": video, "audio.m3u8": sound], hlsRevision: Self.hlsRevision, label: label)
+            } catch {
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                failure = error
+            }
+        }
+        if !audio.isEmpty { throw failure }
+        return TransferPlan(kind: .hls, headers: headers, parts: local.parts, playlist: video,
+                            hlsRevision: Self.hlsRevision, label: label)
     }
 
     /// Resolves the episode again after its links expired and carries the progress over when the
@@ -206,7 +258,16 @@ struct Transfer: Sendable {
                     return plan
                 }
             case .hls:
-                if plan.parts.count == old.parts.count, plan.playlist == old.playlist { return plan }
+                let sameParts = plan.parts.count == old.parts.count && zip(plan.parts, old.parts).allSatisfy {
+                    $0.name == $1.name && $0.range == $1.range && $0.transportStream == $1.transportStream
+                }
+                if sameParts, plan.playlist == old.playlist, plan.playlists == old.playlists { return plan }
+                // An old video-only plan can keep its pieces when the new master adds audio.
+                if old.hlsRevision == nil, plan.playlists?["video.m3u8"] == old.playlist,
+                   old.parts.count <= plan.parts.count,
+                   zip(plan.parts.prefix(old.parts.count), old.parts).allSatisfy({
+                       $0.name == $1.name && $0.range == $1.range && $0.transportStream == $1.transportStream
+                   }) { return plan }
             }
         }
         Diagnostics.shared.record(.info, "download", "renewed media differs; starting over folder=\(folder.lastPathComponent)")
@@ -217,7 +278,8 @@ struct Transfer: Sendable {
 
     /// A file download already moved into place (or rewrapped): the app quit while it was finishing.
     private func finishedFile(_ plan: TransferPlan) -> String? {
-        guard plan.kind == .file, !FileManager.default.fileExists(atPath: folder.appending(path: "parts").appending(path: plan.files[0].name).path) else { return nil }
+        guard plan.kind == .file, let file = plan.files.first,
+              !FileManager.default.fileExists(atPath: folder.appending(path: "parts").appending(path: file.name).path) else { return nil }
         return ["media." + (plan.fileExtension ?? "mp4"), DownloadLibrary.rewrappedName].first { FileManager.default.fileExists(atPath: folder.appending(path: $0).path) }
     }
 
@@ -234,9 +296,7 @@ struct Transfer: Sendable {
             done = plan.files.reduce(0) { $0 + ($1.ranged ? $1.done.count : 0) }
             total = plan.files.reduce(0) { $0 + $1.chunks }
         case .hls:
-            let present = plan.parts.compactMap { part -> Int64? in
-                (try? folder.appending(path: part.name).resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init)
-            }
+            let present = plan.parts.compactMap(partSize)
             saved = present.reduce(0, +); done = present.count; total = plan.parts.count
         }
         meter.reset(received: saved, parts: done, total: total, expected: plan.expected)
@@ -254,15 +314,18 @@ struct Transfer: Sendable {
         case .file, .dash:
             for index in plan.files.indices { try await fetch(file: index, box: box) }
         case .hls:
-            let pending = plan.parts.filter { !FileManager.default.fileExists(atPath: folder.appending(path: $0.name).path) }
+            let pending = plan.parts.filter { partSize($0) == nil }
             let queue = WorkQueue(pending)
             try await withThrowingTaskGroup(of: Void.self) { group in
                 for _ in 0..<min(Self.connections, pending.count) {
                     group.addTask {
                         while let part = queue.next() {
                             try Task.checkCancellation()
-                            var (data, _) = try await get([part.url], headers: plan.headers, range: part.range)
+                            var (data, _) = try await get([part.url], headers: plan.headers, range: part.range,
+                                                         expectedBytes: part.encryptionKey == true ? 16 : nil)
                             if part.transportStream { data = MediaPayload.transportStream(data) }
+                            try Task.checkCancellation()
+                            guard !data.isEmpty else { throw TransferError.notMedia }
                             let target = folder.appending(path: part.name)
                             try Self.writing { try data.write(to: target, options: .atomic) }
                             meter.finishedPart()
@@ -274,23 +337,39 @@ struct Transfer: Sendable {
         }
     }
 
+    private func partSize(_ part: TransferPlan.Part) -> Int64? {
+        guard let size = try? folder.appending(path: part.name).resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0 else { return nil }
+        if part.encryptionKey == true, size != 16 { return nil }
+        if let range = part.range, size != range.count { return nil }
+        return Int64(size)
+    }
+
     private func fetch(file index: Int, box: PlanBox) async throws {
         let file = box.plan.files[index], headers = box.plan.headers
         let target = folder.appending(path: "parts").appending(path: file.name)
         guard file.ranged, let length = file.length else {
-            // No ranges: one request into a fresh file.
+            // Every whole-body attempt starts from zero, including mirror and network retries.
             try? FileManager.default.removeItem(at: target)
             FileManager.default.createFile(atPath: target.path, contents: nil)
             let writer = try FileWriter(target)
+            defer { try? writer.close() }
+            box.reset(index)
             let before = meter.received
             do {
-                _ = try await get(file.urls, headers: headers, sink: { data in try writer.append(data) })
+                let (_, response) = try await get(file.urls, headers: headers, restart: { try writer.truncate(0) },
+                                                  sink: { data in try writer.append(data) })
+                try Task.checkCancellation()
+                let received = try writer.length
+                guard received > 0 else { throw TransferError.notMedia }
+                guard received == writer.appendedBytes else { throw TransferError.incomplete }
+                if let expected = Self.bodyLength(response), received != expected { throw TransferError.incomplete }
+                box.markWhole(index, length: received)
+                meter.setExpected(box.plan.expected)
             } catch {
+                try? writer.truncate(0)
                 meter.add(before - meter.received)
                 throw error
             }
-            try writer.close()
-            box.markWhole(index)
             meter.finishedPart()
             return
         }
@@ -325,13 +404,19 @@ struct Transfer: Sendable {
     /// Fetches one address (trying mirrors, retrying network failures with a pause) into memory, or into `sink`.
     /// Throws `expired` only when every mirror refused, since renewing the link is then the way on.
     func get(_ urls: [URL], headers: [String: String], range: ClosedRange<Int64>? = nil, limit: Int? = nil,
-             counts: Bool = true, sink: (@Sendable (Data) throws -> Void)? = nil) async throws -> (Data, HTTPURLResponse) {
+             counts: Bool = true, expectedBytes: Int64? = nil, restart: (@Sendable () throws -> Void)? = nil,
+             sink: (@Sendable (Data) throws -> Void)? = nil) async throws -> (Data, HTTPURLResponse) {
         var failure: Error = TransferError.http(0)
         for attempt in 0..<3 {
             if attempt > 0 { try await Task.sleep(for: .seconds(2 * attempt)) }
             var refused = 0
             for url in urls {
-                do { return try await once(url, headers: headers, range: range, limit: limit, counts: counts, sink: sink) }
+                do {
+                    try Task.checkCancellation()
+                    try restart?()
+                    return try await once(url, headers: headers, range: range, limit: limit, counts: counts,
+                                          expectedBytes: expectedBytes, sink: sink)
+                }
                 catch let error as TransferError {
                     failure = error
                     if case .expired = error { refused += 1; continue }
@@ -351,9 +436,12 @@ struct Transfer: Sendable {
     }
 
     private func once(_ url: URL, headers: [String: String], range: ClosedRange<Int64>?, limit: Int?, counts: Bool,
-                      sink: (@Sendable (Data) throws -> Void)?) async throws -> (Data, HTTPURLResponse) {
+                      expectedBytes: Int64?, sink: (@Sendable (Data) throws -> Void)?) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: url, timeoutInterval: 30)
         headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+        if !headers.keys.contains(where: { $0.lowercased() == "accept-encoding" }) {
+            request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        }
         if let range { request.setValue("bytes=\(range.lowerBound)-\(range.upperBound)", forHTTPHeaderField: "Range") }
         let collector = Collector(limit: limit)
         let meter = counts ? meter : nil
@@ -372,6 +460,20 @@ struct Transfer: Sendable {
         })
         do {
             let response = try await receiver.run(session.dataTask(with: request))
+            try Task.checkCancellation()
+            if limit == nil {
+                let received = collector.received
+                if let length = Self.bodyLength(response), received != length { throw TransferError.incomplete }
+                if let expectedBytes, received != expectedBytes { throw TransferError.incomplete }
+                if let range {
+                    guard Self.plainBody(response) else { throw TransferError.rangeLost }
+                    guard let answered = Self.contentRange(response), answered.range == range,
+                          received == Int64(range.count) else { throw TransferError.incomplete }
+                } else if response.statusCode == 206 {
+                    guard Self.plainBody(response), let answered = Self.contentRange(response), answered.range.lowerBound == 0,
+                          answered.range.upperBound == answered.total - 1, received == answered.total else { throw TransferError.rangeLost }
+                }
+            }
             return (collector.data, response)
         } catch {
             meter?.add(-collector.received)
@@ -382,19 +484,26 @@ struct Transfer: Sendable {
     // MARK: Finishing
 
     private func finish(_ plan: TransferPlan) async throws -> String {
+        try Task.checkCancellation()
         let parts = folder.appending(path: "parts")
         switch plan.kind {
         case .file:
+            guard let file = plan.files.first else { throw TransferError.notMedia }
             if let name = finishedFile(plan) {
                 try? FileManager.default.removeItem(at: parts)
                 return await DownloadLibrary.rewrap(name, in: folder)
             }
             let name = "media." + (plan.fileExtension ?? "mp4")
             try? FileManager.default.removeItem(at: folder.appending(path: name))
-            try FileManager.default.moveItem(at: parts.appending(path: plan.files[0].name), to: folder.appending(path: name))
+            try FileManager.default.moveItem(at: parts.appending(path: file.name), to: folder.appending(path: name))
             try? FileManager.default.removeItem(at: parts)
             return await DownloadLibrary.rewrap(name, in: folder)
         case .hls:
+            for (name, text) in plan.playlists ?? [:] {
+                try Task.checkCancellation()
+                guard name == "video.m3u8" || name == "audio.m3u8" else { throw TransferError.notMedia }
+                try Self.writing { try Data(text.utf8).write(to: folder.appending(path: name), options: .atomic) }
+            }
             try Self.writing { try Data((plan.playlist ?? "").utf8).write(to: folder.appending(path: "index.m3u8"), options: .atomic) }
             return "index.m3u8"
         case .dash:
@@ -425,7 +534,22 @@ struct Transfer: Sendable {
     }
     /// The full length from `Content-Range: bytes a-b/total`.
     static func total(_ response: HTTPURLResponse) -> Int64? {
-        (response.value(forHTTPHeaderField: "Content-Range")?.split(separator: "/").last).flatMap { Int64($0) }
+        contentRange(response)?.total
+    }
+    private static func contentRange(_ response: HTTPURLResponse) -> (range: ClosedRange<Int64>, total: Int64)? {
+        guard let match = response.value(forHTTPHeaderField: "Content-Range")?.firstMatch(of: /^bytes (\d+)-(\d+)\/(\d+)$/),
+              let first = Int64(match.1), let last = Int64(match.2), let total = Int64(match.3),
+              first >= 0, first <= last, last < total else { return nil }
+        return (first...last, total)
+    }
+    static func plainBody(_ response: HTTPURLResponse) -> Bool {
+        let coding = response.value(forHTTPHeaderField: "Content-Encoding")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return coding == nil || coding == "identity" || coding == ""
+    }
+    /// Content-Length measures the wire representation; URLSession delivers decoded bodies.
+    static func bodyLength(_ response: HTTPURLResponse) -> Int64? {
+        guard plainBody(response), response.expectedContentLength >= 0 else { return nil }
+        return response.expectedContentLength
     }
     static func fileExtension(_ url: URL, mime: String, head: Data = Data()) -> String {
         // The first bytes win over the name: cloud drives serve 4K MP4s named .mp3 from CDN addresses without one.
@@ -465,7 +589,16 @@ struct Transfer: Sendable {
 
 /// HLS playlists: picking a variant, and rewriting a media playlist to local files.
 enum HLS {
-    struct Variant { let bandwidth: Int; let height: Int?; let url: URL }
+    struct Variant { let bandwidth: Int; let height: Int?; let url: URL; let attributes: [String: String] }
+    struct Rendition: Equatable { let url: URL?; let attributes: [String: String] }
+
+    static func checkFeatures(_ text: String) throws {
+        for line in text.components(separatedBy: .newlines).map({ $0.trimmingCharacters(in: .whitespaces) }) {
+            if line.hasPrefix("#EXT-X-DEFINE:") || line.contains("{$") { throw TransferError.unsupportedHLS("playlist variables") }
+            if line.hasPrefix("#EXT-X-SESSION-KEY:") { throw TransferError.unsupportedHLS("session encryption keys") }
+            if line == "#EXT-X-I-FRAMES-ONLY" { throw TransferError.unsupportedHLS("I-frame-only media") }
+        }
+    }
 
     static func variants(_ text: String, base: URL) -> [Variant] {
         var result: [Variant] = []
@@ -474,9 +607,9 @@ enum HLS {
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("#EXT-X-STREAM-INF:") { pending = attributes(String(line.dropFirst("#EXT-X-STREAM-INF:".count))) }
             else if let fields = pending, !line.isEmpty, !line.hasPrefix("#") {
-                if let url = URL(string: line, relativeTo: base)?.absoluteURL {
+                if let url = try? resolve(line, base: base) {
                     let height = fields["RESOLUTION"]?.split(separator: "x").last.flatMap { Int($0) }
-                    result.append(Variant(bandwidth: Int(fields["BANDWIDTH"] ?? "") ?? 0, height: height, url: url))
+                    result.append(Variant(bandwidth: Int(fields["BANDWIDTH"] ?? "") ?? 0, height: height, url: url, attributes: fields))
                 }
                 pending = nil
             }
@@ -484,73 +617,136 @@ enum HLS {
         return result
     }
 
+    static func renditions(_ text: String, type: String, group: String, base: URL) throws -> [Rendition] {
+        var result: [Rendition] = []
+        for raw in text.components(separatedBy: .newlines) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix("#EXT-X-MEDIA:") else { continue }
+            let fields = attributes(String(line.dropFirst("#EXT-X-MEDIA:".count)))
+            guard fields["TYPE"] == type, fields["GROUP-ID"] == group else { continue }
+            guard fields["NAME"]?.isEmpty == false else { throw TransferError.notMedia }
+            let url = try fields["URI"].map { try resolve($0, base: base) }
+            result.append(Rendition(url: url, attributes: fields))
+        }
+        guard result.filter({ $0.attributes["DEFAULT"] == "YES" }).count <= 1 else { throw TransferError.notMedia }
+        return result.enumerated().sorted {
+            func rank(_ rendition: Rendition) -> Int {
+                rendition.attributes["DEFAULT"] == "YES" ? 0 : rendition.attributes["AUTOSELECT"] == "YES" ? 1 : 2
+            }
+            return (rank($0.element), $0.offset) < (rank($1.element), $1.offset)
+        }.map(\.element)
+    }
+
+    static func master(stream: [String: String], audio: [String: String]) throws -> String {
+        var stream = stream, audio = audio
+        // This download contains the selected video/audio pair. Optional alternative
+        // camera angles, captions and subtitle choices are not referenced by the local master.
+        for key in ["VIDEO", "SUBTITLES", "CLOSED-CAPTIONS"] { stream[key] = nil }
+        stream["AUDIO"] = "download-audio"
+        audio["GROUP-ID"] = "download-audio"; audio["URI"] = "audio.m3u8"
+        audio["DEFAULT"] = "YES"; audio["AUTOSELECT"] = "YES"
+        return ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-MEDIA:" + (try attributeList(audio)),
+                "#EXT-X-STREAM-INF:" + (try attributeList(stream)), "video.m3u8"].joined(separator: "\n") + "\n"
+    }
+
     /// The playlist with every key, initialization section and segment pointed at a file under `parts/`,
     /// and those files' remote addresses. Byte ranges become whole files.
     static func localize(_ text: String, base: URL) throws -> (playlist: String, parts: [TransferPlan.Part]) {
-        guard text.contains("#EXT-X-ENDLIST") else { throw TransferError.live }
-        var lines: [String] = [], parts: [TransferPlan.Part] = []
-        var named: [String: String] = [:]
-        var pendingRange: (length: Int64, offset: Int64?)?
-        var ends: [URL: Int64] = [:]
-        var segments = 0
-        func resolve(_ value: String) throws -> URL {
-            guard let url = URL(string: value, relativeTo: base)?.absoluteURL, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { throw TransferError.protected }
-            return url
+        var local = Localizer()
+        let playlist = try local.localize(text, base: base)
+        return (playlist, local.parts)
+    }
+
+    /// Shares keys, initialization sections and repeated byte ranges across both tracks.
+    struct Localizer {
+        private enum Kind: Hashable { case key, map, segment }
+        private struct Asset: Hashable { let url: URL; let range: ClosedRange<Int64>?; let kind: Kind; let transportStream: Bool }
+        private var named: [Asset: String] = [:]
+        private var auxiliaries = 0
+        private(set) var parts: [TransferPlan.Part] = []
+
+        private mutating func asset(_ url: URL, range: ClosedRange<Int64>?, kind: Kind, name: String, transportStream: Bool = false) -> String {
+            let asset = Asset(url: url, range: range, kind: kind, transportStream: transportStream)
+            if let existing = named[asset] { return existing }
+            named[asset] = name
+            parts.append(.init(url: url, range: range, name: name, transportStream: transportStream, encryptionKey: kind == .key))
+            if kind != .segment { auxiliaries += 1 }
+            return name
         }
-        for raw in text.components(separatedBy: .newlines) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty { continue }
-            if line.hasPrefix("#EXT-X-KEY:") {
-                let fields = attributes(String(line.dropFirst("#EXT-X-KEY:".count)))
-                guard let method = fields["METHOD"], method != "NONE" else { lines.append(line); continue }
-                // AES-128 keys are plain files; SAMPLE-AES and FairPlay need a key server at play time.
-                guard method == "AES-128", let uri = fields["URI"] else { throw TransferError.protected }
-                let url = try resolve(uri)
-                let name = named[url.absoluteString] ?? {
-                    let name = "parts/key-\(named.count).key"
-                    parts.append(.init(url: url, range: nil, name: name, transportStream: false))
-                    return name
-                }()
-                named[url.absoluteString] = name
-                lines.append(line.replacingOccurrences(of: "URI=\"\(uri)\"", with: "URI=\"\(name)\""))
-            } else if line.hasPrefix("#EXT-X-MAP:") {
-                let fields = attributes(String(line.dropFirst("#EXT-X-MAP:".count)))
-                guard let uri = fields["URI"] else { continue }
-                let url = try resolve(uri)
-                let range = fields["BYTERANGE"].flatMap(byteRange).map { value -> ClosedRange<Int64> in
-                    let start = value.offset ?? 0
-                    return start...start + value.length - 1
+
+        mutating func localize(_ text: String, base: URL, prefix: String = "") throws -> String {
+            try HLS.checkFeatures(text)
+            let input = text.components(separatedBy: .newlines).map {
+                $0.trimmingCharacters(in: .whitespaces.union(CharacterSet(charactersIn: "\u{FEFF}")))
+            }.filter { !$0.isEmpty }
+            guard input.first == "#EXTM3U" else { throw TransferError.notMedia }
+            guard input.contains("#EXT-X-ENDLIST") else { throw TransferError.live }
+            var lines: [String] = [], pendingRange: (length: Int64, offset: Int64?)?
+            var previous: (url: URL, end: Int64)?, segments = 0, duration = false, encrypted = false, hasIV = false, mapped = false
+            for line in input {
+                if line.hasPrefix("#EXT-X-KEY:") {
+                    var fields = HLS.attributes(String(line.dropFirst("#EXT-X-KEY:".count)))
+                    guard let method = fields["METHOD"] else { throw TransferError.protected }
+                    if method == "NONE" { encrypted = false; hasIV = false; lines.append("#EXT-X-KEY:METHOD=NONE"); continue }
+                    guard method == "AES-128", fields["KEYFORMAT"] == nil || fields["KEYFORMAT"] == "identity", let uri = fields["URI"] else { throw TransferError.protected }
+                    encrypted = true; hasIV = fields["IV"] != nil
+                    let url = try HLS.resolve(uri, base: base)
+                    fields["URI"] = asset(url, range: nil, kind: .key, name: "parts/key-\(auxiliaries).key")
+                    lines.append("#EXT-X-KEY:" + (try HLS.attributeList(fields)))
+                } else if line.hasPrefix("#EXT-X-MAP:") {
+                    let fields = HLS.attributes(String(line.dropFirst("#EXT-X-MAP:".count)))
+                    guard let uri = fields["URI"], !encrypted || hasIV else { throw TransferError.protected }
+                    let url = try HLS.resolve(uri, base: base)
+                    var range: ClosedRange<Int64>?
+                    if let text = fields["BYTERANGE"] {
+                        let value = try HLS.byteRange(text)
+                        guard let offset = value.offset else { throw TransferError.unsupportedHLS("initialization byte ranges without offsets") }
+                        range = try HLS.byteRange(length: value.length, at: offset)
+                    }
+                    let name = asset(url, range: range, kind: .map, name: "parts/init-\(auxiliaries).\(HLS.segmentExtension(url, fallback: "mp4"))")
+                    mapped = true
+                    lines.append("#EXT-X-MAP:URI=\"\(name)\"")
+                } else if line.hasPrefix("#EXT-X-BYTERANGE:") {
+                    guard pendingRange == nil else { throw TransferError.notMedia }
+                    pendingRange = try HLS.byteRange(String(line.dropFirst("#EXT-X-BYTERANGE:".count)))
+                } else if line.hasPrefix("#EXTINF:") {
+                    guard !duration, let value = line.dropFirst("#EXTINF:".count).split(separator: ",", maxSplits: 1).first,
+                          let seconds = Double(value), seconds.isFinite, seconds >= 0 else { throw TransferError.notMedia }
+                    duration = true; lines.append(line)
+                } else if line.hasPrefix("#") {
+                    if line.hasPrefix("#EXT-X-STREAM-INF:") || line.hasPrefix("#EXT-X-MEDIA:") || line.contains("URI=") {
+                        throw TransferError.unsupportedHLS("additional media playlist references")
+                    }
+                    lines.append(line)
+                } else {
+                    guard duration else { throw TransferError.notMedia }
+                    let url = try HLS.resolve(line, base: base)
+                    var range: ClosedRange<Int64>?
+                    if let pending = pendingRange {
+                        let offset: Int64
+                        if let explicit = pending.offset { offset = explicit }
+                        else if let previous, previous.url == url { offset = previous.end }
+                        else { throw TransferError.unsupportedHLS("implicit byte ranges without a matching previous segment") }
+                        range = try HLS.byteRange(length: pending.length, at: offset)
+                    }
+                    previous = range.map { (url, $0.upperBound + 1) }
+                    pendingRange = nil; duration = false
+                    let ext = HLS.segmentExtension(url, fallback: mapped ? "m4s" : "ts")
+                    let name = "parts/" + prefix + String(format: "%05d.", segments) + ext
+                    segments += 1
+                    lines.append(asset(url, range: range, kind: .segment, name: name,
+                                       transportStream: ext == "ts" && !encrypted && range == nil))
                 }
-                let key = url.absoluteString + (range.map { "#\($0)" } ?? "")
-                let name = named[key] ?? {
-                    let name = "parts/init-\(named.count).\(segmentExtension(url, fallback: "mp4"))"
-                    parts.append(.init(url: url, range: range, name: name, transportStream: false))
-                    return name
-                }()
-                named[key] = name
-                lines.append("#EXT-X-MAP:URI=\"\(name)\"")
-            } else if line.hasPrefix("#EXT-X-BYTERANGE:") {
-                pendingRange = byteRange(String(line.dropFirst("#EXT-X-BYTERANGE:".count)))
-            } else if line.hasPrefix("#") {
-                lines.append(line)
-            } else {
-                let url = try resolve(line)
-                var range: ClosedRange<Int64>?
-                if let pending = pendingRange {
-                    let start = pending.offset ?? ends[url] ?? 0
-                    range = start...start + pending.length - 1
-                    ends[url] = start + pending.length
-                }
-                pendingRange = nil
-                let fileExtension = segmentExtension(url, fallback: "ts")
-                let name = String(format: "parts/%05d.", segments) + fileExtension
-                segments += 1
-                parts.append(.init(url: url, range: range, name: name, transportStream: fileExtension == "ts"))
-                lines.append(name)
             }
+            guard segments > 0, !duration, pendingRange == nil else { throw TransferError.notMedia }
+            return lines.joined(separator: "\n") + "\n"
         }
-        guard segments > 0 else { throw TransferError.notMedia }
-        return (lines.joined(separator: "\n") + "\n", parts)
+    }
+
+    private static func resolve(_ value: String, base: URL) throws -> URL {
+        guard !value.isEmpty, let url = URL(string: value, relativeTo: base)?.absoluteURL,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { throw TransferError.protected }
+        return url
     }
 
     /// Segment files keep a real media extension; disguised ones (.png, .jpg, none) are MPEG-TS.
@@ -559,10 +755,26 @@ enum HLS {
         return ["ts", "m4s", "mp4", "m4a", "m4v", "aac", "mp3", "cmfv", "cmfa", "vtt", "webvtt"].contains(value) ? value : fallback
     }
     /// `length[@offset]`, from EXT-X-BYTERANGE or a BYTERANGE attribute.
-    private static func byteRange(_ text: String) -> (length: Int64, offset: Int64?)? {
-        let fields = text.split(separator: "@")
-        guard let length = fields.first.flatMap({ Int64($0) }), length > 0 else { return nil }
-        return (length, fields.count > 1 ? Int64(fields[1]) : nil)
+    private static func byteRange(_ text: String) throws -> (length: Int64, offset: Int64?) {
+        let fields = text.split(separator: "@", omittingEmptySubsequences: false)
+        guard fields.count <= 2, let length = fields.first.flatMap({ Int64($0) }), length > 0 else { throw TransferError.notMedia }
+        if fields.count == 1 { return (length, nil) }
+        guard let offset = Int64(fields[1]), offset >= 0 else { throw TransferError.notMedia }
+        return (length, offset)
+    }
+    private static func byteRange(length: Int64, at offset: Int64) throws -> ClosedRange<Int64> {
+        let (end, overflow) = offset.addingReportingOverflow(length)
+        guard offset >= 0, !overflow, end > offset else { throw TransferError.notMedia }
+        return offset...end - 1
+    }
+    private static func attributeList(_ fields: [String: String]) throws -> String {
+        let quoted: Set<String> = ["URI", "GROUP-ID", "NAME", "LANGUAGE", "ASSOC-LANGUAGE", "AUDIO", "VIDEO", "SUBTITLES",
+                                   "CLOSED-CAPTIONS", "CODECS", "CHANNELS", "CHARACTERISTICS", "KEYFORMAT", "KEYFORMATVERSIONS"]
+        return try fields.keys.sorted().map { key in
+            let value = fields[key]!
+            guard !value.contains("\""), !value.contains(where: \.isNewline) else { throw TransferError.notMedia }
+            return key + "=" + (quoted.contains(key) ? "\"" + value + "\"" : value)
+        }.joined(separator: ",")
     }
     /// An attribute list (`KEY=value,KEY="quoted, value"`).
     static func attributes(_ text: String) -> [String: String] {
@@ -583,6 +795,7 @@ final class DownloadMeter: @unchecked Sendable {
     var received: Int64 { lock.withLock { bytes } }
     var snapshot: (received: Int64, parts: Int, total: Int, expected: Int64?) { lock.withLock { (bytes, parts, total, expectedBytes) } }
     func add(_ count: Int64) { lock.withLock { bytes += count } }
+    func setExpected(_ expected: Int64?) { lock.withLock { expectedBytes = expected } }
     func finishedPart() { lock.withLock { parts += 1 } }
     func reset(received: Int64, parts: Int, total: Int, expected: Int64?) {
         lock.withLock { bytes = received; self.parts = parts; self.total = total; expectedBytes = expected }
@@ -606,7 +819,7 @@ final class PlanBox: @unchecked Sendable {
         }
         if let snapshot { try? JSONEncoder().encode(snapshot).write(to: self.file, options: .atomic) }
     }
-    func markWhole(_ file: Int) { lock.withLock { value.files[file].done = [0] } }
+    func markWhole(_ file: Int, length: Int64) { lock.withLock { value.files[file].done = [0]; value.files[file].length = length } }
     func reset(_ file: Int) { lock.withLock { value.files[file].done = [] } }
 }
 
@@ -628,17 +841,21 @@ final class WorkQueue<Item: Sendable>: @unchecked Sendable {
 final class FileWriter: @unchecked Sendable {
     private let lock = NSLock()
     private let handle: FileHandle
+    private var appended: Int64 = 0
     init(_ url: URL) throws { handle = try FileHandle(forWritingTo: url) }
+    var appendedBytes: Int64 { lock.withLock { appended } }
+    var length: Int64 { get throws { try lock.withLock { Int64(try handle.seekToEnd()) } } }
     func truncate(_ length: Int64) throws {
-        try lock.withLock {
+        try Transfer.writing { try lock.withLock {
             if try handle.seekToEnd() != UInt64(length) { try handle.truncate(atOffset: UInt64(length)) }
-        }
+            appended = 0
+        } }
     }
     func write(_ data: Data, at offset: UInt64) throws {
         try Transfer.writing { try lock.withLock { try handle.seek(toOffset: offset); try handle.write(contentsOf: data) } }
     }
     func append(_ data: Data) throws {
-        try Transfer.writing { try lock.withLock { try handle.seekToEnd(); try handle.write(contentsOf: data) } }
+        try Transfer.writing { try lock.withLock { try handle.seekToEnd(); try handle.write(contentsOf: data); appended += Int64(data.count) } }
     }
     func close() throws { try lock.withLock { try handle.close() } }
 }

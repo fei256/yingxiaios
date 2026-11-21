@@ -7,9 +7,9 @@
 
 import Foundation
 
-/// 这个是单生产者，多消费者的阻塞队列和单生产者，多消费者的阻塞环形队列。并且环形队列还要有排序的能力。
-/// 因为seek需要清空队列，所以导致他是多消费者。后续可以看下能不能改成单消费者的。
-public class CircularBuffer<Item: ObjectQueueItem> {
+/// A locked ring buffer with optional frame ordering and bounded producers.
+/// Seek generations reject callbacks that wake after a timeline flush.
+public class CircularBuffer<Item: TimestampedQueueItem> {
     private var _buffer = ContiguousArray<Item?>()
 //    private let semaphore = DispatchSemaphore(value: 0)
     private let condition = NSCondition()
@@ -36,27 +36,47 @@ public class CircularBuffer<Item: ObjectQueueItem> {
     private var _count: Int { Int(tailIndex &- headIndex) }
     @inline(__always)
     public var count: Int {
-//        condition.lock()
-//        defer { condition.unlock() }
-        Int(tailIndex &- headIndex)
+        condition.lock()
+        defer { condition.unlock() }
+        return _count
     }
 
-    public internal(set) var fps: Float = 24
-    public private(set) var maxCount: Int
+    private var _fps: Float = 24
+    public internal(set) var fps: Float {
+        get { condition.lock(); defer { condition.unlock() }; return _fps }
+        set { condition.lock(); defer { condition.unlock() }; _fps = newValue }
+    }
+    @discardableResult func setFPS(_ value: Float, ifGeneration generation: UInt64) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        guard !destroyed, generation == _generation else { return false }
+        _fps = value
+        return true
+    }
+    private var _maxCount: Int
+    public var maxCount: Int {
+        condition.lock()
+        defer { condition.unlock() }
+        return _maxCount
+    }
     private var mask: UInt
     public init(initialCapacity: Int = 256, sorted: Bool = false, expanding: Bool = true) {
         self.expanding = expanding
         self.sorted = sorted
         let capacity = initialCapacity.nextPowerOf2()
         _buffer = ContiguousArray<Item?>(repeating: nil, count: Int(capacity))
-        maxCount = Int(capacity)
-        mask = UInt(maxCount - 1)
+        _maxCount = Int(capacity)
+        mask = UInt(_maxCount - 1)
         assert(_buffer.count == capacity)
     }
 
     public func push(_ value: Item, generation: UInt64? = nil, accepting: (() -> Bool)? = nil) {
         condition.lock()
         defer { condition.unlock() }
+        while !expanding && _count >= _maxCount && !destroyed {
+            if let generation, generation != _generation { return }
+            condition.wait()
+        }
         guard !destroyed, generation == nil || generation == _generation,
               accepting?() != false else { return }
         if _buffer[Int(tailIndex & mask)] != nil {
@@ -79,37 +99,26 @@ public class CircularBuffer<Item: ObjectQueueItem> {
             }
         }
         tailIndex &+= 1
-        if _count >= maxCount {
+        if _count >= _maxCount {
             if expanding {
                 // No more room left for another append so grow the buffer now.
                 _doubleCapacity()
-            } else {
-                condition.wait()
-            }
-        } else {
-            // 只有数据了。就signal。因为有可能这是最后的数据了。
-            if _count == 1 {
-                condition.signal()
             }
         }
+        // Producers and consumers share this condition. A single signal can
+        // wake the wrong kind of waiter and leave an empty/full queue asleep.
+        if _count == 1 { condition.broadcast() }
     }
 
-    public func pop(wait: Bool = false, where predicate: ((Item, Int) -> Bool)? = nil) -> Item? {
+    public func pop(wait: Bool = false, interrupted: (() -> Bool)? = nil,
+                    where predicate: ((Item, Int) -> Bool)? = nil) -> Item? {
         condition.lock()
         defer { condition.unlock() }
-        if destroyed {
-            return nil
+        while headIndex == tailIndex, !destroyed {
+            guard wait, interrupted?() != true else { return nil }
+            condition.wait()
         }
-        if headIndex == tailIndex {
-            if wait {
-                condition.wait()
-                if destroyed || headIndex == tailIndex {
-                    return nil
-                }
-            } else {
-                return nil
-            }
-        }
+        guard !destroyed else { return nil }
         let index = Int(headIndex & mask)
         guard let item = _buffer[index] else {
             assertionFailure("value is nil of index: \(index) headIndex: \(headIndex),tailIndex: \(tailIndex), bufferCount: \(_buffer.count), mask: \(mask)")
@@ -118,18 +127,24 @@ public class CircularBuffer<Item: ObjectQueueItem> {
         if let predicate, !predicate(item, _count) {
             return nil
         } else {
+            let wasFull = !expanding && _count == _maxCount
             headIndex &+= 1
             _buffer[index] = nil
-            if _count == maxCount >> 1 {
-                condition.signal()
-            }
+            if wasFull { condition.broadcast() }
             return item
         }
+    }
+
+    public func wake() {
+        condition.lock()
+        condition.broadcast()
+        condition.unlock()
     }
 
     public func search(where predicate: (Item) -> Bool) -> [Item] {
         condition.lock()
         defer { condition.unlock() }
+        let previousHead = headIndex
         var i = headIndex
         var result = [Item]()
         while i < tailIndex {
@@ -160,6 +175,7 @@ public class CircularBuffer<Item: ObjectQueueItem> {
             }
             i += 1
         }
+        if headIndex != previousHead { condition.broadcast() }
         return result
     }
 
@@ -208,23 +224,30 @@ public class CircularBuffer<Item: ObjectQueueItem> {
         headIndex = 0
         tailIndex = 0
         _buffer.removeAll(keepingCapacity: !destroyed)
-        _buffer.append(contentsOf: ContiguousArray<Item?>(repeating: nil, count: destroyed ? 1 : maxCount))
+        _buffer.append(contentsOf: ContiguousArray<Item?>(repeating: nil, count: destroyed ? 1 : _maxCount))
         condition.broadcast()
     }
 
     public func shutdown() {
+        condition.lock()
+        defer { condition.unlock() }
+        guard !destroyed else { return }
         destroyed = true
-        flush()
+        _generation &+= 1
+        headIndex = 0
+        tailIndex = 0
+        _buffer = ContiguousArray<Item?>(repeating: nil, count: 1)
+        condition.broadcast()
     }
 
     private func _doubleCapacity() {
         var newBacking: ContiguousArray<Item?> = []
-        let newCapacity = maxCount << 1 // Double the storage.
+        let newCapacity = _maxCount << 1 // Double the storage.
         precondition(newCapacity > 0, "Can't double capacity of \(_buffer.count)")
         assert(newCapacity % 2 == 0)
         newBacking.reserveCapacity(newCapacity)
         let head = Int(headIndex & mask)
-        newBacking.append(contentsOf: _buffer[head ..< maxCount])
+        newBacking.append(contentsOf: _buffer[head ..< _maxCount])
         if head > 0 {
             newBacking.append(contentsOf: _buffer[0 ..< head])
         }
@@ -233,10 +256,12 @@ public class CircularBuffer<Item: ObjectQueueItem> {
         headIndex = 0
         tailIndex = UInt(newBacking.count &- repeatitionCount)
         _buffer = newBacking
-        maxCount = newCapacity
-        mask = UInt(maxCount - 1)
+        _maxCount = newCapacity
+        mask = UInt(_maxCount - 1)
     }
 }
+
+extension CircularBuffer: @unchecked Sendable where Item: Sendable {}
 
 extension FixedWidthInteger {
     /// Returns the next power of two.

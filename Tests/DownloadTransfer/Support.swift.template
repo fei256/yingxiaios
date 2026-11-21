@@ -1,0 +1,70 @@
+import Foundation
+
+// Only application plumbing and branches these HTTP fixtures never enter are
+// stand-ins. The runner inserts the real DownloadLibrary file helpers and
+// Remux filename predicate here, without changing the production downloader.
+struct Channel: Sendable {
+    let url: URL
+    let headers: [String: String]
+}
+
+enum L10n {
+    static func text(_ key: String, _ arguments: CVarArg...) -> String {
+        arguments.isEmpty ? key : String(format: key, arguments: arguments)
+    }
+}
+
+enum TVError: Error { case unsupported(String) }
+enum HTTPClient { static let userAgent = "DownloadTransfer regression fixture" }
+enum LogLevel { case info, warning }
+final class Diagnostics: Sendable {
+    static let shared = Diagnostics()
+    func record(_ level: LogLevel, _ category: String, _ message: String) { }
+    func failure(_ category: String, _ context: String, _ error: Error) { }
+}
+
+enum DownloadLibrary {
+    // {{DOWNLOAD_LIBRARY_HELPERS}}
+}
+
+enum Remux {
+    // {{REMUX_NAME_HELPER}}
+}
+
+enum Rewrap {
+    struct Selection: Sendable {
+        struct Stream: Sendable { let codec: String }
+        let streams: [Stream]
+        let dropped: [Stream]
+    }
+    static func needed(_ source: URL) async throws -> Bool {
+        fatalError("Unexpected native remux dependency in HTTP transfer checks")
+    }
+    static func run(_ source: URL, to target: URL, progress: @Sendable (Double) -> Void) async throws -> Selection? {
+        fatalError("Unexpected native remux dependency in HTTP transfer checks")
+    }
+}
+
+struct DashFiles: Sendable {
+    let video: [URL], audio: [URL]
+    let videoInitialization: ClosedRange<Int>, videoIndex: ClosedRange<Int>
+    let audioInitialization: ClosedRange<Int>?, audioIndex: ClosedRange<Int>?
+    let headers: [String: String]
+    let quality: Int, streamInfo: String, label: String
+    let cid: String?, duration: Double?
+}
+enum DashStreams {
+    static let scheme = "tvbox-dash"
+    static func files(for url: URL, quality: Int? = nil) -> DashFiles? {
+        precondition(url.scheme != scheme, "Unexpected DASH dependency in HTTP transfer checks")
+        return nil
+    }
+    static func media(_ index: SegmentIndex) -> String {
+        fatalError("Unexpected DASH dependency in HTTP transfer checks")
+    }
+}
+struct SegmentIndex: Sendable {
+    init(sidx: Data, at offset: Int, initialization: ClosedRange<Int>, url: URL) throws {
+        fatalError("Unexpected DASH dependency in HTTP transfer checks")
+    }
+}

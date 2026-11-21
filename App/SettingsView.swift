@@ -1307,6 +1307,10 @@ struct LicensesView: View {
 }
 
 struct DiagnosticsView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    #if os(iOS)
+    @Environment(\.isLocalPageActive) private var pageActive
+    #endif
     @State private var entries: [LogEntry] = []
     @State private var level = "all"
     @State private var search = ""
@@ -1316,6 +1320,13 @@ struct DiagnosticsView: View {
     @State private var exportURL: URL?
     @State private var exporting = false
     @State private var selected: LogEntry?
+    private var refreshActive: Bool {
+        #if os(iOS)
+        pageActive && scenePhase == .active
+        #else
+        scenePhase == .active
+        #endif
+    }
     private var filtered: [LogEntry] {
         entries.reversed().filter {
             (level == "all" || $0.level.rawValue == level) &&
@@ -1358,11 +1369,13 @@ struct DiagnosticsView: View {
             .screenBackdrop()
             .screenTitle(L10n.text("Diagnostic Logs"))
             .sheet(item: $selected) { entry in WithPerceptionTracking { DiagnosticDetail(entry: entry) } }
-            .task {
+            .task(id: "\(refreshActive):\(live)") {
+                guard refreshActive else { return }
                 await refresh()
-                while !Task.isCancelled {
+                while refreshActive && live && !Task.isCancelled {
                     do { try await Task.sleep(for: .seconds(2)) } catch { break }
-                    if live { await refresh() }
+                    guard refreshActive, live, !Task.isCancelled else { return }
+                    await refresh()
                 }
             }
         }

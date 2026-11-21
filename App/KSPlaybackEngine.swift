@@ -550,7 +550,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         hasPicture = player.videoOutput?.pixelBuffer != nil || (player.isReadyToPlay && player.tracks(mediaType: .video).isEmpty)
         if hasPicture { hasPresentedPicture = true }
         isReady = player.isReadyToPlay
-        buffering = wantsPlaying && !failedVideo && player.loadState != .playable
+        buffering = wantsPlaying && !failedVideo && (player.loadState != .playable || player.isAudioInterrupted)
         paused = !wantsPlaying
         sampleStoppedPicture(player.displayedVideoTime)
         bytesRead = max(0, player.dynamicInfo?.bytesRead ?? 0)

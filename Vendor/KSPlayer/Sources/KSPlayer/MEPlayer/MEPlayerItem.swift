@@ -11,7 +11,7 @@ public final class MEPlayerItem: Sendable {
     private let url: URL
     private let options: KSOptions
     private let operationQueue = OperationQueue()
-    private let condition = NSCondition()
+    private let reader = PlaybackReaderCoordinator()
     private var formatCtx: UnsafeMutablePointer<AVFormatContext>?
     private let cacheInputIO: PlaybackInputIO
     private var outputFormatCtx: UnsafeMutablePointer<AVFormatContext>?
@@ -20,7 +20,6 @@ public final class MEPlayerItem: Sendable {
     private var openOperation: BlockOperation?
     private var readOperation: BlockOperation?
     private var closeOperation: BlockOperation?
-    private var seekingCompletionHandler: ((Bool) -> Void)?
     // 没有音频数据可以渲染
     private var isAudioStalled = true
     private var audioClock = KSClock()
@@ -34,7 +33,12 @@ public final class MEPlayerItem: Sendable {
     private var videoClock = KSClock()
     private var isFirst = true
     private var isSeek = false
-    private var allPlayerItemTracks = [PlayerItemTrackProtocol]()
+    private let trackCollectionLock = NSLock()
+    private var itemTracks = [PlayerItemTrackProtocol]()
+    private var allPlayerItemTracks: [PlayerItemTrackProtocol] {
+        get { trackCollectionLock.withLock { itemTracks } }
+        set { trackCollectionLock.withLock { itemTracks = newValue } }
+    }
     private var maxFrameDuration = 10.0
     private var videoAudioTracks = [CapacityProtocol]()
     private var videoTrack: SyncPlayerItemTrack<VideoVTBFrame>?
@@ -46,7 +50,8 @@ public final class MEPlayerItem: Sendable {
     private var lastVideoDisplayTime = CACurrentMediaTime()
     public private(set) var chapters: [Chapter] = []
     public var currentPlaybackTime: TimeInterval {
-        state == .seeking ? seekTime : (mainClock().time - startTime).seconds
+        let snapshot = reader.snapshot
+        return snapshot.state == .seeking ? snapshot.seekTime : (mainClock().time - startTime).seconds
     }
 
     /// 最近一帧绘制到 display layer 的 PTS——即画面上正在显示的那一帧。每次
@@ -54,11 +59,12 @@ public final class MEPlayerItem: Sendable {
     /// 与 `currentPlaybackTime` 的差别：后者跟 audioClock，而 audioClock 在 prefill /
     /// cold-start / seek 后会瞬间被推到音频 buffer 头，跑在画面之前。
     public var displayedVideoTime: TimeInterval {
-        state == .seeking ? seekTime : (videoClock.time - startTime).seconds
+        let snapshot = reader.snapshot
+        return snapshot.state == .seeking ? snapshot.seekTime : (videoClock.time - startTime).seconds
     }
     func relativeVideoTime(for timestamp: CMTime) -> TimeInterval { (timestamp - startTime).seconds }
 
-    private var seekTime = TimeInterval(0)
+    private var seekTime: TimeInterval { reader.snapshot.seekTime }
     private var subtitlePrerollDeadline: CFTimeInterval?
     private var injectedSubtitlePackets: [Packet] = []
     private var colorProbeDeadline: TimeInterval?
@@ -86,29 +92,43 @@ public final class MEPlayerItem: Sendable {
     #endif
     public private(set) var fileSize: Double = 0
     public private(set) var naturalSize = CGSize.zero
+    private let failureLock = NSLock()
+    private var sourceError: NSError?
     private var error: NSError? {
-        didSet {
-            if error != nil {
-                state = .failed
-            }
+        get { failureLock.withLock { sourceError } }
+        set {
+            guard let newValue, reader.transition(from: [.idle, .opening, .opened, .reading, .paused, .seeking, .finished], to: .failed) else { return }
+            failureLock.withLock { sourceError = newValue }
+            readerStateChanged(.failed)
         }
     }
 
-    private var state = MESourceState.idle {
-        didSet {
-            switch state {
-            case .opened:
-                // Publish readiness after readThread can accept an immediate resume seek.
-                break
-            case .reading:
-                timer.fireDate = Date.distantPast
-            case .closed:
-                timer.invalidate()
-            case .failed:
-                delegate?.sourceDidFailed(error: error)
-                timer.fireDate = Date.distantFuture
-            case .idle, .opening, .seeking, .paused, .finished:
-                break
+    private var state: MESourceState { reader.snapshot.state }
+
+    @discardableResult private func transitionReader(from allowed: [MESourceState], to next: MESourceState,
+                                                     revision: UInt64? = nil) -> Bool {
+        guard reader.transition(from: allowed, to: next, revision: revision) else { return false }
+        readerStateChanged(next)
+        return true
+    }
+
+    private func readerStateChanged(_ next: MESourceState) {
+        // A failure delegate can synchronously close this reader. It must never
+        // be called while the condition/predicate lock is held.
+        if next == .closed {
+            let timer = self.timer
+            // The native close can release the reader before the main queue
+            // runs. Retain the timer itself so its run-loop registration ends.
+            runOnMainThread { timer.invalidate() }
+            return
+        }
+        if next == .failed { delegate?.sourceDidFailed(error: error) }
+        runOnMainThread { [weak self] in
+            guard let self, self.state == next else { return }
+            switch next {
+            case .reading: self.timer.fireDate = Date.distantPast
+            case .failed: self.timer.fireDate = Date.distantFuture
+            default: break
             }
         }
     }
@@ -252,8 +272,7 @@ extension MEPlayerItem {
         var result = avformat_open_input(&self.formatCtx, urlString, nil, &avOptions)
         av_dict_free(&avOptions)
         if result == AVError.eof.code {
-            state = .finished
-            delegate?.sourceDidFinished()
+            if transitionReader(from: [.opening], to: .finished) { delegate?.sourceDidFinished() }
             return
         }
         guard result == 0 else {
@@ -317,8 +336,7 @@ extension MEPlayerItem {
         if videoTrack == nil, audioTrack == nil {
             error = NSError(description: "FFmpeg found no playable audio or video tracks.")
         } else {
-            state = .opened
-            read()
+            if transitionReader(from: [.opening], to: .opened) { read() }
         }
     }
 
@@ -534,11 +552,12 @@ extension MEPlayerItem {
     }
 
     private func read() {
+        guard let reservation = reader.reserveReader() else { return }
         readOperation = BlockOperation { [weak self] in
             guard let self else { return }
             Thread.current.name = (self.operationQueue.name ?? "") + "_read"
             Thread.current.stackSize = KSOptions.stackSize
-            self.readThread()
+            self.readThread(reservation: reservation)
         }
         readOperation?.queuePriority = .veryHigh
         readOperation?.qualityOfService = .userInteractive
@@ -547,7 +566,9 @@ extension MEPlayerItem {
         }
     }
 
-    private func readThread() {
+    private func readThread(reservation: UInt64) {
+        defer { reader.releaseReader(reservation) }
+        guard [.opened, .reading, .seeking, .paused].contains(state) else { return }
         let notifyReady = state == .opened
         if state == .opened {
             if options.startPlayTime > 0 {
@@ -575,24 +596,21 @@ extension MEPlayerItem {
                 videoClock.time = timestamp
                 KSLog("start PlayTime: \(timestamp.seconds) spend Time: \(CACurrentMediaTime() - seekStartTime)")
             }
-            state = .reading
+            guard transitionReader(from: [.opened], to: .reading) else { return }
         }
         allPlayerItemTracks.forEach { $0.decode() }
         if notifyReady, state == .reading { delegate?.sourceDidOpened() }
-        while [MESourceState.paused, .seeking, .reading].contains(state) {
-            if state == .paused {
-                condition.wait()
-            }
-            if state == .seeking {
+        while let command = reader.nextCommand(reader: reservation) {
+            if case let .seek(request) = command {
                 colorProbePackets.removeAll(); colorProbePacketIndex = 0
                 dolbyPacketPairer?.reset()
                 inlineDolbyConverters.values.forEach { $0.reset() }
-                let seekToTime = seekTime
+                let seekToTime = request.time
                 let clockGeneration = audioClockLock.withLock { audioClockGeneration }
                 injectedSubtitlePackets = []
                 let subtitlePreroll = readSubtitlePreroll(at: seekToTime)
                 let time = mainClock().time
-                var increase = Int64(seekTime + startTime.seconds - time.seconds)
+                var increase = Int64(seekToTime + startTime.seconds - time.seconds)
                 var seekFlags = options.seekFlags
                 let timeStamp: Int64
                 if seekByBytes {
@@ -645,19 +663,19 @@ extension MEPlayerItem {
                     do { try warmDolbyMetadata(at: seekToTime) }
                     catch {
                         if state == .closed { return }
-                        if seekToTime != seekTime || audioClockLock.withLock({ audioClockGeneration != clockGeneration }) {
+                        if !reader.accepts(request) || audioClockLock.withLock({ audioClockGeneration != clockGeneration }) {
                             continue
                         }
                         self.error = NSError(description: "杜比视界 P8.1 跳转元数据恢复失败，请从头播放或切换线路。")
                         return
                     }
-                    if seekToTime != seekTime || audioClockLock.withLock({ audioClockGeneration != clockGeneration }) {
+                    if !reader.accepts(request) || audioClockLock.withLock({ audioClockGeneration != clockGeneration }) {
                         continue
                     }
                     result = avformat_seek_file(formatCtx, -1, seekMin, timeStamp, seekMax, seekFlags)
                     if result < 0 {
                         if state == .closed { return }
-                        if seekToTime != seekTime || audioClockLock.withLock({ audioClockGeneration != clockGeneration }) {
+                        if !reader.accepts(request) || audioClockLock.withLock({ audioClockGeneration != clockGeneration }) {
                             continue
                         }
                         self.error = NSError(description: "杜比视界跳转输入位置恢复失败，请重新播放。")
@@ -668,7 +686,7 @@ extension MEPlayerItem {
                 if state == .closed {
                     break
                 }
-                if seekToTime != seekTime || audioClockLock.withLock({ audioClockGeneration != clockGeneration }) {
+                if !reader.accepts(request) || audioClockLock.withLock({ audioClockGeneration != clockGeneration }) {
                     continue
                 }
                 #if DEBUG
@@ -682,23 +700,24 @@ extension MEPlayerItem {
                 }
                 // Detach the completed request before invoking the application. Its callback
                 // can immediately enqueue the next seek and must keep its own completion.
-                let completion = seekingCompletionHandler
-                seekingCompletionHandler = nil
+                guard let completion = reader.finishSeek(request) else { continue }
                 let seekClockTime = CMTime(seconds: seekToTime, preferredTimescale: time.timescale) + startTime
-                audioClockLock.withLock { audioClock.time = seekClockTime }
+                audioClockLock.withLock {
+                    if audioClockGeneration == clockGeneration { audioClock.time = seekClockTime }
+                }
                 videoClock.time = CMTime(seconds: seekToTime, preferredTimescale: time.timescale) + startTime
-                state = .reading
+                readerStateChanged(.reading)
                 let succeeded = result >= 0
                 DispatchQueue.main.async {
                     // KSMEPlayer flushes the old audio output during completion.
                     // Keep audio callbacks disabled until that flush has happened,
                     // and only the current seek generation may re-enable them.
-                    completion?(succeeded)
+                    completion(succeeded)
                     self.finishAudioClockSeek(time: seekClockTime, generation: clockGeneration)
                 }
-            } else if state == .reading {
+            } else if case let .read(revision) = command {
                 autoreleasepool {
-                    _ = reading()
+                    _ = reading(revision: revision)
                 }
             }
         }
@@ -927,7 +946,7 @@ extension MEPlayerItem {
         }
     }
 
-    private func reading() -> Int32 {
+    private func reading(revision: UInt64) -> Int32 {
         defer { cacheInputIO.publishBytes() }
         let packet = Packet()
         guard let corePacket = packet.corePacket else {
@@ -936,13 +955,11 @@ extension MEPlayerItem {
         let readResult: Int32
         do { readResult = try readColorPacket(into: corePacket) }
         catch {
-            if state == .closed { return 0 }
+            guard reader.acceptsRead(revision: revision) else { return 0 }
             self.error = NSError(description: "杜比视界 P7 转 P8.1 失败：原始 RPU 或对应视频帧不可用，请切换线路。")
             return AVError.invalidData.code
         }
-        if state == .closed {
-            return 0
-        }
+        guard reader.acceptsRead(revision: revision) else { return 0 }
         if readResult == 0 {
             if let outputFormatCtx, let formatCtx {
                 let index = Int(corePacket.pointee.stream_index)
@@ -1031,7 +1048,7 @@ extension MEPlayerItem {
                     }
                 } else {
                     allPlayerItemTracks.forEach { $0.isEndOfFile = true }
-                    state = .finished
+                    transitionReader(from: [.reading, .paused], to: .finished, revision: revision)
                 }
             } else {
                 //                        if IS_AVERROR_INVALIDDATA(readResult)
@@ -1061,16 +1078,11 @@ extension MEPlayerItem {
     }
 
     private func pause() {
-        if state == .reading {
-            state = .paused
-        }
+        transitionReader(from: [.reading], to: .paused)
     }
 
     private func resume() {
-        if state == .paused {
-            state = .reading
-            condition.signal()
-        }
+        transitionReader(from: [.paused], to: .reading)
     }
 }
 
@@ -1095,7 +1107,7 @@ extension MEPlayerItem: MediaPlayback {
     }
 
     public func prepareToPlay() {
-        state = .opening
+        guard transitionReader(from: [.idle], to: .opening) else { return }
         openOperation = BlockOperation { [weak self] in
             guard let self else { return }
             Thread.current.name = (self.operationQueue.name ?? "") + "_open"
@@ -1110,15 +1122,20 @@ extension MEPlayerItem: MediaPlayback {
     }
 
     public func shutdown() {
-        guard state != .closed else { return }
+        guard let closing = reader.close() else { return }
         invalidateAudioClockUpdates()
-        state = .closed
-        av_packet_free(&outputPacket)
-        stopRecord()
+        readerStateChanged(.closed)
+        // Wake both packet consumers and full frame producers before waiting
+        // for the reader. Sync decode can itself be blocked on its frame queue.
+        allPlayerItemTracks.forEach { $0.shutdown() }
+        if let completion = closing.completion { DispatchQueue.main.async { completion(false) } }
         // 故意循环引用。等结束了。才释放
         let closeOperation = BlockOperation {
             Thread.current.name = (self.operationQueue.name ?? "") + "_close"
             self.allPlayerItemTracks.forEach { $0.shutdown() }
+            self.allPlayerItemTracks.forEach { $0.finishShutdown() }
+            self.stopRecord()
+            av_packet_free(&self.outputPacket)
             self.colorProbePackets.removeAll(); self.colorProbePacketIndex = 0
             self.dolbyPacketPairer = nil
             self.inlineDolbyConverters.removeAll()
@@ -1147,14 +1164,8 @@ extension MEPlayerItem: MediaPlayback {
             openOperation.cancel()
             closeOperation.addDependency(openOperation)
         }
-        operationQueue.addOperation(closeOperation)
-        condition.signal()
-        if options.syncDecodeVideo || options.syncDecodeAudio {
-            DispatchQueue.global().async { [weak self] in
-                self?.allPlayerItemTracks.forEach { $0.shutdown() }
-            }
-        }
         self.closeOperation = closeOperation
+        operationQueue.addOperation(closeOperation)
     }
 
     func stopRecord() {
@@ -1164,32 +1175,28 @@ extension MEPlayerItem: MediaPlayback {
     }
 
     public func seek(time: TimeInterval, completion: @escaping ((Bool) -> Void)) {
-        if state == .reading || state == .paused || state == .finished || state == .seeking {
-            invalidateAudioClockUpdates()
-        }
-        if state == .reading || state == .paused {
-            seekTime = time
-            state = .seeking
-            seekingCompletionHandler = completion
-            condition.broadcast()
-            allPlayerItemTracks.forEach { $0.seek(time: time + startTime.seconds) }
-        } else if state == .finished {
-            seekTime = time
-            state = .seeking
-            seekingCompletionHandler = completion
-            read()
-        } else if state == .seeking {
-            seekTime = time
-            seekingCompletionHandler = completion
-        } else {
+        guard time.isFinite, [.reading, .paused, .finished, .seeking].contains(state) else {
             DispatchQueue.main.async { completion(false) }
             return
         }
+        // Clock invalidation precedes publishing the seek command. The reader
+        // can immediately take that command on another worker.
+        invalidateAudioClockUpdates()
+        guard let queued = reader.enqueueSeek(time: time, completion: completion) else {
+            DispatchQueue.main.async { completion(false) }
+            return
+        }
+        queued.superseded?(false)
+        guard reader.accepts(queued.seek) else { return }
+        allPlayerItemTracks.forEach { $0.seek(time: queued.seek.time + startTime.seconds) }
+        if queued.restartReader { read() }
         isAudioStalled = audioTrack == nil
     }
 }
 
 extension MEPlayerItem: CodecCapacityDelegate {
+    func codecDidFailed(error: NSError) { self.error = error }
+
     func codecDidChangeCapacity() {
         let loadingState = options.playable(capacitys: videoAudioTracks, isFirst: isFirst, isSeek: isSeek)
         delegate?.sourceDidChange(loadingState: loadingState)

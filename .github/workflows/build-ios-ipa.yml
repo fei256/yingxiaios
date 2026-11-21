@@ -37,6 +37,10 @@ on:
       - 'Tests/DetailAppearance/**'
       - 'Tests/PlaybackCache/**'
       - 'Tests/TMDB/**'
+      - 'Tests/RuntimeLifecycle/**'
+      - 'Tests/PlaybackStability/**'
+      - 'Tests/SettingsLifecycle/**'
+      - 'Tests/DownloadTransfer/**'
       - 'Sources/**'
       - 'Vendor/**'
       - 'Package.swift'
@@ -57,7 +61,7 @@ jobs:
   metadata-tests:
     if: github.event_name != 'workflow_dispatch' || !inputs.journal_preview_only
     runs-on: ${{ inputs.test_runner || 'macos-15' }}
-    timeout-minutes: 10
+    timeout-minutes: 15
     defaults:
       run:
         shell: bash
@@ -83,6 +87,45 @@ jobs:
             Tests/PlaybackCache/progress.swift -o build/ci/cache-progress-checks
           build/ci/cache-progress-checks 2>&1 | tee build/ci/cache-progress-checks.log
           node --test Tests/TMDB/transport.test.mjs 2>&1 | tee build/ci/tmdb-transport-checks.log
+      - name: Test production runtime startup and completion lifecycle
+        run: |
+          xcrun swiftc -swift-version 6 -parse-as-library \
+            Sources/TVCore/NodeSourceCompletion.swift Sources/TVCore/RuntimeStartupRegistry.swift \
+            Tests/RuntimeLifecycle/checks.swift -o build/ci/runtime-lifecycle-checks
+          build/ci/runtime-lifecycle-checks build/ci/runtime-lifecycle-checks.json \
+            2>&1 | tee build/ci/runtime-lifecycle-checks.log
+      - name: Test production playback synchronization and resource ownership
+        run: |
+          xcrun swiftc -swift-version 6 -parse-as-library \
+            Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackSynchronization.swift \
+            Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/CircularBuffer.swift \
+            Tests/PlaybackStability/checks.swift -o build/ci/playback-stability-checks
+          build/ci/playback-stability-checks 2>&1 | tee build/ci/playback-stability-checks.log
+          xcrun swiftc -swift-version 6 -parse-as-library -sanitize=thread \
+            Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackSynchronization.swift \
+            Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/CircularBuffer.swift \
+            Tests/PlaybackStability/checks.swift -o build/ci/playback-stability-tsan
+          build/ci/playback-stability-tsan 2>&1 | tee build/ci/playback-stability-tsan.log
+      - name: Test production settings and delayed native imports
+        run: |
+          node --test Tests/SettingsLifecycle/ai-revision.test.mjs \
+            2>&1 | tee build/ci/ai-revision-checks.log
+          python3 Tests/SettingsLifecycle/prepare-native-checks.py
+          xcrun swiftc -swift-version 6 -parse-as-library \
+            build/ci/settings-lifecycle/ProductionDeclarations.swift \
+            Sources/TVCore/LocalDanmakuPreferences.swift Sources/TVCore/DanmakuTrackSelection.swift \
+            Sources/TVCore/TMDBServiceSettings.swift Sources/TVCore/LocalDetailEpisodeNumbers.swift \
+            App/PlayerBadgeRules.swift App/LocalMediaBadgeStore.swift App/LocalMediaBadgeImporter.swift \
+            Tests/SettingsLifecycle/Support.swift Tests/SettingsLifecycle/checks.swift \
+            -o build/ci/settings-lifecycle/checks
+          build/ci/settings-lifecycle/checks build/ci/settings-lifecycle/results.json \
+            2>&1 | tee build/ci/settings-lifecycle/checks.log
+      - name: Test production download retries and HLS audio integrity
+        run: |
+          mkdir -p build/ci/download-transfer
+          python3 -B Tests/DownloadTransfer/run_checks.py \
+            --report build/ci/download-transfer/results.json \
+            2>&1 | tee build/ci/download-transfer/checks.log
       - name: Upload metadata and cache test reports
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
@@ -92,6 +135,14 @@ jobs:
             build/ci/tmdb-checks.*
             build/ci/cache-progress-checks.log
             build/ci/tmdb-transport-checks.log
+            build/ci/runtime-lifecycle-checks.json
+            build/ci/runtime-lifecycle-checks.log
+            build/ci/playback-stability*.log
+            build/ci/ai-revision-checks.log
+            build/ci/settings-lifecycle/*.json
+            build/ci/settings-lifecycle/*.log
+            build/ci/download-transfer/*.json
+            build/ci/download-transfer/*.log
           retention-days: 14
           if-no-files-found: ignore
   native-tests:
@@ -488,6 +539,7 @@ jobs:
         uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5, Node 24
         with:
           key: ios-native-v3-${{ runner.os }}-${{ runner.arch }}-xcode16.4-${{ steps.cache-keys.outputs.native }}
+          restore-keys: ios-native-v3-${{ runner.os }}-${{ runner.arch }}-xcode16.4-
           path: |
             build/tools
             build/download-cache

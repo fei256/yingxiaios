@@ -14,9 +14,10 @@ public actor EmbeddedNodeHost {
               Bundle.main.url(forResource: "main", withExtension: "mjs", subdirectory: "NodeHost") != nil else { return false }
         return FileManager.default.fileExists(atPath: frameworks.appendingPathComponent("NodeMobile.framework/NodeMobile").path)
     }()
-    private struct Control: Decodable { var port: Int?; var token: String?; var error: String? }
+    private typealias Control = NodeHostControl
     private var control: Task<Control, Error>?
     private var relistening: Task<Control, Error>?
+    private var sourceCancellations: [String: (ticket: UUID, task: Task<Void, Never>)] = [:]
     private let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 150
@@ -160,7 +161,7 @@ public actor EmbeddedNodeHost {
     }
 
     private func send(_ body: Data, to control: Control, timeout: TimeInterval = 150, controlOnly: Bool = false) async throws -> Data {
-        guard let port = control.port, let token = control.token else {
+        guard control.usable, let port = control.port, let token = control.token else {
             throw TVError.unsupported(control.error ?? L10n.text("The CatPawOpen runtime stopped. Quit and reopen the app to use these sources."))
         }
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/call")!, timeoutInterval: timeout)
@@ -169,7 +170,13 @@ public actor EmbeddedNodeHost {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = body
         let transport = controlOnly ? sourceControlSession : session
-        return try await transport.data(for: request).0
+        let (data, response) = try await transport.data(for: request)
+        if controlOnly {
+            guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+                throw NodeSourceCompletion.Failure.invalidReply
+            }
+        }
+        return data
     }
 
     /// A cancelled URLSession request closes its socket before Node's source handler
@@ -177,6 +184,7 @@ public actor EmbeddedNodeHost {
     /// that handler/HTTP cleanup finished. Detached cleanup does not inherit cancellation.
     private func sendSource(_ body: Data, to control: Control, operationID: String) async throws -> Data {
         try Task.checkCancellation()
+        try control.requireUsable(fallback: L10n.text("The CatPawOpen runtime stopped. Quit and reopen the app to use these sources."))
         var input = try JSONDecoder().decode([String: JSONValue].self, from: body)
         input["operationId"] = .string(operationID)
         let tagged = try JSONEncoder().encode(input)
@@ -196,26 +204,31 @@ public actor EmbeddedNodeHost {
     }
 
     private func cancelSource(_ id: String, control: Control) async {
-        _ = try? await Task.detached { try await self.waitForSourceCompletion(id, control: control, cancel: true) }.value
+        if let pending = sourceCancellations[id] { await pending.task.value; return }
+        let ticket = UUID()
+        let task = Task.detached { _ = try? await self.waitForSourceCompletion(id, control: control, cancel: true) }
+        sourceCancellations[id] = (ticket, task)
+        await task.value
+        if sourceCancellations[id]?.ticket == ticket { sourceCancellations[id] = nil }
     }
 
     private func waitForSourceCompletion(_ id: String, control: Control, cancel: Bool) async throws {
         let input: [String: JSONValue] = ["sourceOperation": .string(cancel ? "cancelAndWait" : "wait"), "operationId": .string(id)]
         let body = try JSONEncoder().encode(input)
-        var current = control
-        while true {
-            do {
-                let answer = try await send(body, to: current, controlOnly: true)
+        try await NodeSourceCompletion.wait(control: control,
+            fallback: L10n.text("The CatPawOpen runtime stopped. Quit and reopen the app to use these sources."),
+            poll: { current in
+                let answer = try await self.send(body, to: current, controlOnly: true)
                 let envelope = try JSONDecoder().decode([String: JSONValue].self, from: answer)
-                if envelope["completed"] == .bool(true) { return }
-            } catch let error as URLError where error.code == .cannotConnectToHost || error.code == .networkConnectionLost {
-                if let fresh = try? await relisten(after: current) { current = fresh }
-            } catch {
-                // A long-poll transport deadline says nothing about the actual source
-                // worker. Retry this single waiter while retaining its admission slot.
-            }
-            try? await Task.sleep(for: .milliseconds(250))
-        }
+                guard case let .bool(completed)? = envelope["completed"] else { throw NodeSourceCompletion.Failure.invalidReply }
+                return completed
+            }, refresh: { current in try await self.relisten(after: current) },
+            latest: { Self.persistedControl() })
+    }
+
+    private static func persistedControl() -> Control? {
+        let file = storageRoot.appendingPathComponent("control.json")
+        return (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Control.self, from: $0) }
     }
 
     /// Starts Node at most once; a failed start stays failed until the app relaunches.

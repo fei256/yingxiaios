@@ -18,21 +18,38 @@ protocol PlayerItemTrackProtocol: CapacityProtocol, AnyObject {
     func putPacket(packet: Packet)
 //    func getOutputRender<Frame: ObjectQueueItem>(where predicate: ((Frame) -> Bool)?) -> Frame?
     func shutdown()
+    func finishShutdown()
 }
 
 class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomStringConvertible {
-    var seekTime = 0.0
+    private let trackState = PlaybackTrackState()
+    var seekTime: TimeInterval {
+        get { trackState.seekTime }
+        set { trackState.seekTime = newValue }
+    }
     fileprivate let options: KSOptions
-    fileprivate var decoderMap = [Int32: DecodeProtocol]()
-    fileprivate var state = MECodecState.idle {
-        didSet {
-            if state == .finished {
-                seekTime = 0
-            }
-        }
+    fileprivate let decoders = PlaybackResourceRegistry<Int32, DecodeProtocol>()
+    private let decoderControlQueue = DispatchQueue(label: "ks.player.sync.decode")
+    private struct DecoderFailure {
+        let packet: Packet
+        let decoder: DecodeProtocol
+        let error: NSError
+        let generation: UInt64
+    }
+    private let decoderFailures = PlaybackEventMailbox<DecoderFailure>()
+    fileprivate var hasDecoderFailures: Bool { decoderFailures.hasEvents }
+    fileprivate var state: MECodecState {
+        get { trackState.state }
+        set { trackState.transition(to: newValue) }
     }
 
-    var isEndOfFile: Bool = false
+    var isEndOfFile: Bool {
+        get { trackState.isEndOfFile }
+        set {
+            trackState.isEndOfFile = newValue
+            if newValue { endOfFileChanged() }
+        }
+    }
     var packetCount: Int { 0 }
     let description: String
     weak var delegate: CodecCapacityDelegate?
@@ -76,22 +93,22 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
             // and a cue can begin before the target while remaining visible.
             // Their SubtitlePart search owns expiry/selection; MEFrame's zero
             // duration must not discard the active cue during decode pre-roll.
-            self.seekTime = self.options.isAccurateSeek && self.mediaType != .subtitle ? time : 0
-            self.isEndOfFile = false
-            self.state = .flush
+            self.trackState.seek(to: self.options.isAccurateSeek && self.mediaType != .subtitle ? time : 0)
         }
         isLoopModel = false
     }
 
     func putPacket(packet: Packet) {
-        let generation = outputRenderQueue.generation
-        packet.decodeGeneration = generation
-        if state == .flush {
-            decoderMap.values.forEach { $0.doFlushCodec() }
-            guard outputRenderQueue.perform(ifGeneration: generation, { self.state = .decoding }) else { return }
-        }
-        if state == .decoding {
-            doDecode(packet: packet)
+        decoderControlQueue.sync {
+            processDecoderFailures()
+            let generation = outputRenderQueue.generation
+            packet.decodeGeneration = generation
+            if state == .flush {
+                decoders.values.forEach { $0.doFlushCodec() }
+                guard outputRenderQueue.perform(ifGeneration: generation, { self.state = .decoding }) else { return }
+            }
+            if state == .decoding { doDecode(packet: packet) }
+            processDecoderFailures()
         }
     }
 
@@ -106,11 +123,25 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
     }
 
     func shutdown() {
-        if state == .idle {
-            return
-        }
         state = .closed
         outputRenderQueue.shutdown()
+    }
+
+    /// Called by the close worker after the demux reader has returned. The
+    /// first shutdown only wakes producers; this barrier owns native release.
+    func finishShutdown() {
+        decoderControlQueue.sync { releaseDecoders() }
+    }
+
+    fileprivate func releaseDecoders() {
+        decoders.takeAll().forEach { $0.shutdown() }
+        _ = decoderFailures.takeAll()
+    }
+
+    fileprivate func endOfFileChanged() {}
+
+    fileprivate func decoderFailureQueued() {
+        decoderControlQueue.async { [weak self] in self?.processDecoderFailures() }
     }
 
     private var lastPacketBytes = Int32(0)
@@ -150,7 +181,7 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
             }
         }
         lastPacketBytes += packet.size
-        let decoder = decoderMap.value(for: packet.assetTrack.trackID, default: makeDecode(assetTrack: packet.assetTrack))
+        let decoder = decoders.value(for: packet.assetTrack.trackID, creating: { makeDecode(assetTrack: packet.assetTrack) })
         #if DEBUG
         if mediaType == .video {
             traceDecode("in", generation: generation, detail: "\(packet.seconds)/\(packet.corePacket?.pointee.flags ?? 0)/\(type(of: decoder))")
@@ -163,7 +194,7 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
             }
             guard self.state != .closed, self.state != .failed,
                   self.outputRenderQueue.generation == generation,
-                  self.decoderMap[packet.assetTrack.trackID] === decoder else { return }
+                  self.decoders.value(for: packet.assetTrack.trackID) === decoder else { return }
             do {
 //                if packet.assetTrack.mediaType == .video {
 //                    print("[video] decode time: \(CACurrentMediaTime()-startTime)")
@@ -182,7 +213,8 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
                     }
                     #endif
                     self.outputRenderQueue.push(frame, generation: generation) {
-                        guard self.state != .flush, self.state != .closed, self.state != .failed else { return false }
+                        guard self.state != .flush, self.state != .closed, self.state != .failed,
+                              self.decoders.value(for: packet.assetTrack.trackID) === decoder else { return false }
                         if self.seekTime > 0 {
                             guard timestamp > 0, endTime >= self.seekTime else { return false }
                             self.seekTime = 0
@@ -194,40 +226,15 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
                         #endif
                         return true
                     }
-                    self.outputRenderQueue.fps = packet.assetTrack.nominalFrameRate
+                    self.outputRenderQueue.setFPS(packet.assetTrack.nominalFrameRate, ifGeneration: generation)
                 }
             } catch {
-                KSLog("Decoder did Failed : \(error)")
-                if self.mediaType == .video {
-                    let failure = error as NSError
-                    // AVError is a Swift value: bridging it directly to NSError
-                    // loses its native status. Preserve that numeric code only.
-                    var details: [String: Any] = [:]
-                    if let cause = failure.userInfo[NSUnderlyingErrorKey] as? AVError {
-                        details[NSUnderlyingErrorKey] = NSError(domain: "KSPlayer.NativeCodec", code: Int(cause.code))
-                    } else if let cause = failure.userInfo[NSUnderlyingErrorKey] as? NSError {
-                        details[NSUnderlyingErrorKey] = NSError(domain: cause.domain, code: cause.code)
-                    }
-                    self.options.onVideoDecoderError?(NSError(domain: failure.domain, code: failure.code, userInfo: details))
-                }
-                if decoder is VideoToolboxDecode, !packet.assetTrack.requiresNativeDolbyVision {
-                    let replacement = FFmpegDecode(assetTrack: packet.assetTrack, options: self.options)
-                    let changed = self.outputRenderQueue.perform(ifGeneration: generation) {
-                        self.decoderMap[packet.assetTrack.trackID] = replacement
-                    }
-                    guard changed else { return }
-                    decoder.shutdown()
-                    self.options.onVideoDecoderChanged?("FFmpeg")
-                    KSLog("VideoCodec switch to software decompression")
-                    if self.outputRenderQueue.generation == generation { self.doDecode(packet: packet) }
-                } else {
-                    guard self.outputRenderQueue.perform(ifGeneration: generation, { self.state = .failed }) else { return }
-                    if self.mediaType == .video {
-                        let message = packet.assetTrack.requiresNativeDolbyVision
-                            ? "当前设备无法解码这条杜比视界视频，请选择其他画质或线路。" : "视频解码失败，请切换解码方式或线路。"
-                        self.options.onVideoDecoderFailed?(message)
-                    }
-                }
+                // An asynchronous VT callback cannot invalidate its own native
+                // session or mutate the worker's decoder registry. Queue work
+                // and let the owner process it after this callback returns.
+                self.decoderFailures.append(DecoderFailure(packet: packet, decoder: decoder,
+                                                           error: error as NSError, generation: generation))
+                self.decoderFailureQueued()
             }
         }
         if options.decodeAudioTime == 0, mediaType == .audio {
@@ -237,11 +244,58 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
             options.decodeVideoTime = CACurrentMediaTime()
         }
     }
+
+    fileprivate func processDecoderFailures() {
+        for failure in decoderFailures.takeAll() {
+            let packet = failure.packet, decoder = failure.decoder, generation = failure.generation
+            guard state != .closed, state != .failed, outputRenderQueue.generation == generation,
+                  decoders.value(for: packet.assetTrack.trackID) === decoder else { continue }
+            KSLog("Decoder did Failed : \(failure.error)")
+            if mediaType == .video {
+                var details: [String: Any] = [:]
+                if let cause = failure.error.userInfo[NSUnderlyingErrorKey] as? AVError {
+                    details[NSUnderlyingErrorKey] = NSError(domain: "KSPlayer.NativeCodec", code: Int(cause.code))
+                } else if let cause = failure.error.userInfo[NSUnderlyingErrorKey] as? NSError {
+                    details[NSUnderlyingErrorKey] = NSError(domain: cause.domain, code: cause.code)
+                }
+                options.onVideoDecoderError?(NSError(domain: failure.error.domain, code: failure.error.code, userInfo: details))
+            }
+            if decoder is VideoToolboxDecode, !packet.assetTrack.requiresNativeDolbyVision {
+                let replacement = FFmpegDecode(assetTrack: packet.assetTrack, options: options)
+                var changed = false
+                outputRenderQueue.perform(ifGeneration: generation) {
+                    guard self.state != .closed, self.state != .failed,
+                          self.decoders.value(for: packet.assetTrack.trackID) === decoder else { return }
+                    self.decoders.replace(replacement, for: packet.assetTrack.trackID)
+                    changed = true
+                }
+                guard changed else { replacement.shutdown(); continue }
+                // Old callbacks may already be waiting on a full frame queue.
+                // Release those waits before draining/invalidation on the owner.
+                outputRenderQueue.flush()
+                decoder.shutdown()
+                options.onVideoDecoderChanged?("FFmpeg")
+                KSLog("VideoCodec switch to software decompression")
+                if outputRenderQueue.generation == generation { doDecode(packet: packet) }
+            } else {
+                guard outputRenderQueue.perform(ifGeneration: generation, { self.state = .failed }) else { continue }
+                outputRenderQueue.flush(advanceGeneration: true)
+                if mediaType == .video {
+                    let message = packet.assetTrack.requiresNativeDolbyVision
+                        ? "当前设备无法解码这条杜比视界视频，请选择其他画质或线路。" : "视频解码失败，请切换解码方式或线路。"
+                    options.onVideoDecoderFailed?(message)
+                } else if mediaType == .audio {
+                    delegate?.codecDidFailed(error: failure.error)
+                }
+            }
+        }
+    }
 }
 
 final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     private let operationQueue = OperationQueue()
-    private var decodeOperation: BlockOperation!
+    private let workerLock = NSLock()
+    private var decodeOperation: BlockOperation?
     // 无缝播放使用的PacketQueue
     private var loopPacketQueue: CircularBuffer<Packet>?
     var packetQueue = CircularBuffer<Packet>()
@@ -256,7 +310,7 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
                     packetQueue.shutdown()
                     packetQueue = loopPacketQueue
                     self.loopPacketQueue = nil
-                    if decodeOperation.isFinished {
+                    if workerLock.withLock({ decodeOperation?.isFinished == true }) {
                         decode()
                     }
                 }
@@ -281,40 +335,57 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func decode() {
+        workerLock.lock()
+        defer { workerLock.unlock() }
         isEndOfFile = false
-        guard operationQueue.operationCount == 0 else { return }
-        decodeOperation = BlockOperation { [weak self] in
-            guard let self else { return }
+        guard state != .closed, operationQueue.operationCount == 0 else { return }
+        let operation = BlockOperation()
+        operation.addExecutionBlock { [weak self, weak operation] in
+            guard let self, let operation else { return }
             Thread.current.name = self.operationQueue.name
             Thread.current.stackSize = KSOptions.stackSize
-            self.decodeThread()
+            self.decodeThread(operation: operation)
         }
-        decodeOperation.queuePriority = .veryHigh
-        decodeOperation.qualityOfService = .userInteractive
-        operationQueue.addOperation(decodeOperation)
+        decodeOperation = operation
+        operation.queuePriority = .veryHigh
+        operation.qualityOfService = .userInteractive
+        operationQueue.addOperation(operation)
     }
 
-    private func decodeThread() {
+    override fileprivate func decoderFailureQueued() { packetQueue.wake() }
+    override fileprivate func endOfFileChanged() { packetQueue.wake() }
+
+    private func decodeThread(operation: BlockOperation) {
+        guard state != .closed else { return }
+        defer { releaseDecoders() }
         state = .decoding
-        isEndOfFile = false
-        decoderMap.values.forEach { $0.decode() }
-        outerLoop: while !decodeOperation.isCancelled {
+        decoders.values.forEach { $0.decode() }
+        outerLoop: while !operation.isCancelled {
+            processDecoderFailures()
             switch state {
             case .idle:
                 break outerLoop
             case .finished, .closed, .failed:
-                decoderMap.values.forEach { $0.shutdown() }
-                decoderMap.removeAll()
                 break outerLoop
             case .flush:
                 let generation = outputRenderQueue.generation
-                decoderMap.values.forEach { $0.doFlushCodec() }
+                decoders.values.forEach { $0.doFlushCodec() }
                 outputRenderQueue.perform(ifGeneration: generation) { self.state = .decoding }
             case .decoding:
                 if isEndOfFile, packetQueue.count == 0 {
-                    state = .finished
+                    let generation = outputRenderQueue.generation
+                    decoders.values.forEach { $0.drain() }
+                    processDecoderFailures()
+                    outputRenderQueue.perform(ifGeneration: generation) {
+                        if self.state == .decoding { self.state = .finished }
+                    }
                 } else {
-                    guard let packet = packetQueue.pop(wait: true), state != .closed,
+                    guard let packet = packetQueue.pop(wait: true, interrupted: { [weak self] in
+                        guard let self else { return true }
+                        return self.hasDecoderFailures || self.state != .decoding || self.isEndOfFile
+                    }) else { continue }
+                    processDecoderFailures()
+                    guard state != .closed,
                           let generation = packet.decodeGeneration,
                           outputRenderQueue.generation == generation else {
                         continue
@@ -324,7 +395,7 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
                     // Keep that packet (especially a GOP keyframe), flush, and
                     // reject it only if another seek has superseded its timeline.
                     if state == .flush {
-                        decoderMap.values.forEach { $0.doFlushCodec() }
+                        decoders.values.forEach { $0.doFlushCodec() }
                         guard outputRenderQueue.perform(ifGeneration: generation, { self.state = .decoding }) else { continue }
                     }
                     guard state == .decoding, outputRenderQueue.generation == generation else { continue }
@@ -337,7 +408,7 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func seek(time: TimeInterval) {
-        if decodeOperation.isFinished {
+        if workerLock.withLock({ decodeOperation?.isFinished == true }) {
             decode()
         }
         packetQueue.flush()
@@ -346,11 +417,16 @@ final class AsyncPlayerItemTrack<Frame: MEFrame>: SyncPlayerItemTrack<Frame> {
     }
 
     override func shutdown() {
-        if state == .idle {
-            return
-        }
         super.shutdown()
         packetQueue.shutdown()
+        workerLock.withLock { decodeOperation?.cancel() }
+    }
+
+    override func finishShutdown() {
+        // Only the media close worker waits here, after shutdown has woken
+        // packet/frame waits. No callback or UI executor waits for itself.
+        operationQueue.waitUntilAllOperationsAreFinished()
+        releaseDecoders()
     }
 }
 
@@ -381,6 +457,11 @@ protocol DecodeProtocol: AnyObject {
     func decodeFrame(from packet: Packet, completionHandler: @escaping (Result<MEFrame, Error>) -> Void)
     func doFlushCodec()
     func shutdown()
+    func drain()
+}
+
+extension DecodeProtocol {
+    func drain() {}
 }
 
 extension SyncPlayerItemTrack {

@@ -2,12 +2,14 @@
 import SwiftUI
 
 struct LocalMediaBadgeSettingsView: View {
+    @Environment(\.isLocalPageActive) private var pageActive
     @AppStorage(LocalMediaBadgeStore.enabledKey) private var enabled = true
     @State private var store = LocalMediaBadgeStore.load()
     @State private var address = ""
     @State private var busy = false
     @State private var message = ""
     @State private var preview: LocalMediaBadgeSource?
+    @State private var importer = LocalMediaBadgeImporter()
     var body: some View {
         SettingsPage(title: "媒体徽章", symbol: "seal.fill") {
             SettingsGroup { Toggle("开启媒体徽章", isOn: $enabled) }
@@ -59,26 +61,34 @@ struct LocalMediaBadgeSettingsView: View {
                 }.localGlassBackdrop()
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: LocalMediaBadgeStore.changed)) { _ in
+            store = LocalMediaBadgeStore.load()
+            if let preview { self.preview = store.sources.first { $0.id == preview.id } }
+        }
+        .onDisappear { cancelImport() }
+        .appOnChange(of: pageActive) { _, active in if !active { cancelImport() } }
     }
     private func change(_ mutate: (inout LocalMediaBadgeStore) -> Void) {
-        var next = store; mutate(&next)
+        var next = LocalMediaBadgeStore.load(); mutate(&next)
         do { try next.save(); store = next; message = "" } catch { message = error.localizedDescription }
     }
     private func add() {
+        guard !busy else { return }
         let value = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
-            message = "请填写有效的 HTTP / HTTPS 地址。"; return
-        }
-        busy = true
-        Task {
-            defer { busy = false }
-            do {
-                let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 30))
-                guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else { throw URLError(.badServerResponse) }
-                var next = store; try next.add(address: value, data: data); try next.save()
-                store = next; address = ""; message = "已添加徽章方案，可预览后应用。"
-            } catch { message = error.localizedDescription }
-        }
+        do {
+            let started = try importer.start(address: value) { result in
+                busy = false
+                switch result {
+                case .success(let next): store = next; address = ""; message = "已添加徽章方案，可预览后应用。"
+                case .failure(let error): message = error.localizedDescription
+                }
+            }
+            if started { busy = true; message = "" }
+        } catch { message = error.localizedDescription }
+    }
+    private func cancelImport() {
+        importer.cancel()
+        if busy { busy = false; message = "导入已取消，可重新添加地址。" }
     }
 }
 

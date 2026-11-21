@@ -7,6 +7,7 @@
 
 import AVFoundation
 import CoreAudio
+import Foundation
 
 public protocol AudioOutput: FrameOutput {
     var playbackRate: Float { get set }
@@ -104,6 +105,13 @@ public class AudioEnginePlayer: AudioOutput {
     public let engine = AVAudioEngine()
     private var sourceNode: AVAudioSourceNode?
     private var sourceNodeAudioFormat: AVAudioFormat?
+    private var outputIntent = PlaybackAudioOutputIntent()
+    private var configurationObserver: NSObjectProtocol?
+    private var configurationWork: DispatchWorkItem?
+    private var startRetry: DispatchWorkItem?
+    private var graphGeneration: UInt64 = 0
+    private var rebuildingGraph = false
+    private var needsGraphRebuild = false
 
 //    private let reverb = AVAudioUnitReverb()
 //    private let nbandEQ = AVAudioUnitEQ()
@@ -132,11 +140,10 @@ public class AudioEnginePlayer: AudioOutput {
     }
 
     public var volume: Float {
-        get {
-            sourceNode?.volume ?? 1
-        }
+        get { outputIntent.volume }
         set {
-            sourceNode?.volume = newValue
+            outputIntent.setVolume(newValue)
+            sourceNode?.volume = outputIntent.volume
         }
     }
 
@@ -157,13 +164,31 @@ public class AudioEnginePlayer: AudioOutput {
         #if !os(macOS)
         outputLatency = AVAudioSession.sharedInstance().outputLatency
         #endif
+        configurationObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange,
+            object: engine, queue: .main) { [weak self] _ in self?.configurationChanged() }
+    }
+
+    deinit {
+        configurationWork?.cancel()
+        startRetry?.cancel()
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        engine.stop()
+        if let audioUnit = engine.outputNode.audioUnit {
+            AudioUnitRemoveRenderNotify(audioUnit, Self.renderNotify, Unmanaged.passUnretained(self).toOpaque())
+        }
     }
 
     public func prepare(audioFormat: AVAudioFormat) {
-        if sourceNodeAudioFormat == audioFormat {
-            return
+        guard sourceNodeAudioFormat != audioFormat || needsGraphRebuild else { return }
+        guard !rebuildingGraph else { needsGraphRebuild = true; return }
+        rebuildingGraph = true
+        needsGraphRebuild = false
+        graphGeneration &+= 1
+        startRetry?.cancel(); startRetry = nil
+        defer {
+            rebuildingGraph = false
+            if needsGraphRebuild { configurationChanged() }
         }
-        sourceNodeAudioFormat = audioFormat
         #if !os(macOS)
         try? AVAudioSession.sharedInstance().setPreferredOutputNumberOfChannels(Int(audioFormat.channelCount))
         KSLog("[audio] set preferredOutputNumberOfChannels: \(audioFormat.channelCount)")
@@ -172,9 +197,15 @@ public class AudioEnginePlayer: AudioOutput {
         if let channelLayout = audioFormat.channelLayout {
             KSLog("[audio] outputFormat channelLayout \(channelLayout.channelDescriptions)")
         }
-        let isRunning = engine.isRunning
+        let rate = timePitch.rate, mixerVolume = engine.mainMixerNode.outputVolume
         engine.stop()
+        currentRender = nil
+        if let sourceNode {
+            engine.disconnectNodeOutput(sourceNode)
+            engine.detach(sourceNode)
+        }
         engine.reset()
+        sourceNodeAudioFormat = audioFormat
         sourceNode = AVAudioSourceNode(format: audioFormat) { [weak self] _, timestamp, frameCount, audioBufferList in
             if timestamp.pointee.mSampleTime == 0 {
                 return noErr
@@ -187,6 +218,7 @@ public class AudioEnginePlayer: AudioOutput {
         }
         KSLog("[audio] new sourceNode inputFormat: \(sourceNode.inputFormat(forBus: 0))")
         sampleSize = audioFormat.sampleSize
+        sourceNode.volume = outputIntent.volume
         engine.attach(sourceNode)
         var nodes: [AVAudioNode] = [sourceNode]
         nodes.append(contentsOf: audioNodes())
@@ -195,14 +227,55 @@ public class AudioEnginePlayer: AudioOutput {
         }
         // 一定要传入format，这样多音轨音响才不会有问题。
         engine.connect(nodes: nodes, format: audioFormat)
+        timePitch.rate = rate
+        engine.mainMixerNode.outputVolume = mixerVolume
         engine.prepare()
-        if isRunning {
-            try? engine.start()
-            // 从多声道切换到2声道马上调用start会不生效。需要异步主线程才可以
-            DispatchQueue.main.async { [weak self] in
-                self?.play()
-            }
+        ensureRunningIfRequested()
+        if outputIntent.canRun && !engine.isRunning { scheduleStartRetry() }
+    }
+
+    private func configurationChanged() {
+        needsGraphRebuild = true
+        guard !outputIntent.interrupted, !rebuildingGraph, configurationWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.configurationWork = nil
+            guard !self.outputIntent.interrupted else { return }
+            guard let format = self.sourceNodeAudioFormat else { return }
+            self.prepare(audioFormat: format)
         }
+        configurationWork = work
+        DispatchQueue.main.async(execute: work)
+    }
+
+    func setAudioSessionInterrupted(_ value: Bool) {
+        outputIntent.setInterrupted(value)
+        startRetry?.cancel(); startRetry = nil
+        if value, engine.isRunning { engine.pause() }
+        if !value, needsGraphRebuild { configurationChanged() }
+    }
+
+    func ensureRunningIfRequested() {
+        guard outputIntent.canRun, sourceNode != nil, !engine.isRunning else { return }
+        if needsGraphRebuild, !rebuildingGraph, let format = sourceNodeAudioFormat {
+            prepare(audioFormat: format)
+            return
+        }
+        do { try engine.start() }
+        catch { KSLog(error) }
+    }
+
+    private func scheduleStartRetry() {
+        guard startRetry == nil, sourceNode != nil else { return }
+        let revision = outputIntent.revision, generation = graphGeneration
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.graphGeneration == generation, self.outputIntent.acceptsRestart(revision: revision) else { return }
+            self.startRetry = nil
+            self.ensureRunningIfRequested()
+        }
+        startRetry = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
     }
 
     func audioNodes() -> [AVAudioNode] {
@@ -210,39 +283,46 @@ public class AudioEnginePlayer: AudioOutput {
     }
 
     public func play() {
-        if !engine.isRunning {
-            do {
-                try engine.start()
-            } catch {
-                KSLog(error)
-            }
-        }
+        outputIntent.setPlaying(true)
+        startRetry?.cancel(); startRetry = nil
+        if needsGraphRebuild, let format = sourceNodeAudioFormat { prepare(audioFormat: format) }
+        else { ensureRunningIfRequested() }
+        if outputIntent.canRun && !engine.isRunning { scheduleStartRetry() }
     }
 
     public func pause() {
+        outputIntent.setPlaying(false)
+        startRetry?.cancel(); startRetry = nil
         if engine.isRunning {
             engine.pause()
         }
     }
 
     public func flush() {
+        // Flush only after the source callback is quiescent. A route change
+        // may call flush while output is running, unlike a serialized seek.
+        if engine.isRunning { engine.pause() }
         currentRender = nil
         #if !os(macOS)
         // 这个要在主线程执行，如果在音频的线程，那就会有中断杂音
         outputLatency = AVAudioSession.sharedInstance().outputLatency
         #endif
+        if needsGraphRebuild, let format = sourceNodeAudioFormat { prepare(audioFormat: format) }
+        else { ensureRunningIfRequested() }
+    }
+
+    private static let renderNotify: AURenderCallback = { refCon, ioActionFlags, inTimeStamp, _, _, _ in
+        let player = Unmanaged<AudioEnginePlayer>.fromOpaque(refCon).takeUnretainedValue()
+        autoreleasepool {
+            if ioActionFlags.pointee.contains(.unitRenderAction_PostRender) {
+                player.audioPlayerDidRenderSample(sampleTimestamp: inTimeStamp.pointee)
+            }
+        }
+        return noErr
     }
 
     private func addRenderNotify(audioUnit: AudioUnit) {
-        AudioUnitAddRenderNotify(audioUnit, { refCon, ioActionFlags, inTimeStamp, _, _, _ in
-            let `self` = Unmanaged<AudioEnginePlayer>.fromOpaque(refCon).takeUnretainedValue()
-            autoreleasepool {
-                if ioActionFlags.pointee.contains(.unitRenderAction_PostRender) {
-                    self.audioPlayerDidRenderSample(sampleTimestamp: inTimeStamp.pointee)
-                }
-            }
-            return noErr
-        }, Unmanaged.passUnretained(self).toOpaque())
+        AudioUnitAddRenderNotify(audioUnit, Self.renderNotify, Unmanaged.passUnretained(self).toOpaque())
     }
 
 //    private func addRenderCallback(audioUnit: AudioUnit, streamDescription: UnsafePointer<AudioStreamBasicDescription>) {
@@ -281,6 +361,9 @@ public class AudioEnginePlayer: AudioOutput {
                 continue
             }
             if sourceNodeAudioFormat != currentRender.audioFormat {
+                for buffer in ioData {
+                    if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
+                }
                 runOnMainThread { [weak self] in
                     guard let self else {
                         return

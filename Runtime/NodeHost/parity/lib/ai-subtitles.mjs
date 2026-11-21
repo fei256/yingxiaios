@@ -124,7 +124,7 @@ export class AISubtitleService {
       throw new AppError('AI_STALE', '播放会话、媒体或位置已改变，已取消旧字幕');
   }
   async config(job, kind) {
-    const settings = await this.settings.private(); this.check(job); job.revision = settings.revision;
+    const settings = await this.settings.private(); this.check(job); job.revision = settings.aiRevision ?? settings.revision;
     const config = settings.ai;
     if (kind === 'transcription' && config.transcriptionProtocol === 'local') return config;
     if (!config.enabled) throw new AppError('AI_CONFIG', '请先在设置中启用 AI');
@@ -146,7 +146,7 @@ export class AISubtitleService {
   async finish(job) {
     this.check(job);
     const config = await this.settings.private(); this.check(job);
-    if (job.revision !== config.revision) throw new AppError('AI_STALE', 'AI 设置已改变，已取消旧字幕');
+    if (job.revision !== (config.aiRevision ?? config.revision)) throw new AppError('AI_STALE', 'AI 设置已改变，已取消旧字幕');
   }
   cacheKey(job, kind, data) {
     return createHash('sha256').update(JSON.stringify([job.epoch, job.session?.id, job.mediaVersion, job.timelineVersion, job.revision, kind, data])).digest('hex');

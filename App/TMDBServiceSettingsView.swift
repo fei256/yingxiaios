@@ -4,7 +4,7 @@ import TVCore
 struct TMDBServiceSettingsView: View {
     @State private var config = TMDBServiceSettings.load()
     @State private var message: String?
-    @State private var credentialType = TMDBServiceSettings.load().token.isEmpty ? "apiKey" : "token"
+    @State private var credentialType: TMDBServiceSettings.CredentialType = TMDBServiceSettings.load().token.isEmpty ? .apiKey : .token
     @State private var testTitle = "凡人修仙传"
     @State private var checks: [TMDBServiceSettings.ConnectionCheck] = []
     @State private var testTask: Task<Void, Never>?
@@ -20,10 +20,10 @@ struct TMDBServiceSettingsView: View {
                 SettingsGroup(title: "自定义 TMDB") {
                     Toggle("超清海报", isOn: $config.ultraHD)
                     Picker("凭据类型", selection: $credentialType) {
-                        Text("API Key (v3)").tag("apiKey")
-                        Text("Read Access Token").tag("token")
+                        Text("API Key (v3)").tag(TMDBServiceSettings.CredentialType.apiKey)
+                        Text("Read Access Token").tag(TMDBServiceSettings.CredentialType.token)
                     }
-                    SecureField(credentialType == "token" ? "TMDB Read Access Token" : "TMDB API Key", text: credential)
+                    SecureField(credentialType == .token ? "TMDB Read Access Token" : "TMDB API Key", text: credential)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                     if !config.credential.isEmpty {
                         Button("清除已保存的密钥") { config.apiKey = ""; config.token = ""; message = "密钥将在保存后清除" }
@@ -68,24 +68,27 @@ struct TMDBServiceSettingsView: View {
         }
         .onDisappear(perform: cancelTest)
         .appOnChange(of: config) { _, _ in cancelTest(); checks = [] }
+        .appOnChange(of: credentialType) { _, _ in cancelTest(); checks = [] }
     }
     private var credential: Binding<String> {
-        Binding(get: { credentialType == "token" ? config.token : config.apiKey }, set: {
-            if credentialType == "token" { config.token = $0; config.apiKey = "" }
+        Binding(get: { credentialType == .token ? config.token : config.apiKey }, set: {
+            if credentialType == .token { config.token = $0; config.apiKey = "" }
             else { config.apiKey = $0; config.token = "" }
         })
     }
+    private var currentConfiguration: TMDBServiceSettings { config.formConfiguration(credentialType: credentialType) }
     private func save() {
         do {
-            if credentialType == "token" { config.apiKey = "" }
-            else { config.token = "" }
-            try config.save()
+            let value = currentConfiguration
+            try value.save()
+            config = value
+            credentialType = value.token.isEmpty ? .apiKey : .token
             message = config.enabled ? "已保存自定义 TMDB，详情页将重新获取资料。可测试连接确认 API 和图片。" : "已使用内置 TMDB"
         } catch { message = "配置无效，请检查 API、图片和代理地址。" }
     }
     private func testConnection() {
         cancelTest(); checks = []; testing = true
-        let revision = testRevision, draft = config, title = testTitle
+        let revision = testRevision, draft = currentConfiguration, title = testTitle
         testTask = Task {
             do {
                 let result = try await draft.testConnection(title: title)
