@@ -612,7 +612,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         // the deadline follows decode/input evidence, independently of buffering.
         if pictureWatchdog.update(now: ProcessInfo.processInfo.systemUptime, ready: isReady,
             selectedVideo: videoSelection != "no" && tracks.contains(where: { $0.kind == .video && $0.selected }),
-            picture: hasPicture, playing: !paused, seeking: seeking,
+            picture: hasPicture, playing: !paused && !player.isAudioInterrupted, seeking: seeking,
             decoderStarted: (options?.decodeVideoTime ?? 0) > 0 && (options?.readVideoTime ?? 0) > 0,
             bytes: bytesRead, position: position, inputEnded: player.hasReachedEndOfInput) {
             failVideo("视频没有输出可显示的画面，请切换解码方式或线路。")
