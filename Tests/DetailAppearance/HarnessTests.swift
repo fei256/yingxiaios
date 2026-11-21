@@ -73,6 +73,25 @@ final class DetailHarnessTests: XCTestCase {
         app.buttons["fixture.completeCache"].tap()
         XCTAssertEqual(track.value as? String, "complete")
     }
+    @MainActor func testRepairingTMDBSettingsRetriesTheSameAvatarURL() {
+        let app = launch(orientation: .landscapeLeft)
+        let attempts = app.staticTexts["fixture.avatarRequests"]
+        expectation(for: NSPredicate(format: "label != %@", "0"), evaluatedWith: attempts)
+        waitForExpectations(timeout: 10)
+        XCTAssertEqual(app.staticTexts["fixture.avatarStatus"].label, "avatar waiting")
+        let avatar = app.descendants(matching: .any)["fixture.avatar"].frame
+        XCTAssertFalse(avatar.isNull || avatar.isInfinite || avatar.isEmpty, "The avatar must have a visible finite frame")
+        guard !avatar.isNull && !avatar.isInfinite && !avatar.isEmpty else { return }
+        let point = CGPoint(x: avatar.midX, y: avatar.midY)
+        let before = brightness(XCUIScreen.main.screenshot(), at: point, window: app.windows.firstMatch.frame)
+        app.buttons["fixture.retryAvatar"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "avatar ready"), evaluatedWith: app.staticTexts["fixture.avatarStatus"])
+        waitForExpectations(timeout: 10)
+        XCTAssertGreaterThanOrEqual(Int(attempts.label) ?? 0, 2, "The repaired configuration must start another actual image request")
+        let after = brightness(XCUIScreen.main.screenshot(), at: point, window: app.windows.firstMatch.frame)
+        XCTAssertGreaterThan(after, before + 0.2, "The downloaded avatar must actually replace its placeholder")
+        attach("avatar-after-settings-repair", app: app)
+    }
     @MainActor private func brightness(_ screenshot: XCUIScreenshot, at point: CGPoint, window: CGRect) -> Double {
         let snapshot = screenshot.image
         let image = UIGraphicsImageRenderer(size: snapshot.size).image { _ in snapshot.draw(at: .zero) }.cgImage!

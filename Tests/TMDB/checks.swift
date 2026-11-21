@@ -166,6 +166,19 @@ private struct ResultRow: Codable { let name: String; let passed: Bool; let fail
             let other = URL(string: "https://source.fixture/w500/cover.jpg")!
             try expect(TMDBServiceSettings.artworkURL(other, settings: value) == other, "Source artwork was rewritten")
         }
+        await run("transport changes restart artwork without changing manual match identity") {
+            var value = config
+            value.proxyEnabled = true; value.proxyUrl = "socks5://127.0.0.1:7890"; value.proxyUsername = "fixture-user"
+            try expect(value.serviceIdentity == config.serviceIdentity, "A proxy edit changed manual matching identity")
+            try expect(value.transportIdentity != config.transportIdentity, "The new proxy joined an old artwork request")
+            let first = value.transportIdentity
+            value.proxyPassword = "fixture-password"
+            try expect(first != value.transportIdentity, "A proxy password edit retained the old artwork request")
+            let current = value.transportIdentity
+            try expect(current == value.transportIdentity && current.count == 64, "Transport fingerprints must be stable opaque hashes")
+            value.enabled = false
+            try expect(value.transportIdentity == "builtin", "Disabled custom settings retained a custom transport identity")
+        }
         await run("HTTP 401 gives an actionable credential error") {
             FixtureServer.shared.reset { _, _ in Reply("{}", status: 401) }
             let error = try await errorFrom { _ = try await CustomTMDBService.object("configuration", config: config, session: session) }

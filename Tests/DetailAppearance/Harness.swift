@@ -16,10 +16,13 @@ import SwiftUI
 private struct DetailHarness: View {
     private let backdrop = URL(string: "https://images.fixture/t/p/w1280/background.png")!
     private let logo = URL(string: "https://images.fixture/t/p/w500/logo.png")!
+    private let portrait = URL(string: "https://images.fixture/t/p/w185/portrait.png")!
     @State private var paint: DiscoverPaint?
     @State private var imagesReady = false
     @State private var complete = true
     @State private var action = "none"
+    @State private var portraitAspect: CGFloat?
+    @State private var portraitRequests = 0
 
     var body: some View {
         GeometryReader { geometry in
@@ -61,6 +64,21 @@ private struct DetailHarness: View {
                                 Button("完成缓存") { complete = true }.accessibilityIdentifier("fixture.completeCache")
                             }.buttonStyle(.bordered).frame(minHeight: 44)
                         }.padding(18).background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+                        HStack(spacing: 18) {
+                            PosterImage(url: portrait, symbol: "person.fill", aspect: $portraitAspect)
+                                .frame(width: 84, height: 84).clipShape(Circle())
+                                .accessibilityElement(children: .ignore).accessibilityLabel("测试演员")
+                                .accessibilityIdentifier("fixture.avatar")
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(portraitAspect == nil ? "avatar waiting" : "avatar ready").accessibilityIdentifier("fixture.avatarStatus")
+                                Text("\(portraitRequests)").accessibilityIdentifier("fixture.avatarRequests")
+                                Button("修复头像连接") {
+                                    FixtureImages.shared.enablePortrait()
+                                    var config = TMDBServiceSettings.load(); config.apiKey = "fixture-key-refreshed"
+                                    try! config.save()
+                                }.accessibilityIdentifier("fixture.retryAvatar")
+                            }
+                        }
                         Text(imagesReady ? "images ready" : "images loading").font(.caption).accessibilityIdentifier("fixture.imageStatus")
                         Text(action).font(.caption).accessibilityIdentifier("fixture.action")
                     }.padding(.horizontal, 20).padding(.bottom, 40)
@@ -70,7 +88,11 @@ private struct DetailHarness: View {
         .task {
             paint = await DiscoverPainter.shared.paint(backdrop, style: .cinematic)
             let wordmark = await TMDBArtwork.load(logo, maxPixels: 1000)
+            portraitRequests = FixtureImages.shared.portraitRequestCount
             imagesReady = paint != nil && wordmark != nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: FixtureImages.portraitRequested).receive(on: DispatchQueue.main)) { _ in
+            portraitRequests = FixtureImages.shared.portraitRequestCount
         }
     }
     private func tool(_ symbol: String, _ name: String) -> some View {

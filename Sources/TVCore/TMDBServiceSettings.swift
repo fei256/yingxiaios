@@ -24,6 +24,14 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
         // Image quality must not invalidate manual title matching and exclusions.
         service.ultraHD = false
         service.proxyEnabled = false; service.proxyUrl = ""; service.proxyUsername = ""; service.proxyPassword = ""
+        return Self.fingerprint(service)
+    }
+    /// In-flight artwork requests must not join a request started with an old
+    /// proxy or credential after the viewer repairs the configuration.
+    public var transportIdentity: String {
+        custom.map(Self.fingerprint) ?? "builtin"
+    }
+    private static func fingerprint(_ service: Self) -> String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(service) else { return "builtin" }
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()

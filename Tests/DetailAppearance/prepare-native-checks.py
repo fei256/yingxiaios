@@ -9,11 +9,16 @@ output.mkdir(parents=True, exist_ok=True)
 files = ["App/CatalogDetailAppearance.swift", "App/CatalogDetailTitle.swift", "App/TMDBArtwork.swift",
          "App/DetailReadability.swift", "App/PlayerTimelineTrack.swift", "App/CatalogDetailMetrics.swift",
          "Sources/TVCore/PlaybackCacheProgress.swift", "Sources/TVCore/TMDBServiceSettings.swift",
-         "Sources/TVCore/TMDBNetworkTransport.swift"]
+         "Sources/TVCore/TMDBNetworkTransport.swift", "Sources/TVCore/MediaCache.swift",
+         "Sources/TVCore/Recommendations.swift", "App/PosterArtworkCache.swift", "App/GlassKit.swift"]
 for filename in files + ["App/DiscoverArtwork.swift"]:
     source = (root / filename).read_text(encoding="utf-8")
     if filename == "App/DiscoverArtwork.swift":
         source = source.split("/// Only the cover responds to scroll;", 1)[0]
+    elif filename == "App/GlassKit.swift":
+        source = "import SwiftUI\nstruct PosterImage: View {" + source.split("struct PosterImage: View {", 1)[1].split("\nstruct PosterCard: View {", 1)[0]
+    elif filename == "Sources/TVCore/Recommendations.swift":
+        source = source.split("public struct Recommendation:", 1)[0]
     source = source.replace("import Perception\n", "").replace("import TVCore\n", "")
     (output / Path(filename).name).write_text(source, encoding="utf-8")
 sources = [str(output / Path(path).name) for path in files + ["App/DiscoverArtwork.swift"]]
@@ -33,4 +38,4 @@ spec = {
     "schemes": {"DetailChecks": {"build": {"targets": {"DetailChecks": "all"}}, "test": {"targets": ["DetailHarnessTests"]}}},
 }
 (output / "project.json").write_text(json.dumps(spec, indent=2), encoding="utf-8")
-print("Prepared production detail/title/artwork/timeline bodies with fixed fixtures.")
+print("Prepared production detail/title/artwork/timeline/poster bodies with fixed fixtures.")

@@ -15,6 +15,22 @@ extension View {
         else { onChange(of: value) { new in action(value, new) } }
     }
 }
+private struct HarnessPageActiveKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+    var isLocalPageActive: Bool {
+        get { self[HarnessPageActiveKey.self] }
+        set { self[HarnessPageActiveKey.self] = newValue }
+    }
+}
+enum MusicDownloadLibrary {
+    static func artworkFile(for url: URL) -> URL { URL.cachesDirectory.appending(path: "fixture-no-music-artwork") }
+}
+enum WebAddress {
+    static func resolve(_ address: String, relativeTo origin: URL) throws -> URL {
+        guard let result = URL(string: address, relativeTo: origin)?.absoluteURL else { throw URLError(.badURL) }
+        return result
+    }
+}
 enum TMDBMatch {
     struct Trailer: Sendable { let key: String }
 }
@@ -39,10 +55,23 @@ struct HTTPClient {
 
 final class FixtureImages: @unchecked Sendable {
     static let shared = FixtureImages()
+    static let portraitRequested = Notification.Name("fixture.portrait.requested")
     private let lock = NSLock()
     private var files: [String: Data] = [:]
-    func read(_ name: String) -> Data? { lock.withLock { files[name] } }
+    private var portrait: Data?
+    private var portraitRequests = 0
+    var portraitRequestCount: Int { lock.withLock { portraitRequests } }
+    func read(_ name: String) -> Data? {
+        let data = lock.withLock {
+            if name == "portrait.png" { portraitRequests += 1 }
+            return files[name]
+        }
+        if name == "portrait.png" { NotificationCenter.default.post(name: Self.portraitRequested, object: nil) }
+        return data
+    }
+    func enablePortrait() { lock.withLock { files["portrait.png"] = portrait } }
     @MainActor func prepare() {
+        MediaCache.shared.clear()
         let background = UIGraphicsImageRenderer(size: CGSize(width: 1200, height: 680)).pngData { context in
             let colors = [UIColor(red: 0.12, green: 0.43, blue: 0.53, alpha: 1).cgColor,
                           UIColor(red: 0.05, green: 0.28, blue: 0.38, alpha: 1).cgColor,
@@ -61,7 +90,14 @@ final class FixtureImages: @unchecked Sendable {
                                                             .foregroundColor:UIColor(red: 0.98, green: 0.88, blue: 0.44, alpha: 1)]
             text.draw(at: CGPoint(x: 70, y: 34), withAttributes: attributes)
         }
-        lock.withLock { files = ["background.png": background, "logo.png": wordmark] }
+        let avatar = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 160)).pngData { _ in
+            UIColor(red: 0.24, green: 0.64, blue: 0.91, alpha: 1).setFill()
+            UIBezierPath(rect: CGRect(x: 0, y: 0, width: 160, height: 160)).fill()
+            UIColor.white.setFill()
+            UIBezierPath(ovalIn: CGRect(x: 54, y: 24, width: 52, height: 52)).fill()
+            UIBezierPath(ovalIn: CGRect(x: 30, y: 70, width: 100, height: 110)).fill()
+        }
+        lock.withLock { files = ["background.png": background, "logo.png": wordmark]; portrait = avatar; portraitRequests = 0 }
         _ = URLProtocol.registerClass(FixtureImageProtocol.self)
     }
 }

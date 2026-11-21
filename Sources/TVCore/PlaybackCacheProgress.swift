@@ -1,5 +1,3 @@
-import Foundation
-
 /// Disk coverage and decoder buffering have different lifetimes. A verified
 /// complete cache covers the whole timeline, including after a seek or pause.
 public enum PlaybackCacheProgress {

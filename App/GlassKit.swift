@@ -1036,6 +1036,7 @@ struct PosterImage: View {
         let resource: PosterResource?
         let revision: UInt64
         let active: Bool
+        let settings: Data
     }
     private var pageActive: Bool {
         #if os(iOS)
@@ -1048,7 +1049,7 @@ struct PosterImage: View {
         WithPerceptionTracking {
             artwork
             .contentShape(.rect)
-            .task(id: PosterRequest(resource: resource, revision: cacheRevision, active: pageActive)) {
+            .task(id: PosterRequest(resource: resource, revision: cacheRevision, active: pageActive, settings: tmdbSettings)) {
                 guard pageActive else { return }
                 guard let resource else { bitmap = nil; aspect?.wrappedValue = nil; return }
                 if let image = displayedBitmap {

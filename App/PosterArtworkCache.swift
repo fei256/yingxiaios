@@ -40,13 +40,18 @@ private final class PosterMemory: @unchecked Sendable {
 
 actor PosterLoader {
     static let shared = PosterLoader()
+    private struct RequestKey: Hashable {
+        let resource: PosterResource
+        let transport: String
+    }
     private struct Pending {
         let id: UUID
+        let settings: TMDBServiceSettings
         var task: Task<Void, Never>?
         var waiters: [UUID: CheckedContinuation<PosterBitmap, Error>]
     }
-    private var pending: [PosterResource: Pending] = [:]
-    private var queued: [(resource: PosterResource, id: UUID)] = []
+    private var pending: [RequestKey: Pending] = [:]
+    private var queued: [(key: RequestKey, id: UUID)] = []
     private var running = 0
     private let concurrentLimit = 6
     private var revision = MediaCache.shared.revision
@@ -66,17 +71,19 @@ actor PosterLoader {
             pending.removeAll(); queued.removeAll(); revision = current
         }
         if let image = Self.cached(resource) { return image }
+        let settings = TMDBServiceSettings.load()
+        let key = RequestKey(resource: resource, transport: settings.transportIdentity)
         let waiter = UUID()
         return try await withTaskCancellationHandler {
             let image: PosterBitmap = try await withCheckedThrowingContinuation { continuation in
                 guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
-                if var request = pending[resource] {
+                if var request = pending[key] {
                     request.waiters[waiter] = continuation
-                    pending[resource] = request
+                    pending[key] = request
                 } else {
                     let id = UUID()
-                    pending[resource] = Pending(id: id, task: nil, waiters: [waiter: continuation])
-                    queued.append((resource, id))
+                    pending[key] = Pending(id: id, settings: settings, task: nil, waiters: [waiter: continuation])
+                    queued.append((key, id))
                     startQueued()
                 }
             }
@@ -84,50 +91,51 @@ actor PosterLoader {
             guard image.revision == MediaCache.shared.revision else { throw CancellationError() }
             return image
         } onCancel: {
-            Task { await self.cancel(resource, waiter: waiter) }
+            Task { await self.cancel(key, waiter: waiter) }
         }
     }
 
-    private func cancel(_ resource: PosterResource, waiter: UUID) {
-        guard var request = pending[resource], let continuation = request.waiters.removeValue(forKey: waiter) else { return }
+    private func cancel(_ key: RequestKey, waiter: UUID) {
+        guard var request = pending[key], let continuation = request.waiters.removeValue(forKey: waiter) else { return }
         continuation.resume(throwing: CancellationError())
         if request.waiters.isEmpty {
-            pending[resource] = nil
+            pending[key] = nil
             request.task?.cancel()
             queued.removeAll { $0.id == request.id }
         } else {
-            pending[resource] = request
+            pending[key] = request
         }
     }
 
     private func startQueued() {
         while running < concurrentLimit, !queued.isEmpty {
             let next = queued.removeFirst()
-            guard var request = pending[next.resource], request.id == next.id else { continue }
+            guard var request = pending[next.key], request.id == next.id else { continue }
             let current = revision
+            let settings = request.settings
             running += 1
             // Neither flash I/O nor ImageIO may occupy the scheduling actor:
             // visible cells can cancel or join requests while a decode is busy.
             request.task = Task.detached(priority: .utility) {
                 let result: Result<PosterBitmap, Error>
-                do { result = .success(try await Self.read(next.resource, revision: current)) }
+                do { result = .success(try await Self.read(next.key.resource, revision: current, settings: settings)) }
                 catch { result = .failure(error) }
-                await self.finish(next.resource, id: next.id, result: result)
+                await self.finish(next.key, id: next.id, result: result)
             }
-            pending[next.resource] = request
+            pending[next.key] = request
         }
     }
 
-    private func finish(_ resource: PosterResource, id: UUID, result: Result<PosterBitmap, Error>) {
+    private func finish(_ key: RequestKey, id: UUID, result: Result<PosterBitmap, Error>) {
         running -= 1
         defer { startQueued() }
         // Completion of a cancelled request never owns its replacement.
-        guard let request = pending[resource], request.id == id else { return }
-        pending[resource] = nil
+        guard let request = pending[key], request.id == id else { return }
+        pending[key] = nil
         for waiter in request.waiters.values { waiter.resume(with: result) }
     }
 
-    private nonisolated static func read(_ resource: PosterResource, revision: UInt64) async throws -> PosterBitmap {
+    private nonisolated static func read(_ resource: PosterResource, revision: UInt64, settings: TMDBServiceSettings) async throws -> PosterBitmap {
         try Task.checkCancellation()
         let disk = MediaCache.shared
         let ticket = disk.ticket()
@@ -136,7 +144,7 @@ actor PosterLoader {
         let data: Data
         if let cached { data = cached }
         else if let saved = try? Data(contentsOf: MusicDownloadLibrary.artworkFile(for: resource.url)) { data = saved }
-        else { data = try await TMDBServiceSettings.artworkData(for: resource.url, headers: resource.headers) }
+        else { data = try await TMDBServiceSettings.artworkData(for: resource.url, headers: resource.headers, settings: settings) }
         try Task.checkCancellation()
         guard revision == disk.revision else { throw CancellationError() }
         guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
