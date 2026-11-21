@@ -65,10 +65,13 @@ extension TMDBServiceSettings {
             }
             do {
                 let data = try await Self.artworkData(for: address, settings: config, session: session)
-                guard let source = CGImageSourceCreateWithData(data as CFData, nil), CGImageSourceGetCount(source) > 0 else {
-                    throw TMDBConnectionError.invalidResponse
+                guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                                                   kCGImageSourceThumbnailMaxPixelSize: 64] as CFDictionary) != nil else {
+                    throw TMDBConnectionError.invalidImage
                 }
-                checks.append(ConnectionCheck(title: title, message: "图片读取成功。", status: .passed))
+                let message = title == "演员头像" ? "图片读取成功；TMDB 提供了 \(details.cast.compactMap(\.profile).count) / \(details.cast.count) 位演员的头像。" : "图片读取成功。"
+                checks.append(ConnectionCheck(title: title, message: message, status: .passed))
             } catch {
                 try Task.checkCancellation()
                 checks.append(failure(title, error))

@@ -1,8 +1,8 @@
 import XCTest
 import UIKit
 
-@MainActor final class DetailHarnessTests: XCTestCase {
-    private func launch(orientation: UIDeviceOrientation, accessibility: Bool = false) -> XCUIApplication {
+final class DetailHarnessTests: XCTestCase {
+    @MainActor private func launch(orientation: UIDeviceOrientation, accessibility: Bool = false) -> XCUIApplication {
         XCUIDevice.shared.orientation = orientation
         let app = XCUIApplication()
         if accessibility { app.launchArguments = ["accessibility"] }
@@ -13,10 +13,10 @@ import UIKit
         waitForExpectations(timeout: 20)
         return app
     }
-    private func attach(_ name: String, app: XCUIApplication) {
+    @MainActor private func attach(_ name: String, app: XCUIApplication) {
         let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
     }
-    private func checkTargets(_ app: XCUIApplication) {
+    @MainActor private func checkTargets(_ app: XCUIApplication) {
         let window = app.windows.firstMatch.frame
         for name in ["play", "sources", "link", "calendar", "more"] {
             let button = app.buttons["fixture." + name]
@@ -27,7 +27,7 @@ import UIKit
             XCTAssertLessThanOrEqual(button.frame.maxX, window.maxX + 0.5)
         }
     }
-    func testLandscapeHeaderFitsAndImagesLoad() {
+    @MainActor func testLandscapeHeaderFitsAndImagesLoad() {
         let app = launch(orientation: .landscapeLeft)
         checkTargets(app)
         XCTAssertLessThan(app.descendants(matching: .any)["fixture.title"].frame.midX, app.buttons["fixture.play"].frame.midX)
@@ -38,17 +38,17 @@ import UIKit
             app.buttons["fixture." + name].tap(); XCTAssertEqual(app.staticTexts["fixture.action"].label, name)
         }
     }
-    func testPortraitHeaderKeepsEveryActionVisible() {
+    @MainActor func testPortraitHeaderKeepsEveryActionVisible() {
         let app = launch(orientation: .portrait)
         checkTargets(app)
         attach("detail-portrait-ipad", app: app)
     }
-    func testAccessibilityHeaderStacksWithoutOverflow() {
+    @MainActor func testAccessibilityHeaderStacksWithoutOverflow() {
         let app = launch(orientation: .landscapeLeft, accessibility: true)
         checkTargets(app)
         attach("detail-accessibility-ipad", app: app)
     }
-    func testCompleteCacheFillsTheTrackAndClearingUpdatesIt() {
+    @MainActor func testCompleteCacheFillsTheTrackAndClearingUpdatesIt() {
         let app = launch(orientation: .landscapeLeft)
         let track = app.otherElements["fixture.cacheTrack"]
         XCTAssertTrue(track.exists)
@@ -63,7 +63,7 @@ import UIKit
         app.buttons["fixture.completeCache"].tap()
         XCTAssertEqual(track.value as? String, "complete")
     }
-    private func brightness(_ screenshot: XCUIScreenshot, at point: CGPoint, window: CGRect) -> Double {
+    @MainActor private func brightness(_ screenshot: XCUIScreenshot, at point: CGPoint, window: CGRect) -> Double {
         let image = UIImage(data: screenshot.pngRepresentation)!.cgImage!
         let scale = CGFloat(image.width) / window.width
         let pixel = image.cropping(to: CGRect(x: point.x * scale, y: point.y * scale, width: 1, height: 1))!

@@ -9,8 +9,10 @@ struct WithPerceptionTracking<Content: View>: View {
     var body: some View { content() }
 }
 extension View {
+    @ViewBuilder
     func appOnChange<Value: Equatable>(of value: Value, _ action: @escaping (Value, Value) -> Void) -> some View {
-        onChange(of: value) { old, new in action(old, new) }
+        if #available(iOS 17, *) { onChange(of: value) { old, new in action(old, new) } }
+        else { onChange(of: value) { new in action(value, new) } }
     }
 }
 enum TMDBMatch {
@@ -60,7 +62,7 @@ final class FixtureImages: @unchecked Sendable {
             text.draw(at: CGPoint(x: 70, y: 34), withAttributes: attributes)
         }
         lock.withLock { files = ["background.png": background, "logo.png": wordmark] }
-        URLProtocol.registerClass(FixtureImageProtocol.self)
+        _ = URLProtocol.registerClass(FixtureImageProtocol.self)
     }
 }
 final class FixtureImageProtocol: URLProtocol, @unchecked Sendable {

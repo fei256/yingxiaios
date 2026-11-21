@@ -3,6 +3,7 @@ import Foundation
 public enum TMDBConnectionError: LocalizedError, Equatable, Sendable {
     case http(Int)
     case invalidResponse
+    case invalidImage
     case network(Int)
 
     public var errorDescription: String? {
@@ -14,6 +15,7 @@ public enum TMDBConnectionError: LocalizedError, Equatable, Sendable {
         case .http(429): "TMDB 请求过于频繁，请稍后重试（HTTP 429）。"
         case .http(let status): "TMDB 服务返回 HTTP \(status)，请稍后重试。"
         case .invalidResponse: "TMDB 返回的资料格式无效，请检查 API 地址。"
+        case .invalidImage: "图片地址返回了无法解码的内容，请检查图片地址及网络。"
         case .network(let code):
             switch URLError.Code(rawValue: code) {
             case .timedOut: "TMDB 连接超时，请检查网络或代理。"

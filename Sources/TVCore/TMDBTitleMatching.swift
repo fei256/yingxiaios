@@ -1,6 +1,6 @@
 import Foundation
 
-/// The same resource-title rules as MacCat's runtime/lib/tmdb-matching.mjs.
+/// Resource-title cleanup and conservative identity checks for native metadata lookup.
 /// Keep the source title intact: the query discards release labels, while year/season remain evidence.
 enum TMDBTitleMatching {
     nonisolated(unsafe) private static let expressions: NSCache<NSString, NSRegularExpression> = {

@@ -3283,7 +3283,7 @@ struct VideoDetailView: View {
                         ProgressView().controlSize(.mini)
                         Text("正在获取剧集资料…").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                     }
-                } else if tmdb.phase == .failed {
+                } else if tmdb.phase == .failed || tmdb.details?.metadataWarnings?.isEmpty == false {
                     Button { Task { await tmdb.retry() } } label: { Label("重试剧集资料", systemImage: "arrow.clockwise").font(.system(size: 11)).frame(minHeight: 44) }
                         .buttonStyle(.plain).accessibilityIdentifier("detail.episodeMetadata.retry")
                 }

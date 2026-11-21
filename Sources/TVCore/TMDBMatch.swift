@@ -1,7 +1,7 @@
 import Foundation
 
 /// The TMDB movie or series behind a source's video, for its detail page: artwork, cast, facts and episode stills.
-/// Automatic matching uses MacCat's conservative title/year rules with either service's search/details endpoints.
+/// Automatic matching uses conservative title/year rules with either service's search/details endpoints.
 /// Sent: the video's title, year, remarks, synopsis and episode names, and which source and video it is (the source's
 /// key and name from the subscription, the video's ID there), so a TMDB title can list the sources others found it on
 /// (`sources`). Never an account, a subscription address or a playback link.
