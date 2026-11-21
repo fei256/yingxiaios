@@ -2446,7 +2446,7 @@ struct VideoDetailView: View {
             .task(id: artworkDecisionID) { await retainMatchedArtwork() }
             .onReceive(NotificationCenter.default.publisher(for: TMDBServiceSettings.changed)) { _ in
                 tmdb = TMDBLookup(); loadedBackdrop = nil
-                Task { await startTMDB() }
+                Task { await startTMDB(force: true) }
             }
             #if os(iOS)
             .sheet(isPresented: $showsConfigCenter) { WithPerceptionTracking { ConfigCenterView { await configCenterAddress() } } }
@@ -2645,7 +2645,7 @@ struct VideoDetailView: View {
     }
     /// What this device knows shows at once; otherwise the lookup starts once the source's details are in (their
     /// synopsis and episodes help tell works of the same name apart).
-    private func startTMDB() async {
+    private func startTMDB(force: Bool = false) async {
         guard TMDBLookup.applies(to: client.site) else { return }
         let sourceIdentity = PosterPresentation.matchSourceIdentity(origin: client.origin, sourceKey: client.site.sourceKey)
         let key = TMDBMatchStore.key(source: sourceIdentity, video: video.id)
@@ -2661,7 +2661,7 @@ struct VideoDetailView: View {
                                         source: TMDBMatch.SourceRef(key: client.site.key, name: client.site.name))
         // AI-generated videos and short dramas aren't on TMDB: the page keeps the source's own data.
         guard !TMDBMatch.labeledNotOnTMDB(request) else { tmdb.skip(); return }
-        await tmdb.run(key: key, request: request)
+        await tmdb.run(key: key, request: request, force: force)
     }
     /// A video without episodes. A config center entry (a CatPawOpen bundle's, #311, or a Wex plugin's, #360) opens its page in the app.
     @ViewBuilder private func noEpisodes(_ detail: Video) -> some View {
@@ -3105,7 +3105,7 @@ struct VideoDetailView: View {
                     }.detailReadableContent()
                 } actions: { playControl }
                 playbackBanner
-                if tmdb.phase == .ambiguous { tmdbStatus }
+                if tmdb.phase == .ambiguous || tmdb.phase == .failed || tmdb.phase == .looking { tmdbStatus }
             }
         }
     }
@@ -3156,7 +3156,10 @@ struct VideoDetailView: View {
                     if TMDBLookup.applies(to: client.site), tmdb.phase != .off {
                         Button(tmdb.details == nil ? "匹配影片" : "更换匹配", systemImage: "magnifyingglass") { choosingDetailMatch = true }
                             .accessibilityIdentifier("detail.match")
-                        if tmdb.phase == .failed { Button("重试 TMDB", systemImage: "arrow.clockwise") { Task { await tmdb.retry() } } }
+                        if tmdb.phase != .looking {
+                            Button("重新获取资料", systemImage: "arrow.clockwise") { Task { await tmdb.retry() } }
+                                .accessibilityIdentifier("detail.refreshMetadata")
+                        }
                     }
                     if let link = tmdb.details?.link { ShareLink(item: link) { Label("分享影片", systemImage: "square.and.arrow.up") } }
                     Text(mobileTMDBStatus)

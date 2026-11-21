@@ -16,6 +16,7 @@ import TVCore
     private(set) var answer: TMDBMatch.Answer?
     /// The viewer chose the work (or "none of these") for this video.
     private(set) var chosen = false
+    private(set) var failureMessage: String?
     private var key: String?
     private var request: TMDBMatch.Request?
     private var revision = UUID()
@@ -53,7 +54,7 @@ import TVCore
         revision = UUID()
         let revision = revision
         phase = .idle; step = .starting
-        details = nil; answer = nil; request = nil
+        details = nil; answer = nil; request = nil; failureMessage = nil
         didPrepare = false
         chosen = false
         selectedWork = nil
@@ -105,15 +106,23 @@ import TVCore
             guard self.key == key, !Task.isCancelled else { return }
             self.request = request
             guard !prepared, phase == .idle || phase == .failed else { return }
+        } else {
+            _ = await prepare(key: key)
+            guard self.key == key, !Task.isCancelled else { return }
+            self.request = request
+            if chosen {
+                if let (type, id, season) = selectedWork { await load(type, id: id, season: season) }
+                return
+            }
         }
         guard !Task.isCancelled else { return }
         self.request = request
         self.key = key
         revision = UUID()
         let revision = revision
-        phase = .looking; step = .starting
+        phase = .looking; step = .starting; failureMessage = nil
         do {
-            let answer = try await TMDBMatch.lookup(request, session: session) { step in
+            let answer = try await TMDBMatch.lookup(request, session: session, refresh: force) { step in
                 Task { @MainActor [weak self] in
                     guard let self, self.revision == revision, step != .thinking || self.step == .starting else { return }
                     withAnimation(.appSmooth(duration: 0.25)) { self.step = step }
@@ -129,7 +138,8 @@ import TVCore
             guard self.revision == revision else { return }
             guard !Task.isCancelled, !(error is CancellationError), (error as? URLError)?.code != .cancelled else { phase = .idle; return }
             // Not a failure of the page: it just shows the source's own details.
-            Diagnostics.shared.record(.warning, "tmdb", "lookup failed: \(error.localizedDescription)")
+            failureMessage = TMDBConnectionError.message(for: error)
+            Diagnostics.shared.record(.warning, "tmdb", "lookup failed: \(failureMessage ?? "")")
             withAnimation { phase = .failed }
         }
     }
@@ -147,9 +157,9 @@ import TVCore
         await load(type, id: id, season: season)
     }
 
-    /// Retry bypasses the failed lookup in memory; a failed manual selection retries that same work.
+    /// Refresh bypasses retained negative answers and HTTP caches, preserving manual choices.
     func retry() async {
-        guard phase == .failed else { return }
+        guard phase != .looking, phase != .off else { return }
         if let (type, id, season) = selectedWork {
             await load(type, id: id, season: season)
         } else if let key, let request {
@@ -160,7 +170,7 @@ import TVCore
     /// A video the page won't look up (AI-generated, a short drama): the page stops waiting for TMDB.
     func skip() {
         revision = UUID()
-        details = nil; answer = nil
+        details = nil; answer = nil; failureMessage = nil
         phase = .off
     }
 
@@ -173,7 +183,7 @@ import TVCore
         selectedWork = nil
         await store.choose(TMDBMatchStore.Choice.none, for: key)
         guard self.revision == revision else { return }
-        withAnimation(.appSmooth(duration: 0.3)) { details = nil; phase = .notFound }
+        withAnimation(.appSmooth(duration: 0.3)) { details = nil; phase = .notFound; failureMessage = nil }
     }
 
     private func load(_ type: TMDBMatch.MediaType, id: Int, season: Int?) async {
@@ -185,21 +195,23 @@ import TVCore
         selectedWork = (type, id, season)
         revision = UUID()
         let revision = revision
-        phase = .looking; step = .loading
+        phase = .looking; step = .loading; failureMessage = nil
         do {
-            let value = try await TMDBMatch.details(type, id: id, season: season, session: session)
+            let value = try await TMDBMatch.details(type, id: id, season: season, session: session, refresh: true)
             guard self.revision == revision else { return }
             try Task.checkCancellation()
             withAnimation(.appSmooth(duration: 0.35)) { details = value; phase = .matched }
         } catch {
             guard self.revision == revision else { return }
             guard !Task.isCancelled, !(error is CancellationError), (error as? URLError)?.code != .cancelled else { phase = .idle; return }
-            Diagnostics.shared.record(.warning, "tmdb", "details failed: \(error.localizedDescription)")
+            failureMessage = TMDBConnectionError.message(for: error)
+            Diagnostics.shared.record(.warning, "tmdb", "details failed: \(failureMessage ?? "")")
             phase = .failed
         }
     }
 
     private func show(_ answer: TMDBMatch.Answer) {
+        failureMessage = nil
         self.answer = answer
         details = answer.details
         phase = switch answer.status {
@@ -283,6 +295,14 @@ struct TMDBLookupStatus: View {
                 .accessibilityElement(children: .combine)
             case .ambiguous:
                 TMDBChoices(lookup: lookup)
+            case .failed:
+                HStack(spacing: 12) {
+                    Label(lookup.failureMessage ?? "TMDB 暂时不可用", systemImage: "exclamationmark.triangle")
+                        .font(.footnote).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Button("重试") { Task { await lookup.retry() } }.frame(minWidth: 44, minHeight: 44)
+                        .accessibilityIdentifier("detail.retryMetadata")
+                }.padding(12).background(.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
             default:
                 EmptyView()
             }

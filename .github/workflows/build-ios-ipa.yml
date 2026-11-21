@@ -36,6 +36,7 @@ on:
       - 'Tests/BuildPipeline/**'
       - 'Tests/DetailAppearance/**'
       - 'Tests/PlaybackCache/**'
+      - 'Tests/TMDB/**'
       - 'Sources/**'
       - 'Vendor/**'
       - 'Package.swift'
@@ -53,6 +54,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  metadata-tests:
+    runs-on: ${{ inputs.test_runner || 'macos-15' }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
+        with:
+          persist-credentials: false
+      - name: Test native TMDB requests, enrichment and failure recovery
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+          mkdir -p build/ci
+          xcrun swiftc -swift-version 6 -parse-as-library \
+            Sources/TVCore/TMDBCatalogModels.swift Sources/TVCore/TMDBServiceSettings.swift \
+            Sources/TVCore/TMDBNetworkTransport.swift Sources/TVCore/TMDBConnectionDiagnostics.swift \
+            Sources/TVCore/TMDBMatch.swift Sources/TVCore/TMDBTitleMatching.swift \
+            Sources/TVCore/LocalDetailEpisodeNumbers.swift Sources/TVCore/CustomTMDBService.swift \
+            Tests/TMDB/Support.swift Tests/TMDB/checks.swift -o build/ci/tmdb-checks
+          build/ci/tmdb-checks build/ci/tmdb-checks.json 2>&1 | tee build/ci/tmdb-checks.log
+      - name: Test completed cache timeline coverage
+        run: |
+          xcrun swiftc -swift-version 6 -parse-as-library Sources/TVCore/PlaybackCacheProgress.swift \
+            Tests/PlaybackCache/progress.swift -o build/ci/cache-progress-checks
+          build/ci/cache-progress-checks 2>&1 | tee build/ci/cache-progress-checks.log
+      - name: Upload metadata and cache test reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
+        with:
+          name: TMDB-cache-checks-${{ github.run_id }}
+          path: |
+            build/ci/tmdb-checks.*
+            build/ci/cache-progress-checks.log
+          retention-days: 14
+          if-no-files-found: ignore
   native-tests:
     runs-on: ${{ inputs.test_runner || 'macos-15' }}
     timeout-minutes: 30
@@ -185,6 +223,7 @@ jobs:
           compression-level: 6
 
   build:
+    needs: metadata-tests
     if: github.event_name != 'workflow_dispatch' || inputs.build_ipa
     runs-on: macos-15-intel
     timeout-minutes: 360

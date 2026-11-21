@@ -65,7 +65,18 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
     public var custom: Self? { enabled ? cleaned : nil }
     private var cleaned: Self {
         func trim(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
-        return Self(apiBase: trim(apiBase).isEmpty ? Self.defaultAPIBase : trim(apiBase), apiKey: trim(apiKey), token: trim(token),
+        var api = trim(apiBase).isEmpty ? Self.defaultAPIBase : trim(apiBase)
+        if var components = URLComponents(string: api), components.host?.lowercased() == "api.themoviedb.org",
+           components.path.isEmpty || components.path == "/" {
+            components.path = "/3"; api = components.string ?? api
+        }
+        var secret = trim(token), key = trim(apiKey)
+        if secret.lowercased().hasPrefix("bearer ") { secret = trim(String(secret.dropFirst(7))) }
+        if secret.isEmpty, key.lowercased().hasPrefix("bearer ") || key.split(separator: ".").count == 3 {
+            secret = key.lowercased().hasPrefix("bearer ") ? trim(String(key.dropFirst(7))) : key
+            key = ""
+        }
+        return Self(apiBase: api, apiKey: secret.isEmpty ? key : "", token: secret,
                     imageBase: trim(imageBase).isEmpty ? Self.defaultImageBase : trim(imageBase), language: trim(language).isEmpty ? "zh-CN" : trim(language),
                     enabled: enabled, ultraHD: ultraHD, proxyEnabled: proxyEnabled, proxyUrl: trim(proxyUrl),
                     proxyUsername: trim(proxyUsername), proxyPassword: proxyPassword)
@@ -120,7 +131,7 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
         let base = try Self.webURL(value.apiBase.isEmpty ? "https://api.themoviedb.org/3" : value.apiBase)
         var parts = URLComponents(url: base.appending(path: path), resolvingAgainstBaseURL: false)!
         var values = parameters
-        if !value.language.isEmpty { values["language"] = value.language }
+        if values["language"] == nil, !value.language.isEmpty { values["language"] = value.language }
         if value.token.isEmpty, !value.apiKey.isEmpty { values["api_key"] = value.apiKey }
         parts.queryItems = (parts.queryItems ?? []) + values.filter { !$0.value.isEmpty }.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         guard let url = parts.url else { throw URLError(.badURL) }

@@ -23,7 +23,8 @@ public enum TMDBMatch {
 
     /// TMDB's language for the app's: names, overviews and episode titles come in it where TMDB has them.
     public static var language: String {
-        switch L10n.resolvedLanguage() {
+        if let custom = TMDBServiceSettings.load().custom { return custom.language }
+        return switch L10n.resolvedLanguage() {
         case "zh-Hans": "zh-CN"
         case "zh-Hant": "zh-TW"
         case "ja": "ja-JP"
@@ -241,6 +242,7 @@ public enum TMDBMatch {
         public let posters: [URL]?
         public let broadcastNetworks: [Studio]?
         public let nextEpisode: ScheduledEpisode?
+        public var metadataWarnings: [String]? = nil
     }
 
     public struct Match: Codable, Hashable, Sendable {
@@ -274,14 +276,14 @@ public enum TMDBMatch {
     }
 
     /// Both services use the same deterministic matching policy; ambiguous names stay a viewer choice.
-    public static func lookup(_ request: Request, session: URLSession = .shared, progress: @Sendable (Step) -> Void) async throws -> Answer {
+    public static func lookup(_ request: Request, session: URLSession = .shared, refresh: Bool = false, progress: @Sendable (Step) -> Void) async throws -> Answer {
         if let custom = TMDBServiceSettings.load().custom {
-            return try await CustomTMDBService.lookup(request, config: custom, session: session, progress: progress)
+            return try await CustomTMDBService.lookup(request, config: custom, session: session, refresh: refresh, progress: progress)
         }
         return try await resolve(request, progress: progress, search: {
-            try await builtinSearch($0, language: request.language, session: session)
+            try await builtinSearch($0, language: request.language, session: session, refresh: refresh)
         }, details: { type, id, season in
-            try await builtinDetails(type, id: id, season: season, language: request.language, session: session)
+            try await builtinDetails(type, id: id, season: season, language: request.language, session: session, refresh: refresh)
         })
     }
 
@@ -290,21 +292,28 @@ public enum TMDBMatch {
                         details: (MediaType, Int, Int?) async throws -> Details) async throws -> Answer {
         try Task.checkCancellation()
         let query = TMDBTitleMatching.query(request.title)
-        guard !query.isEmpty, !query.lowercased().hasPrefix("http://"), !query.lowercased().hasPrefix("https://") else {
+        guard !query.isEmpty, !request.title.lowercased().hasPrefix("http://"), !request.title.lowercased().hasPrefix("https://") else {
             return Answer(status: .notFound, match: nil, season: nil, numbering: .season, unmatched: "", candidates: [], details: nil)
         }
-        progress(.searching(query))
-        let results = try await search(query)
+        var results: [SearchResult] = [], seen = Set<String>()
+        for query in TMDBTitleMatching.queries(request.title) {
+            progress(.searching(query))
+            let found = try await search(query)
+            results += found.filter { seen.insert($0.key).inserted }
+        }
         try Task.checkCancellation()
         let seasons = Set(([request.title, request.remarks] + request.episodes).compactMap(TMDBTitleMatching.season))
         let candidates = results.prefix(12).map { Candidate(mediaType: $0.mediaType, id: $0.id, name: $0.name,
             originalName: $0.originalName, year: $0.year, poster: $0.poster, overview: $0.overview) }
-        guard let match = TMDBTitleMatching.pick(results, request: request), match.mediaType != .tv || seasons.count <= 1 else {
+        guard let match = TMDBTitleMatching.pick(results, request: request) else {
             return Answer(status: results.isEmpty ? .notFound : .ambiguous, match: nil, season: seasons.count == 1 ? seasons.first : nil,
                           numbering: .season, unmatched: "", candidates: candidates, details: nil)
         }
         progress(.checking(match.name, match.year))
-        let value = try await details(match.mediaType, match.id, match.mediaType == .tv ? seasons.first ?? 1 : nil)
+        // Mixed seasons identify the same work. Only explicitly aligned episodes
+        // get stills; uncertain season numbering must not hide the work's cast.
+        let selectedSeason = match.mediaType == .tv && seasons.count <= 1 ? seasons.first ?? 1 : nil
+        let value = try await details(match.mediaType, match.id, selectedSeason)
         try Task.checkCancellation()
         return Answer(status: .matched, match: Match(mediaType: match.mediaType, id: match.id, season: value.season?.number,
             numbering: .season, offset: nil, confidence: 1, unmatched: ""), season: value.season?.number,
@@ -312,18 +321,18 @@ public enum TMDBMatch {
     }
 
     /// One work's details: a candidate the viewer picked.
-    public static func details(_ type: MediaType, id: Int, season: Int?, language: String = TMDBMatch.language, session: URLSession = .shared) async throws -> Details {
+    public static func details(_ type: MediaType, id: Int, season: Int?, language: String = TMDBMatch.language, session: URLSession = .shared, refresh: Bool = false) async throws -> Details {
         if let custom = TMDBServiceSettings.load().custom {
-            return try await CustomTMDBService.details(type, id: id, season: season, language: language, config: custom, session: session)
+            return try await CustomTMDBService.details(type, id: id, season: season, language: language, config: custom, session: session, refresh: refresh)
         }
-        return try await builtinDetails(type, id: id, season: season, language: language, session: session)
+        return try await builtinDetails(type, id: id, season: season, language: language, session: session, refresh: refresh)
     }
 
-    private static func builtinDetails(_ type: MediaType, id: Int, season: Int?, language: String, session: URLSession) async throws -> Details {
+    private static func builtinDetails(_ type: MediaType, id: Int, season: Int?, language: String, session: URLSession, refresh: Bool = false) async throws -> Details {
         var parts = URLComponents(url: base.appending(path: "details"), resolvingAgainstBaseURL: false)!
         parts.queryItems = [URLQueryItem(name: "type", value: type.rawValue), URLQueryItem(name: "id", value: String(id)),
                             URLQueryItem(name: "language", value: language), URLQueryItem(name: "v", value: "4")] + (season.map { [URLQueryItem(name: "season", value: String($0))] } ?? [])
-        return try await get(Details.self, parts.url!, session: session)
+        return try await get(Details.self, parts.url!, session: session, refresh: refresh)
     }
 
     /// TMDB's movies and series for a name, best first.
@@ -334,10 +343,10 @@ public enum TMDBMatch {
         return try await builtinSearch(query, language: language, session: session)
     }
 
-    static func builtinSearch(_ query: String, language: String, session: URLSession) async throws -> [SearchResult] {
+    static func builtinSearch(_ query: String, language: String, session: URLSession, refresh: Bool = false) async throws -> [SearchResult] {
         var parts = URLComponents(url: base.appending(path: "search"), resolvingAgainstBaseURL: false)!
         parts.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "language", value: language)]
-        return try await get([SearchResult].self, parts.url!, session: session)
+        return try await get([SearchResult].self, parts.url!, session: session, refresh: refresh)
     }
 
     /// The source videos viewers' lookups matched to this work, most recent first.
@@ -360,8 +369,10 @@ public enum TMDBMatch {
         _ = try? await session.data(for: urlRequest)
     }
 
-    private static func get<T: Decodable>(_ type: T.Type, _ url: URL, session: URLSession) async throws -> T {
-        let (data, response) = try await session.data(from: url)
+    private static func get<T: Decodable>(_ type: T.Type, _ url: URL, session: URLSession, refresh: Bool = false) async throws -> T {
+        var request = URLRequest(url: url)
+        if refresh { request.cachePolicy = .reloadIgnoringLocalCacheData; request.setValue("no-cache", forHTTPHeaderField: "Cache-Control") }
+        let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw Failure(code: "http", message: "HTTP \(status)") }
         return try JSONDecoder().decode(T.self, from: data)
@@ -439,7 +450,7 @@ public actor TMDBMatchStore {
     private var entries: [String: Entry]?
     private var choices: [String: Choice]?
     private static let limit = 600
-    private static let matchingVersion = 2
+    private static let matchingVersion = 3
 
     init(cacheURL: URL? = nil, choicesURL: URL? = nil) {
         let fileManager = FileManager.default

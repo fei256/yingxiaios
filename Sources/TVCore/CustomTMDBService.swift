@@ -3,22 +3,42 @@ import Foundation
 /// Native TMDB v3 response adapter; matching rules are shared with the built-in service.
 enum CustomTMDBService {
     static func object(_ path: String, _ parameters: [String: String] = [:], config: TMDBServiceSettings,
-                       session: URLSession, refresh: Bool = false) async throws -> [String: Any] {
+                       session: URLSession, refresh: Bool = false, timeout: TimeInterval = 30) async throws -> [String: Any] {
         var request = try config.request(path: path, parameters: parameters)
+        request.timeoutInterval = timeout
         if refresh {
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         }
         let data = try await config.data(for: request, session: session)
         guard data.count <= 12 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw URLError(.badServerResponse) }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw TMDBConnectionError.invalidResponse }
+        if json["success"] as? Bool == false {
+            let code = json["status_code"] as? Int
+            if [3, 7, 10, 14, 17, 30, 31, 32, 33, 35].contains(code ?? 0) { throw TMDBConnectionError.http(401) }
+            if code == 25 { throw TMDBConnectionError.http(429) }
+            if code == 34 { throw TMDBConnectionError.http(404) }
+            throw TMDBConnectionError.invalidResponse
+        }
         return json
+    }
+
+    private static func optionalObject(_ path: String, _ parameters: [String: String] = [:], config: TMDBServiceSettings,
+                                       session: URLSession, refresh: Bool) async throws -> [String: Any]? {
+        do { return try await object(path, parameters, config: config, session: session, refresh: refresh, timeout: 12) }
+        catch {
+            try Task.checkCancellation()
+            if (error as? URLError)?.code == .cancelled || error is CancellationError { throw CancellationError() }
+            return nil
+        }
     }
 
     static func item(_ value: [String: Any], kind: TMDBMatch.MediaType? = nil, config: TMDBServiceSettings) -> TMDBCatalog.Item? {
         guard let id = value["id"] as? Int, id > 0 else { return nil }
         let type = kind ?? TMDBMatch.MediaType(rawValue: value["media_type"] as? String ?? "") ?? (value["name"] == nil ? .movie : .tv)
-        let name = value["title"] as? String ?? value["name"] as? String ?? ""
+        let localized = value["title"] as? String ?? value["name"] as? String ?? ""
+        let original = value["original_title"] as? String ?? value["original_name"] as? String ?? ""
+        let name = localized.isEmpty ? original : localized
         guard !name.isEmpty else { return nil }
         let date = value["release_date"] as? String ?? value["first_air_date"] as? String
         return TMDBCatalog.Item(id: id, mediaType: type, name: name,
@@ -65,8 +85,8 @@ enum CustomTMDBService {
                                 page: json["page"] as? Int ?? page, totalPages: min(500, json["total_pages"] as? Int ?? 1))
     }
 
-    static func search(_ query: String, language: String, config: TMDBServiceSettings, session: URLSession) async throws -> [TMDBMatch.SearchResult] {
-        let json = try await object("search/multi", ["query": query, "language": language, "include_adult": "false"], config: config, session: session)
+    static func search(_ query: String, language: String, config: TMDBServiceSettings, session: URLSession, refresh: Bool = false) async throws -> [TMDBMatch.SearchResult] {
+        let json = try await object("search/multi", ["query": query, "language": language, "include_adult": "false"], config: config, session: session, refresh: refresh)
         return rows(json).filter { $0["media_type"] as? String != "person" }.compactMap { item($0, config: config) }.map {
             TMDBMatch.SearchResult(mediaType: $0.mediaType, id: $0.id, name: $0.name, originalName: $0.originalName,
                                    year: $0.year, poster: $0.poster, backdrop: $0.backdrop, overview: $0.overview, sources: 0)
@@ -74,12 +94,45 @@ enum CustomTMDBService {
     }
 
     static func details(_ type: TMDBMatch.MediaType, id: Int, season: Int?, language: String,
-                        config: TMDBServiceSettings, session: URLSession) async throws -> TMDBMatch.Details {
-        let json = try await object("\(type.rawValue)/\(id)", ["language": language, "append_to_response": "credits,images,videos,recommendations,external_ids", "include_image_language": "zh,en,null"], config: config, session: session)
+                        config: TMDBServiceSettings, session: URLSession, refresh: Bool = false) async throws -> TMDBMatch.Details {
+        let locale = language.split(separator: "-").first.map(String.init) ?? "zh"
+        let imageLanguages = Array(Set([locale, "en", "null"])).sorted().joined(separator: ",")
+        let append = (type == .tv ? "aggregate_credits," : "") + "credits,images,translations,videos,recommendations,external_ids"
+        let json = try await object("\(type.rawValue)/\(id)", ["language": language, "append_to_response": append,
+                                    "include_image_language": imageLanguages], config: config, session: session, refresh: refresh)
         guard let title = item(json, kind: type, config: config) else { throw URLError(.cannotParseResponse) }
-        let credits = json["credits"] as? [String: Any] ?? [:]
+        let translations = rows(json["translations"] as? [String: Any] ?? [:], key: "translations")
+        let fallback = translations.first { $0["iso_639_1"] as? String == json["original_language"] as? String }
+            ?? translations.first { $0["iso_639_1"] as? String == "en" }
+        let fallbackOverview = (fallback?["data"] as? [String: Any])?["overview"] as? String ?? ""
+        var warnings: [String] = []
+        var credits = json["aggregate_credits"] as? [String: Any] ?? [:]
+        if type == .tv, credits.isEmpty {
+            credits = try await optionalObject("tv/\(id)/aggregate_credits", ["language": language],
+                                               config: config, session: session, refresh: refresh) ?? [:]
+        }
+        let latestCredits = json["credits"] as? [String: Any] ?? [:]
+        func role(_ value: [String: Any]) -> String? {
+            if let character = value["character"] as? String, !character.isEmpty { return character }
+            let roles = rows(value, key: "roles").sorted { ($0["episode_count"] as? Int ?? 0) > ($1["episode_count"] as? Int ?? 0) }
+            let names = roles.compactMap { $0["character"] as? String }.filter { !$0.isEmpty }
+            if !names.isEmpty { return Array(Set(names)).sorted().joined(separator: " / ") }
+            return value["job"] as? String ?? rows(value, key: "jobs").compactMap { $0["job"] as? String }.joined(separator: " / ")
+        }
         func person(_ value: [String: Any]) -> TMDBMatch.Person {
-            TMDBMatch.Person(id: value["id"] as? Int, name: value["name"] as? String ?? "", role: value["character"] as? String ?? value["job"] as? String, profile: config.image(value["profile_path"] as? String, size: "w185"))
+            TMDBMatch.Person(id: value["id"] as? Int, name: value["name"] as? String ?? "", role: role(value), profile: config.image(value["profile_path"] as? String, size: "w185"))
+        }
+        func people(_ values: [[String: Any]]) -> [TMDBMatch.Person] {
+            var result: [TMDBMatch.Person] = [], indices: [String: Int] = [:]
+            for value in values.map(person) where !value.name.isEmpty {
+                let key = value.id.map(String.init) ?? value.name
+                if let index = indices[key] {
+                    let old = result[index]
+                    result[index] = TMDBMatch.Person(id: old.id, name: old.name, role: old.role?.isEmpty == false ? old.role : value.role,
+                                                     profile: old.profile ?? value.profile)
+                } else { indices[key] = result.count; result.append(value) }
+            }
+            return result
         }
         let seasons = rows(json, key: "seasons").map { value in
             TMDBMatch.SeasonSummary(number: value["season_number"] as? Int ?? 0, name: value["name"] as? String ?? "", episodeCount: value["episode_count"] as? Int ?? 0,
@@ -87,15 +140,33 @@ enum CustomTMDBService {
         }
         var chosen: TMDBMatch.Season?
         if type == .tv, let number = season ?? seasons.first(where: { $0.number > 0 })?.number {
-            let data = try await object("tv/\(id)/season/\(number)", ["language": language], config: config, session: session)
-            chosen = TMDBMatch.Season(number: number, name: data["name"] as? String ?? "", overview: data["overview"] as? String ?? "",
+            if let data = try await optionalObject("tv/\(id)/season/\(number)", ["language": language], config: config, session: session, refresh: refresh),
+               let receivedNumber = data["season_number"] as? Int, receivedNumber == number {
+                chosen = TMDBMatch.Season(number: number, name: data["name"] as? String ?? "", overview: data["overview"] as? String ?? "",
                 poster: config.image(data["poster_path"] as? String), year: (data["air_date"] as? String).flatMap { Int($0.prefix(4)) },
                 episodes: rows(data, key: "episodes").map { value in
                     TMDBMatch.EpisodeInfo(number: value["episode_number"] as? Int ?? 0, name: value["name"] as? String ?? "", overview: value["overview"] as? String ?? "",
                         still: config.image(value["still_path"] as? String), airDate: value["air_date"] as? String, runtime: (value["runtime"] as? NSNumber)?.doubleValue, rating: value["vote_average"] as? Double)
                 })
+            } else { warnings.append("第 \(number) 季资料暂未获取到，可重新获取资料；影片信息仍可使用。") }
         }
         let images = json["images"] as? [String: Any] ?? [:]
+        let logos = rows(images, key: "logos").sorted { left, right in
+            func rank(_ value: [String: Any]) -> Int {
+                let tag = value["iso_639_1"] as? String
+                return tag == locale ? 0 : tag == "en" ? 1 : tag == nil ? 2 : 3
+            }
+            if rank(left) != rank(right) { return rank(left) < rank(right) }
+            return (left["vote_count"] as? Int ?? 0) > (right["vote_count"] as? Int ?? 0)
+        }
+        let backdrops = rows(images, key: "backdrops").filter { value in
+            ((value["aspect_ratio"] as? NSNumber)?.doubleValue ?? 1.78) > 1
+        }.sorted { left, right in
+            let leftClean = left["iso_639_1"] == nil || left["iso_639_1"] is NSNull
+            let rightClean = right["iso_639_1"] == nil || right["iso_639_1"] is NSNull
+            if leftClean != rightClean { return leftClean }
+            return (left["vote_count"] as? Int ?? 0) > (right["vote_count"] as? Int ?? 0)
+        }
         let portraits = rows(images, key: "posters").filter { value in
             guard let ratio = (value["aspect_ratio"] as? NSNumber)?.doubleValue else { return true }
             return ratio >= 0.5 && ratio <= 0.85
@@ -116,19 +187,26 @@ enum CustomTMDBService {
         var seenCountries = Set<String>()
         let countries = ((json["origin_country"] as? [String] ?? []) + rows(json, key: "production_countries").compactMap { $0["iso_3166_1"] as? String ?? $0["name"] as? String })
             .filter { seenCountries.insert($0).inserted }
-        return TMDBMatch.Details(mediaType: type, id: id, name: title.name, originalName: title.originalName,
-            tagline: json["tagline"] as? String ?? "", overview: title.overview, year: title.year, date: title.date,
+        var result = TMDBMatch.Details(mediaType: type, id: id, name: title.name, originalName: title.originalName,
+            tagline: json["tagline"] as? String ?? "", overview: title.overview.isEmpty ? fallbackOverview : title.overview, year: title.year, date: title.date,
             genres: genres.compactMap { $0["name"] as? String }, genreItems: genres.compactMap { value in
                 guard let id = value["id"] as? Int, let name = value["name"] as? String else { return nil }; return TMDBCatalog.Keyword(id: id, name: name)
             }, runtime: (json["runtime"] as? NSNumber)?.doubleValue ?? (json["episode_run_time"] as? [Double])?.first,
             rating: title.rating, voteCount: json["vote_count"] as? Int ?? 0,
             countries: countries, status: json["status"] as? String,
-            poster: title.poster, backdrop: title.backdrop, logo: config.image(rows(images, key: "logos").first?["file_path"] as? String),
+            poster: title.poster, backdrop: config.image(backdrops.first?["file_path"] as? String, size: "w1280") ?? title.backdrop,
+            logo: config.image(logos.first?["file_path"] as? String),
             heroPoster: config.image(portraits.first?["file_path"] as? String, size: "w780") ?? title.poster,
             trailer: imdb.flatMap { $0.range(of: "^tt[0-9]{5,12}$", options: .regularExpression) == nil ? nil : TMDBMatch.Trailer(site: "IMDb", key: $0, title: title.name, year: title.year) },
-            stills: rows(images, key: "backdrops").compactMap { config.image($0["file_path"] as? String, size: "w780") },
+            stills: backdrops.compactMap { config.image($0["file_path"] as? String, size: "w1280") },
             studios: rows(json, key: "production_companies").map { TMDBMatch.Studio(id: $0["id"] as? Int, kind: "company", name: $0["name"] as? String ?? "", logo: config.image($0["logo_path"] as? String, size: "w185")) },
-            cast: rows(credits, key: "cast").map(person), crew: rows(credits, key: "crew").filter { ["Director", "Writer", "Screenplay", "Creator"].contains($0["job"] as? String ?? "") }.map(person),
+            cast: people(rows(credits, key: "cast") + rows(latestCredits, key: "cast")),
+            crew: people((rows(credits, key: "crew") + rows(latestCredits, key: "crew") + rows(json, key: "created_by").map { value in
+                var creator = value; creator["job"] = "Creator"; return creator
+            }).filter { value in
+                ([value["job"] as? String].compactMap { $0 } + rows(value, key: "jobs").compactMap { $0["job"] as? String })
+                    .contains { ["Director", "Writer", "Screenplay", "Creator"].contains($0) }
+            }),
             networks: rows(json, key: "networks").compactMap { $0["name"] as? String }, seasons: seasons, season: chosen,
             recommendations: rows(json["recommendations"] as? [String: Any] ?? [:]).compactMap { item($0, kind: type, config: config) }.map(candidate),
             link: URL(string: "https://www.themoviedb.org/\(type.rawValue)/\(id)")!,
@@ -138,14 +216,16 @@ enum CustomTMDBService {
             broadcastNetworks: rows(json, key: "networks").map { value in
                 TMDBMatch.Studio(id: value["id"] as? Int, kind: "network", name: value["name"] as? String ?? "", logo: config.image(value["logo_path"] as? String, size: "w300"))
             }, nextEpisode: nextEpisode)
+        result.metadataWarnings = warnings.isEmpty ? nil : warnings
+        return result
     }
 
     static func lookup(_ request: TMDBMatch.Request, config: TMDBServiceSettings, session: URLSession,
-                       progress: @Sendable (TMDBMatch.Step) -> Void) async throws -> TMDBMatch.Answer {
+                       refresh: Bool = false, progress: @Sendable (TMDBMatch.Step) -> Void) async throws -> TMDBMatch.Answer {
         try await TMDBMatch.resolve(request, progress: progress, search: {
-            try await search($0, language: request.language, config: config, session: session)
+            try await search($0, language: request.language, config: config, session: session, refresh: refresh)
         }, details: { type, id, season in
-            try await details(type, id: id, season: season, language: request.language, config: config, session: session)
+            try await details(type, id: id, season: season, language: request.language, config: config, session: session, refresh: refresh)
         })
     }
 

@@ -5,6 +5,11 @@ struct TMDBServiceSettingsView: View {
     @State private var config = TMDBServiceSettings.load()
     @State private var message: String?
     @State private var credentialType = TMDBServiceSettings.load().token.isEmpty ? "apiKey" : "token"
+    @State private var testTitle = "凡人修仙传"
+    @State private var checks: [TMDBServiceSettings.ConnectionCheck] = []
+    @State private var testTask: Task<Void, Never>?
+    @State private var testing = false
+    @State private var testRevision = UUID()
     var body: some View {
         SettingsPage(title: "TMDB", symbol: "film.stack") {
             SettingsGroup(footer: "默认使用内置 TMDB。关闭自定义后保留已填写的配置。") {
@@ -42,9 +47,27 @@ struct TMDBServiceSettingsView: View {
                     }
                     Button("保存 TMDB 设置", action: save).settingsButton(prominent: true)
                 }
+                SettingsGroup(title: "连接测试", footer: "使用当前填写的配置测试 API、影片资料和图片。修改后请保存设置，详情页会重新获取资料。") {
+                    TextField("测试影片", text: $testTitle).autocorrectionDisabled()
+                        .accessibilityIdentifier("tmdb.testTitle")
+                    Button(action: testConnection) {
+                        HStack { if testing { ProgressView() }; Text(testing ? "正在测试…" : "测试连接与图片") }
+                    }.settingsButton(prominent: true).disabled(testing)
+                        .accessibilityIdentifier("tmdb.testConnection")
+                    if testing { Button("取消测试", action: cancelTest).accessibilityIdentifier("tmdb.cancelTest") }
+                    ForEach(checks) { check in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Label(check.title, systemImage: check.status == .passed ? "checkmark.circle" : check.status == .warning ? "info.circle" : "exclamationmark.triangle")
+                                .font(.subheadline.weight(.medium))
+                            Text(check.message).font(.footnote).foregroundStyle(.secondary)
+                        }.accessibilityElement(children: .combine)
+                    }
+                }
             }
             if let message { SettingsGroup { Text(message).font(.footnote).foregroundStyle(.secondary) } }
         }
+        .onDisappear(perform: cancelTest)
+        .appOnChange(of: config) { _, _ in cancelTest(); checks = [] }
     }
     private var credential: Binding<String> {
         Binding(get: { credentialType == "token" ? config.token : config.apiKey }, set: {
@@ -57,7 +80,26 @@ struct TMDBServiceSettingsView: View {
             if credentialType == "token" { config.apiKey = "" }
             else { config.token = "" }
             try config.save()
-            message = config.enabled ? "已保存自定义 TMDB" : "已使用内置 TMDB"
+            message = config.enabled ? "已保存自定义 TMDB，详情页将重新获取资料。可测试连接确认 API 和图片。" : "已使用内置 TMDB"
         } catch { message = "配置无效，请检查 API、图片和代理地址。" }
+    }
+    private func testConnection() {
+        cancelTest(); checks = []; testing = true
+        let revision = testRevision, draft = config, title = testTitle
+        testTask = Task {
+            do {
+                let result = try await draft.testConnection(title: title)
+                guard !Task.isCancelled, revision == testRevision else { return }
+                checks = result
+            } catch {
+                guard !Task.isCancelled, revision == testRevision else { return }
+                message = TMDBConnectionError.message(for: error)
+            }
+            guard revision == testRevision else { return }
+            testing = false; testTask = nil
+        }
+    }
+    private func cancelTest() {
+        testRevision = UUID(); testTask?.cancel(); testTask = nil; testing = false
     }
 }

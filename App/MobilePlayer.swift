@@ -289,7 +289,7 @@ struct MobilePlayerView: View {
                     // Already-ready media will not publish another size change.
                     applyOrientation(orientationSample)
                 }
-                clock.attach(session.engine)
+                clock.attach(session)
                 speed = session.engine.speed
                 session.engine.setSubtitleDelay(UserDefaults.standard.double(forKey: "local.playback.subtitleDelay"))
                 nowPlaying.start(session)
@@ -2117,17 +2117,21 @@ private struct KSPlayerSurface: UIViewRepresentable {
 @MainActor @Perceptible final class PlayerClock {
     @PerceptionIgnored private var operations = PlaybackOperationScope()
     @PerceptionIgnored private weak var engine: KSPlaybackEngine?
+    @PerceptionIgnored private weak var session: PlaybackSession?
     private(set) var scrubbing: Double?
     var position: Double { engine?.position ?? 0 }
     var duration: Double { engine?.duration ?? 0 }
-    var bufferedPosition: Double { engine?.bufferedPosition ?? 0 }
+    var bufferedPosition: Double {
+        PlaybackCacheProgress.bufferedPosition(duration: duration, decodedThrough: engine?.bufferedPosition ?? 0,
+            cacheComplete: session?.transfer.cacheComplete == true)
+    }
     var presentationSize: CGSize { engine?.presentationSize ?? .zero }
     var currentPosition: Double { engine?.position ?? 0 }
     private(set) var preview: CGImage?
     @PerceptionIgnored private var previewTask: Task<Void, Never>?
     @PerceptionIgnored private var previewScope = UUID()
-    func attach(_ engine: KSPlaybackEngine) { detach(); self.engine = engine }
-    func detach() { replaceMedia(); engine = nil }
+    func attach(_ session: PlaybackSession) { detach(); self.session = session; engine = session.engine }
+    func detach() { replaceMedia(); engine = nil; session = nil }
     func replaceMedia() { operations.replaceMedia(); scrubbing = nil; cancelPreview() }
     func scrub(to seconds: Double) {
         // A previous submitted seek may complete while this draft is still held.

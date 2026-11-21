@@ -369,7 +369,7 @@ struct LocalCatalogMetadataPills: View {
     var category: String? = nil
     var centered = false
     var calendar: (() -> Void)? = nil
-    private var releaseYear: String? { clean(year) ?? details?.year.map(String.init) ?? item?.year.map(String.init) }
+    private var releaseYear: String? { details?.year.map(String.init) ?? item?.year.map(String.init) ?? clean(year) }
     private var tags: [String] {
         let seasons = details?.seasons.filter { $0.number > 0 } ?? []
         let episodeCount = details?.episodeCount.flatMap { $0 > 0 ? $0 : nil } ?? seasons.reduce(0) { $0 + $1.episodeCount }

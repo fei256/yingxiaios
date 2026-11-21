@@ -377,3 +377,63 @@ test('cache completion counts unique stored bytes instead of overlapping probe b
   assert.equal(statistics.cachedMediaBytes, media.length);
   assert.equal(statistics.complete, true);
 });
+
+test('separate audio must be fully acquired before the playback cache is complete', { timeout: 5000 }, async t => {
+  const { cache, owner, resource, media } = await fixture(t);
+  const sound = cache.resource(owner, 'https://media.example/audio.m4a');
+  sound.forwardCache = true;
+  async function store(target, bytes) {
+    cache.accept(target, new Response(null, { status: 206, headers: {
+      'content-range': `bytes 0-${bytes.length - 1}/${bytes.length}`,
+      'content-length': String(bytes.length), etag: '"fixture-v1"',
+    } }));
+    for (let start = 0; start < bytes.length; start += blockBytes)
+      await cache.put(target, start, bytes.subarray(start, start + blockBytes));
+  }
+  await store(resource, media);
+  assert.equal(cache.statistics(owner.id).complete, false);
+  assert.equal(cache.statistics(owner.id).mediaBytes, null);
+  await store(sound, media.subarray(0, 4 * blockBytes));
+  const statistics = cache.statistics(owner.id);
+  assert.equal(statistics.complete, true);
+  assert.equal(statistics.cachedMediaBytes, media.length + 4 * blockBytes);
+  assert.equal(statistics.mediaBytes, statistics.cachedMediaBytes);
+});
+
+test('clearing a fully cached file removes the completion state', { timeout: 5000 }, async t => {
+  const { cache, owner, resource, media } = await fixture(t);
+  cache.accept(resource, new Response(null, { status: 206, headers: {
+    'content-range': `bytes 0-${media.length - 1}/${media.length}`,
+    'content-length': String(media.length), etag: '"fixture-v1"',
+  } }));
+  for (let start = 0; start < media.length; start += blockBytes)
+    await cache.put(resource, start, media.subarray(start, start + blockBytes));
+  assert.equal(cache.statistics(owner.id).complete, true);
+  await cache.clearVideos();
+  assert.equal(cache.statistics(owner.id).complete, false);
+  assert.equal(cache.statistics(owner.id).cachedMediaBytes, 0);
+});
+
+test('cache size changes and disabling affect the active playback session', { timeout: 5000 }, async t => {
+  const { cache, owner } = await fixture(t);
+  for (const sizeGB of [1, 2, 3, 4]) {
+    await cache.update({ enabled: true, sizeGB });
+    assert.equal(owner.maxBytes, sizeGB * 1024 ** 3);
+    assert.equal(cache.videoMaxBytes, owner.maxBytes);
+    assert.equal(cache.statistics(owner.id).cacheEnabled, true);
+  }
+  await cache.update({ enabled: false, sizeGB: 4 });
+  assert.equal(cache.statistics(owner.id).cacheEnabled, false);
+  assert.equal(owner.maxBytes, 0);
+  assert.equal(cache.statistics(owner.id).complete, false);
+});
+
+test('a cached manifest never claims that all media segments are complete', { timeout: 5000 }, async t => {
+  const { cache, owner, resource } = await fixture(t);
+  resource.manifestURL = 'https://media.example/index.m3u8';
+  await cache.put(resource, 0, Buffer.from('#EXTM3U\n#EXT-X-ENDLIST\n'));
+  const statistics = cache.statistics(owner.id);
+  assert.ok(statistics.cachedMediaBytes > 0);
+  assert.equal(statistics.mediaBytes, null);
+  assert.equal(statistics.complete, false);
+});

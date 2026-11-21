@@ -38,6 +38,11 @@ struct CatalogDetailSections: View {
     var body: some View {
         WithPerceptionTracking {
             VStack(alignment: .leading, spacing: 24) {
+                if let warnings = details.metadataWarnings {
+                    ForEach(warnings, id: \.self) { warning in
+                        Label(warning, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 20)
+                    }
+                }
                 if !credits.isEmpty { people }
                 if !overview.isEmpty, let openOverview {
                     VStack(alignment: .leading, spacing: 12) {
@@ -84,7 +89,7 @@ struct CatalogDetailSections: View {
                 Text("团队").font(.system(size: 19, weight: .semibold))
                 Text("\(credits.count) 位演职人员").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
             }.padding(.horizontal, 20)
-            DiscoverRail(arrowCenter: 36) {
+            DiscoverRail(arrowCenter: 42) {
                 LazyHStack(alignment: .top, spacing: 12) {
                     ForEach(Array(credits.enumerated()), id: \.offset) { _, person in
                         if let id = person.id, id > 0 {
@@ -99,12 +104,12 @@ struct CatalogDetailSections: View {
     }
     private func personCard(_ person: TMDBMatch.Person) -> some View {
         VStack(spacing: 7) {
-            PosterImage(url: person.profile, symbol: "person.fill").frame(width: 72, height: 72).clipShape(Circle())
+            PosterImage(url: person.profile, symbol: "person.fill").frame(width: 84, height: 84).clipShape(Circle())
             VStack(spacing: 2) {
                 Text(person.name).font(.system(size: 14, weight: .medium)).lineLimit(1)
-                if let role = person.role { Text(role).font(.system(size: 11)).lineLimit(2).opacity(0.55) }
+                if let role = person.role, !role.isEmpty { Text(role).font(.system(size: 12)).lineLimit(2).opacity(0.55) }
             }
-        }.frame(width: 90, alignment: .top).contentShape(Rectangle())
+        }.frame(width: 106, alignment: .top).contentShape(Rectangle())
     }
     private func studioRail(_ studios: [TMDBMatch.Studio]) -> some View {
         VStack(alignment: .leading, spacing: 14) {

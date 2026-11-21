@@ -47,10 +47,7 @@ actor DiscoverPainter {
     }
 
     private func render(_ url: URL, headers: [String: String], style: DiscoverPaintStyle) async -> DiscoverPaint? {
-        var request = URLRequest(url: url)
-        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
+        guard let data = try? await TMDBServiceSettings.artworkData(for: url, headers: headers),
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,

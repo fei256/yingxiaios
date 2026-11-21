@@ -1,65 +1,6 @@
 import Foundation
 
-/// TMDB catalogs served by the same credential-holding Worker as title matching.
-public enum TMDBCatalog {
-    public enum Feed: String, Codable, CaseIterable, Sendable {
-        case trending, movies, television, onTheAir, nowPlaying, upcoming, topMovies, topTelevision, animation, chinese, korean, variety
-        case family, kids, netflix, disney, appleTV, hbo, warner, universal, paramount, sony
-        /// Discover's featured carousel: IMDb's popular charts mixed with Douban's hot lists, as TMDB titles (#631).
-        case featured
-    }
-
-    public struct Item: Codable, Hashable, Sendable, Identifiable {
-        public let id: Int
-        public let mediaType: TMDBMatch.MediaType
-        public let name: String
-        public let originalName: String
-        public let year: Int?
-        public let date: String?
-        public let overview: String
-        public let poster: URL?
-        public let backdrop: URL?
-        public let rating: Double?
-        public let genreIDs: [Int]
-        public var key: String { "\(mediaType.rawValue):\(id)" }
-
-        public init(id: Int, mediaType: TMDBMatch.MediaType, name: String, originalName: String, year: Int?, overview: String,
-                    poster: URL?, backdrop: URL?, rating: Double?, genreIDs: [Int], date: String? = nil) {
-            self.id = id; self.mediaType = mediaType; self.name = name; self.originalName = originalName
-            self.year = year; self.overview = overview; self.poster = poster; self.backdrop = backdrop
-            self.rating = rating; self.genreIDs = genreIDs; self.date = date
-        }
-    }
-
-    public struct Page: Codable, Sendable {
-        public let items: [Item]
-        public let page: Int
-        public let totalPages: Int
-        /// Local fetch time survives reuse by a new Home model. It is not part of the remote protocol.
-        public var fetchedAt: Date? = nil
-        private enum CodingKeys: String, CodingKey { case items, page, totalPages }
-    }
-
-    public struct Person: Codable, Sendable, Identifiable {
-        public let id: Int
-        public let name: String
-        public let profile: URL?
-        public let works: [Item]
-    }
-
-    public struct Brand: Codable, Sendable, Identifiable {
-        public let feed: Feed
-        public let name: String
-        public let logo: URL?
-        public var id: Feed { feed }
-    }
-
-    public struct Collections: Codable, Sendable {
-        public let people: [Person]
-        public let networks: [Brand]
-        public let companies: [Brand]
-    }
-
+extension TMDBCatalog {
     public static func collections(language: String = TMDBMatch.language, session: URLSession = .shared) async throws -> Collections {
         if let custom = TMDBServiceSettings.load().custom {
             return try await CustomTMDBService.collections(language: language, config: custom, session: session)

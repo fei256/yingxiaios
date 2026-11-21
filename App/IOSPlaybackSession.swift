@@ -200,7 +200,10 @@ import TVCore
                 guard let self else { return }
                 self.needsVideoCacheActivation = enabled
                 if enabled { self.activateVideoCache() }
-                else { self.cachePreparationID = UUID(); self.cachePreparation?.cancel(); self.cachePreparation = nil }
+                else {
+                    self.cachePreparationID = UUID(); self.cachePreparation?.cancel(); self.cachePreparation = nil
+                    self.transfer.cachedBytes = nil; self.transfer.totalBytes = nil; self.transfer.cacheComplete = false
+                }
             }
         }
     }
@@ -427,7 +430,7 @@ import TVCore
                 }
                 self.transfer.cachedBytes = cacheStatistics.flatMap { $0.cacheEnabled ? $0.cachedMediaBytes : nil }
                 self.transfer.totalBytes = cacheStatistics?.mediaBytes
-                self.transfer.cacheComplete = cacheStatistics?.complete ?? false
+                self.transfer.cacheComplete = cacheStatistics.map { $0.cacheEnabled && $0.complete } ?? false
                 self.transfer.bytesPerSecond = rate.sample(bytes: bytes, at: ProcessInfo.processInfo.systemUptime,
                     identity: rateIdentity)
                 try? await Task.sleep(for: .seconds(1))
