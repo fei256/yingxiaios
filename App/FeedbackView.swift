@@ -80,7 +80,7 @@ struct FeedbackView: View {
     @ViewBuilder private var content: some View {
         #if os(tvOS)
         // The note goes under the rows: the hero's subtitle stops at three lines.
-        TVSettingsSubpage(symbol: "bubble.left.and.text.bubble.right", title: L10n.text("Send Feedback")) {
+        TVSettingsSubpage(symbol: AppSystemSymbols.name("bubble.left.and.text.bubble.right"), title: L10n.text("Send Feedback")) {
             TVSettingsSection(title: L10n.text("Feedback"), footer: [error ?? thanks, Self.note].compactMap { $0 }.joined(separator: "\n\n")) {
                 TVSettingsAction(title: L10n.text("Type"), value: kind.title) {
                     let kinds = Feedback.Kind.allCases
@@ -289,7 +289,7 @@ private struct FeedbackPage: View {
     private var header: some View {
         let tile = RoundedRectangle(cornerRadius: compact ? 16 : 18, style: .continuous)
         return VStack(spacing: compact ? 6 : 8) {
-            Image(systemName: "bubble.left.and.text.bubble.right.fill")
+            Image(systemName: AppSystemSymbols.name("bubble.left.and.text.bubble.right.fill"))
                 .font(.system(size: compact ? 26 : 30, weight: .semibold)).foregroundStyle(.white)
                 .frame(width: compact ? 60 : 68, height: compact ? 60 : 68)
                 .background(LinearGradient(colors: [Brand.cyan, Brand.indigo], startPoint: .topLeading, endPoint: .bottomTrailing), in: tile)

@@ -522,7 +522,7 @@ struct MusicDownloadButton: View {
             let done = queued && items.allSatisfy { $0.status == .completed }
             let label = L10n.text(done ? "Downloaded" : queued ? "Downloading" : "Download")
             Button { library.download(tracks, from: collection) } label: {
-                Label(label, systemImage: done ? "checkmark.circle" : queued ? "arrow.down.circle.dotted" : "arrow.down.circle")
+                Label(label, systemImage: done ? "checkmark.circle" : queued ? AppSystemSymbols.name("arrow.down.circle.dotted") : "arrow.down.circle")
                     #if !os(tvOS)
                     .labelStyle(.iconOnly)
                     #endif

@@ -199,7 +199,7 @@ struct PlayOnButton: View {
                     }
                     #if os(iOS)
                     Section {
-                        Button(action: airPlay.present) { Label(L10n.text("AirPlay"), systemImage: "airplay.video") }
+                        Button(action: airPlay.present) { Label(L10n.text("AirPlay"), systemImage: AppSystemSymbols.name("airplay.video")) }
                     }
                     #endif
                 }
@@ -215,7 +215,7 @@ struct PlayOnButton: View {
                     #else
                     Group {
                         if sending != nil { ProgressView().tint(.white) }
-                        else { Image(systemName: "airplay.video").font(.headline) }
+                        else { Image(systemName: AppSystemSymbols.name("airplay.video")).font(.headline) }
                     }
                     .frame(width: 22, height: 22)
                     #endif

@@ -128,6 +128,7 @@ jobs:
         timeout-minutes: 20
         run: |
           mkdir -p build/ci/search-input
+          python3 Tests/SearchInput/prepare-symbol-audit.py
           python3 - <<'PY'
           from pathlib import Path
           import json, re
@@ -308,6 +309,7 @@ jobs:
       - name: Prepare production component hosts for iOS 16.1
         run: |
           python3 Tests/DetailAppearance/prepare-native-checks.py
+          python3 Tests/SearchInput/prepare-symbol-audit.py
           xcodegen generate --spec build/ci/detail-native/project.json --project build/ci/detail-native
           python3 - <<'PY'
           from pathlib import Path

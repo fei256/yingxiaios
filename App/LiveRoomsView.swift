@@ -136,7 +136,7 @@ private struct LiveRoomSearch: View {
         WithPerceptionTracking {
             Group {
                 if let error {
-                    AppContentUnavailableView(L10n.text("Search Failed"), systemImage: "exclamationmark.magnifyingglass", description: Text(error))
+                    AppContentUnavailableView(L10n.text("Search Failed"), systemImage: AppSystemSymbols.name("exclamationmark.magnifyingglass"), description: Text(error))
                         .frame(maxWidth: .infinity)
                 } else if rooms.isEmpty {
                     if searching { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 60) }

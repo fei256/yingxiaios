@@ -37,7 +37,10 @@ final class DetailHarnessTests: XCTestCase {
     @MainActor func testLandscapeHeaderFitsAndImagesLoad() {
         let app = launch(orientation: .landscapeLeft)
         checkTargets(app)
-        XCTAssertLessThan(app.descendants(matching: .any)["fixture.title"].frame.midX, app.buttons["fixture.play"].frame.midX)
+        let title = app.descendants(matching: .any)["fixture.title"]
+        XCTAssertEqual(title.label, "凡人修仙传")
+        XCTAssertFalse(title.frame.isNull || title.frame.isInfinite, "The logo must expose a real accessible title frame on iOS 16")
+        XCTAssertLessThan(title.frame.midX, app.buttons["fixture.play"].frame.midX)
         attach("detail-landscape-ipad", app: app)
         app.buttons["fixture.play"].tap()
         XCTAssertEqual(app.staticTexts["fixture.action"].label, "play")

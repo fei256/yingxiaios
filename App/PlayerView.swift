@@ -974,7 +974,7 @@ private struct NativePlayerView: UIViewControllerRepresentable {
         if !live {
             let setSpeed = setSpeed, speed = speed
             let options = Self.speeds.map { rate in UIAction(title: Self.speedLabel(rate), state: rate == speed ? .on : .off) { _ in setSpeed(rate) } }
-            items.append(UIMenu(title: L10n.text("Playback Speed") + " · " + Self.speedLabel(speed), image: UIImage(systemName: "gauge.with.dots.needle.67percent"), children: options))
+            items.append(UIMenu(title: L10n.text("Playback Speed") + " · " + Self.speedLabel(speed), image: UIImage(systemName: AppSystemSymbols.name("gauge.with.dots.needle.67percent")), children: options))
         }
         if let previous {
             items.insert(UIAction(title: L10n.text("Previous Episode"), subtitle: previous.name, image: UIImage(systemName: "backward.end.fill"),
@@ -997,7 +997,7 @@ private struct NativePlayerView: UIViewControllerRepresentable {
                 options.append(UIAction(title: L10n.text("Smooth Motion (60 fps)"), state: smooth.wrappedValue ? .on : .off) { _ in smooth.wrappedValue.toggle() })
             }
             let enhances = VideoEnhancement.canUpscale || VideoEnhancement.canSmooth
-            items.append(UIMenu(title: L10n.text("Picture"), image: UIImage(systemName: enhances ? "wand.and.sparkles" : "aspectratio"), children: options))
+            items.append(UIMenu(title: L10n.text("Picture"), image: UIImage(systemName: enhances ? AppSystemSymbols.name("wand.and.sparkles") : "aspectratio"), children: options))
         }
         let info = info
         items.append(UIAction(title: L10n.text("Show Video Info"), image: UIImage(systemName: "info.circle"),

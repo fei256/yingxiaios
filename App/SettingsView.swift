@@ -448,7 +448,7 @@ struct FormSettingsView: View {
                     Section {
                         HStack(spacing: 12) {
                             Button { showsFeedback = true } label: {
-                                SettingsTile(symbol: "bubble.left.and.text.bubble.right.fill", tint: Brand.indigo, title: L10n.text("Send Feedback"),
+                                SettingsTile(symbol: AppSystemSymbols.name("bubble.left.and.text.bubble.right.fill"), tint: Brand.indigo, title: L10n.text("Send Feedback"),
                                              subtitle: L10n.text("Report a problem or share an idea"))
                             }
                             Button { openURL(Support.telegram) } label: {
@@ -463,7 +463,7 @@ struct FormSettingsView: View {
                     }
                     #else
                     Section {
-                        SettingsLinkRow(symbol: "bubble.left.and.text.bubble.right.fill", tint: Brand.indigo, title: L10n.text("Send Feedback"),
+                        SettingsLinkRow(symbol: AppSystemSymbols.name("bubble.left.and.text.bubble.right.fill"), tint: Brand.indigo, title: L10n.text("Send Feedback"),
                                         subtitle: L10n.text("Report a problem or share an idea")) { WithPerceptionTracking { FeedbackView() } }
                         SettingsWebRow(symbol: "paperplane.fill", tint: Brand.cyan, title: L10n.text("Telegram Group"),
                                        subtitle: L10n.text("Chat with the developer and other users"), url: Support.telegram)
@@ -622,7 +622,7 @@ struct FormSettingsView: View {
                         Section {
                             if VideoEnhancement.canUpscale {
                                 Toggle(isOn: $upscalesVideo) {
-                                    FormLabel(symbol: "wand.and.sparkles", tint: .purple, title: L10n.text("Sharper Picture"), subtitle: upscaleNote)
+                                    FormLabel(symbol: AppSystemSymbols.name("wand.and.sparkles"), tint: .purple, title: L10n.text("Sharper Picture"), subtitle: upscaleNote)
                                 }
                                 .settingsSwitch()
                             }
@@ -975,7 +975,7 @@ struct PlaybackSettingsView: View {
                     SettingsGroup(title: L10n.text("Picture"), footer: VideoEnhancement.note) {
                         if VideoEnhancement.canUpscale {
                             Toggle(isOn: $upscalesVideo) {
-                                FormLabel(symbol: "wand.and.sparkles", tint: .purple, title: L10n.text("Sharper Picture"))
+                                FormLabel(symbol: AppSystemSymbols.name("wand.and.sparkles"), tint: .purple, title: L10n.text("Sharper Picture"))
                             }
                             .settingsSwitch()
                         }

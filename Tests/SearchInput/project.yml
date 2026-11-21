@@ -14,6 +14,7 @@ targets:
     sources:
       - path: ../../App/GlobalSearchInput.swift
       - path: ../../App/PlayerControlTargets.swift
+      - path: ../../App/AppSystemSymbols.swift
       - path: ../../App/PlayerPictureGestures.swift
       - path: ../../Sources/TVCore/PictureTaps.swift
       - path: ../../App/LocalControlTargets.swift
@@ -23,6 +24,7 @@ targets:
       - path: NativeReferenceButton.swift
       - path: JournalHarness.swift
       - path: Harness.swift
+      - path: ../../build/ci/search-input/system-symbols.json
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.yingxia.search-input-checks
@@ -36,6 +38,7 @@ targets:
       - path: InputTests.swift
       - path: JournalDateTests.swift
       - path: PictureGestureHitTests.swift
+      - path: SymbolAvailabilityTests.swift
     dependencies:
       - target: SearchInputChecks
   ControlHitTests:
