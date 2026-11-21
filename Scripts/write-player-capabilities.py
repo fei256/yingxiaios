@@ -41,7 +41,7 @@ if missing:
 manifest = {
     'ffmpeg_version': '8.1.3',
     'ffmpeg_commit': '1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7',
-    'architecture': 'arm64', 'platform': 'iOS', 'minimum_os': '16.2',
+    'architecture': 'arm64', 'platform': 'iOS', 'minimum_os': '16.1',
     'archive': str(archive.relative_to(ROOT)),
     'archive_sha256': hashlib.sha256(archive.read_bytes()).hexdigest(),
     'config_sha256': hashlib.sha256(config.read_bytes()).hexdigest(),

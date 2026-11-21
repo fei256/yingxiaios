@@ -5,7 +5,7 @@ Pinned commit: `be7f60d3b94a0941c643fe8699113cfce4f08e83` (2026-10-05).
 License: GPL-3.0, preserved in `LICENSE`.
 
 This is the last source implementation before the upstream Swift 6.2 binary package migration.
-The maintained Xcode 16.1 toolchain compiles this source in Swift 5 language mode for iOS 16.2.
+The maintained Xcode 16.1 toolchain compiles this source in Swift 5 language mode for iOS 16.1.
 `Package.swift` at the project root defines the build targets and exposes `KSPlayer` to the iOS app.
 The project root manifest is the build definition for this source snapshot.
 

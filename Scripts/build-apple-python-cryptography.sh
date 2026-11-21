@@ -12,7 +12,7 @@ case "$TARGET" in
     RUST_TARGET_SHA=9362b66fbaf2503276ea34f34b41b171269db9ba4dce05dde3472ea9d1852601 ;;
   *) echo "Usage: $0 [ios|ios-simulator]" >&2; exit 2 ;;
 esac
-VERSION=3.14; SUPPORT=b13; MINIMUM_OS=16.2
+VERSION=3.14; SUPPORT=b13; MINIMUM_OS=16.1
 WORK="${APPLE_PYTHON_WORK:-$PWD/build/apple-python}"
 WHEELS="$WORK/wheels/$PLATFORM/$MINIMUM_OS"
 XCFRAMEWORK="$WORK/iOS-$VERSION-$SUPPORT/Python.xcframework"

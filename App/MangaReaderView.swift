@@ -1118,7 +1118,7 @@ struct MangaPinchZoom<Content: View>: UIViewRepresentable {
     let rotation: ReaderPageRotation
     @ViewBuilder let content: Content
 
-    // SwiftUI's root modifier provides the same edge-to-edge column on iOS 16.2,
+    // SwiftUI's root modifier provides the same edge-to-edge column on iOS 16.1,
     // before UIHostingController exposes safeAreaRegions in iOS 16.4.
     struct EdgeToEdgeContent: View {
         let content: Content

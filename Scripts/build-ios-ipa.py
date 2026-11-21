@@ -14,6 +14,7 @@ from build_validation import archive_failure_excerpt, require_validation_enabled
 from build_resources import build_resources
 from source_layout import check_source_layout
 from source_snapshot import native_checksums, source_checksums
+from native_deployment import inspect_link_inputs
 
 require_validation_enabled()
 
@@ -62,7 +63,7 @@ command = [
     '-clonedSourcePackagesDirPath', 'build/SourcePackages',
     '-disableAutomaticPackageResolution', '-skipMacroValidation', '-parallelizeTargets', '-jobs', str(jobs),
     '-showBuildTimingSummary',
-    '-archivePath', str(out / 'Yingxia-local-iOS16.2.xcarchive'),
+    '-archivePath', str(out / 'Yingxia-local-iOS16.1.xcarchive'),
     f'CURRENT_PROJECT_VERSION={number}', 'CODE_SIGNING_ALLOWED=NO',
     'CODE_SIGNING_REQUIRED=NO', 'DEVELOPMENT_TEAM=',
     # SDK-scoped settings propagate to SwiftPM host macros too. A global
@@ -102,6 +103,11 @@ if out.is_symlink():
 if out.exists():
     shutil.rmtree(out)
 out.mkdir(parents=True)
+deployment = inspect_link_inputs(root)
+(out / 'native-deployment.json').write_text(json.dumps(deployment, indent=2) + '\n')
+if deployment['errors']:
+    raise SystemExit('\n'.join(deployment['errors'][:40]))
+print(f"Native iOS 16.1 deployment verified for {deployment['code_members']} code members.", flush=True)
 snapshot = source_checksums(root)
 (out / 'source-sha256-before.json').write_text(json.dumps(snapshot, ensure_ascii=False, indent=2) + '\n')
 native_inputs = native_checksums(root)

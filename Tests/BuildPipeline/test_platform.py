@@ -19,6 +19,15 @@ spec.loader.exec_module(platform)
 
 
 class PlatformTests(unittest.TestCase):
+    def test_runtime_only_keeps_the_selected_newer_device_sdk(self):
+        with mock.patch.object(platform.subprocess, 'check_output', return_value='18.5'), \
+             mock.patch.object(platform, 'installed', return_value=True):
+            report = platform.install_platform(self.root, '16.1', require_matching_sdk=False)
+        self.assertEqual(report['runtime_version'], '16.1')
+        self.assertEqual(report['sdk_version'], '18.5')
+        self.assertEqual(self.downloads, [])
+        self.assertEqual(self.imports, [])
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

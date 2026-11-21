@@ -24,9 +24,9 @@ for f in sorted((app/'Frameworks').glob('*.framework')):
    deps.append({'kind':match.group(1),'name':dep,'resolved':resolved})
    if not resolved:errors.append(f'{f.name}: unresolved {dep}')
  if archs!=['arm64']:errors.append(f'{f.name}: archs {archs}')
- if not minos or any(version(x)>version('16.2') for x in minos):errors.append(f'{f.name}: minos {minos}')
+ if not minos or any(version(x)>version('16.1') for x in minos):errors.append(f'{f.name}: minos {minos}')
  if platforms!=['IOS']:errors.append(f'{f.name}: platforms {platforms}')
- if version(info.get('MinimumOSVersion','999'))>version('16.2'):errors.append(f'{f.name}: plist minimum too high')
+ if version(info.get('MinimumOSVersion','999'))>version('16.1'):errors.append(f'{f.name}: plist minimum too high')
  if not (f/'PrivacyInfo.xcprivacy').exists():errors.append(f'{f.name}: no privacy manifest')
  source_binary=source/'Frameworks'/f.name/info['CFBundleExecutable']
  if source_binary.exists() and source_binary.read_bytes()!=binary.read_bytes():errors.append(f'{f.name}: embedded bytes differ')
@@ -50,8 +50,8 @@ report['app_platforms']=re.findall(r'\bplatform\s+(\S+)',app_build)
 if report['app_platforms']!=['IOS']:errors.append('App Mach-O platform is not IOS: '+str(report['app_platforms']))
 report['app_archs']=command('lipo','-archs',str(executable)).strip().split()
 if report['app_archs']!=['arm64']:errors.append('App architecture mismatch')
-if info.get('MinimumOSVersion')!='16.2':errors.append('App plist minimum not16.2')
-if re.findall(r'\bminos\s+(\S+)',app_build)!=['16.2']:errors.append('App Mach-O minimum not16.2')
+if info.get('MinimumOSVersion')!='16.1':errors.append('App plist minimum not16.1')
+if re.findall(r'\bminos\s+(\S+)',app_build)!=['16.1']:errors.append('App Mach-O minimum not16.1')
 if info.get('UIDeviceFamily')!=[1,2]:errors.append('Not iPhone+iPad')
 report['opens_documents_in_place']=info.get('LSSupportsOpeningDocumentsInPlace') is True
 if not report['opens_documents_in_place']:errors.append('Document picker in-place import support missing')
@@ -74,7 +74,7 @@ for binary in app.rglob('*'):
  native_platforms=re.findall(r'\bplatform\s+(\S+)',native_build)
  if native_platforms!=['IOS']:errors.append(str(binary.relative_to(app))+': platform '+str(native_platforms))
  if native_archs!=['arm64']:errors.append(str(binary.relative_to(app))+': architecture '+str(native_archs))
- if not native_min or any(version(v)>version('16.2') for v in native_min):errors.append(str(binary.relative_to(app))+': minimum '+str(native_min))
+ if not native_min or any(version(v)>version('16.1') for v in native_min):errors.append(str(binary.relative_to(app))+': minimum '+str(native_min))
  native_deps=[]
  for block in command('otool','-l',str(binary)).split('Load command ')[1:]:
   if not re.search(r'\n\s+cmd LC_(?:LOAD|LOAD_WEAK|REEXPORT|LOAD_UPWARD)_DYLIB\n',block):continue

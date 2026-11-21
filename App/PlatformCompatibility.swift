@@ -3,7 +3,7 @@ import Perception
 import TVCore
 
 // Explicit names keep these adapters distinct from native overloads. Runtime checks
-// preserve newer rendering while every fallback is available on the iOS 16.2 target.
+// preserve newer rendering while every fallback is available on the iOS 16.1 target.
 extension View {
     @ViewBuilder func appOnChange<Value: Equatable>(of value: Value, initial: Bool = false,
                                                    _ action: @escaping (Value, Value) -> Void) -> some View {

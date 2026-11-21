@@ -132,7 +132,7 @@ struct LocalAboutView: View {
                 SettingsGroup {
                     LabeledContent("版本", value: updates.current)
                     LabeledContent("构建", value: String(updates.build))
-                    Text("iOS 16.2 本地维护版").foregroundStyle(.secondary)
+                    Text("iOS 16.1 本地维护版").foregroundStyle(.secondary)
                 }
                 SettingsGroup {
                     SettingsLinkRow(symbol: "doc.plaintext", title: "开源许可") { LicensesView() }

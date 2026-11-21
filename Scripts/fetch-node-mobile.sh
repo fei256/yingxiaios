@@ -3,7 +3,7 @@
 # Scripts/embed-node-mobile.sh adds to the iPhone, iPad and Apple TV apps. CatPawOpen (猫源) bundles run in it
 # (EmbeddedNodeHost). The iOS and tvOS builds run this themselves, so nobody has to build Node.
 #
-# iOS uses a full-ICU Node 24 framework whose binary targets iOS 14, including for the iOS 16.2 app.
+# iOS uses a full-ICU Node 24 framework whose binary targets iOS 14, including for the iOS 16.1 app.
 # tvOS uses jo32's Node 26 build with Apple TV slices. Both are checked against SHA-256 and kept once per Mac in
 # ~/Library/Caches/tvbox-nodejs-mobile, so other checkouts and worktrees only link to it.
 # To try a framework you built yourself (docs/BUILDING.md in that repository), point NODE_MOBILE_DIR at a folder

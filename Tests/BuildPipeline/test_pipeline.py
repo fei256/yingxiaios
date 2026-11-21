@@ -286,14 +286,14 @@ class ValidationTests(TemporaryProject):
         executable = self.file('Test.app/Test', bytes.fromhex('cffaedfe') + b'\0' * 20)
         self.file('Test.app/bad.dylib', bytes.fromhex('cffaedfe') + b'\0' * 20)
         self.file('Runtime/PythonHost/requirements.txt', b'')
-        info = {'CFBundleExecutable': executable.name, 'MinimumOSVersion': '16.2',
+        info = {'CFBundleExecutable': executable.name, 'MinimumOSVersion': '16.1',
                 'UIDeviceFamily': [1, 2], 'LSSupportsOpeningDocumentsInPlace': True}
         self.file('Test.app/Info.plist', plistlib.dumps(info))
         output = self.root / 'reports'
         def command(arguments, **kwargs):
             if arguments[0] == 'xcrun':
                 platform = 'IOSSIMULATOR' if arguments[-1].endswith('bad.dylib') else 'IOS'
-                return 'platform ' + platform + '\nminos 16.2\n'
+                return 'platform ' + platform + '\nminos 16.1\n'
             if arguments[0] == 'lipo':
                 return 'arm64\n'
             return ''

@@ -1,6 +1,6 @@
 # 映匣 Yingxia · iOS
 
-映匣的独立 iOS 源码，面向 iPhone / iPad，最低 iOS 16.2。当前版本为 **1.8.13**，支持 Python、Node、QuickJS、FFmpeg、KSPlayer、原盘读取和离线语音字幕；iOS 不执行 JVM、JAR 或 DEX。
+映匣的独立 iOS 源码，面向 iPhone / iPad，最低 iOS 16.1。当前版本为 **1.8.13**，支持 Python、Node、QuickJS、FFmpeg、KSPlayer、原盘读取和离线语音字幕；iOS 不执行 JVM、JAR 或 DEX。
 
 ## 内容
 
@@ -16,7 +16,7 @@
 
 ## 编译环境
 
-- macOS，完整安装并选中的 Xcode；云端构建环境为 **Xcode 16.4 / Swift 6 / iPhoneOS SDK 18.5**，应用仍以 iOS 16.2 为最低版本。
+- macOS，完整安装并选中的 Xcode；云端构建环境为 **Xcode 16.4 / Swift 6 / iPhoneOS SDK 18.5**，应用仍以 iOS 16.1 为最低版本。
 - Python 3.10 或以上、Git、curl、XcodeGen、ripgrep、pkg-config。
 - Python 构建会使用独立的 CPython 3.14 工具解释器；FFmpeg 构建会准备固定版本 Meson/Ninja。
 
@@ -56,7 +56,7 @@ python3 Scripts/prepare-ios-dependencies.py --av3a-archive /path/to/av3a-pinned-
 
 云端构建机还为 XCBuild 设置 `IgnoreFileSystemDeviceInodeChanges`，避免缓存解压产生的新文件编号触发全量重编译；内容和修改时间检查仍然保留。该设置仅在临时的 CI 构建机执行，不修改本机 Xcode 偏好。
 
-构建成功后，从运行页面的 **Artifacts** 下载 `Yingxia-iOS-build…-unsigned`，解压得到 IPA、`SHA256SUMS.txt` 和检查报告。IPA 保留 30 天，诊断日志保留 14 天。输出面向 iPhone/iPad、最低 iOS 16.2，安装前需自行签名。此流程不需要 Apple 签名证书或开发者账号，也不会自动发布 Release。
+构建成功后，从运行页面的 **Artifacts** 下载 `Yingxia-iOS-build…-unsigned`，解压得到 IPA、`SHA256SUMS.txt` 和检查报告。IPA 保留 30 天，诊断日志保留 14 天。输出面向 iPhone/iPad、最低 iOS 16.1，安装前需自行签名。此流程不需要 Apple 签名证书或开发者账号，也不会自动发布 Release。
 
 IPA 下载附件只包含安装包和小型检查报告；完整编译日志及链接图在单独的 `iOS-build…-logs-…` 附件。build06 的 IPA 实际约 103 MB，旧的约 197 MB 下载附件还含有大日志。历史失败原因、已补强的检查与真机验证边界见 [构建流程审计](docs/build-pipeline-audit.md)。
 
@@ -69,12 +69,12 @@ python3 Scripts/build-ios-ipa.py --check --build-number 1
 python3 Scripts/build-ios-ipa.py --build-number 1
 ```
 
-构建目标为 `TVBox-iOS`，Release，`generic/platform=iOS`，arm64，iPhone/iPad，最低 iOS 16.2。只检查条件时使用 `--check`，并行度可用 `--jobs 4` 调整。
+构建目标为 `TVBox-iOS`，Release，`generic/platform=iOS`，arm64，iPhone/iPad，最低 iOS 16.1。只检查条件时使用 `--check`，并行度可用 `--jobs 4` 调整。
 
 输出为未签名 IPA。构建号从 1 开始，文件名至少保留两位：
 
 ```text
-artifacts/latest/Yingxia-1.8.13-build01-iOS16.2-NoJava-unsigned.ipa
+artifacts/latest/Yingxia-1.8.13-build01-iOS16.1-NoJava-unsigned.ipa
 ```
 
 已有最新交付记录时，不指定 `--build-number` 会在它的基础上递增。只有归档、源码一致性、原生依赖、部署信息、Java 排除、ZIP 和校验和检查通过后，才更新 `artifacts/latest/`。安装需要自行签名。

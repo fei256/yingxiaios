@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the pinned native AV3A reference decoder for iOS 16.2 arm64 only."""
+"""Build the pinned native AV3A reference decoder for iOS 16.1 arm64 only."""
 from __future__ import annotations
 import argparse
 import concurrent.futures
@@ -49,7 +49,7 @@ def main() -> None:
         if saved.get("signature") == signature and saved.get("library_sha256") == actual:
             print(f"AV3A iOS arm64 is up to date: {prefix}")
             return
-    work = ROOT / "build/AV3A/objects-ios16.2-arm64"
+    work = ROOT / "build/AV3A/objects-ios16.1-arm64"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     # Keep the upstream implausible-latent clamp, removing its process-global
@@ -71,7 +71,7 @@ def main() -> None:
     sources = [prepared_clamp if p == upstream_clamp else p for p in sources]
     includes = ["-I" + str(VENDOR / folder) for folder in
                 ["include", "reference/common", "reference/decoder"]]
-    flags = ["-target", "arm64-apple-ios16.2", "-isysroot", sdk, "-O3", "-DNDEBUG",
+    flags = ["-target", "arm64-apple-ios16.1", "-isysroot", sdk, "-O3", "-DNDEBUG",
              "-DSUPPORT_NEON", "-std=gnu11", "-fPIC", "-fno-common",
              "-Wno-macro-redefined", "-Wno-incompatible-pointer-types",
              "-Wno-pointer-sign"] + includes
@@ -102,7 +102,7 @@ def main() -> None:
         "Version: 3.3.1\nLibs: -L${libdir} -ltvav3a\nCflags: -I${includedir}\n")
     (partial / "build-manifest.json").write_text(json.dumps({
         "signature": signature, "repository": inventory["repository"],
-        "commit": inventory["commit"], "target": "arm64-apple-ios16.2",
+        "commit": inventory["commit"], "target": "arm64-apple-ios16.1",
         "source_files": len(sources), "model": "embedded model.h (79930 bytes)",
         "decoder": "AVS3A_RMv3.3.1", "channel_beds_only": True,
         "object_renderer": False, "redistribution_cleared": False,
@@ -111,7 +111,7 @@ def main() -> None:
     }, indent=2) + "\n")
     shutil.rmtree(prefix, ignore_errors=True)
     partial.rename(prefix)
-    print(f"AV3A built: {prefix} ({len(sources)} C sources; arm64 iOS 16.2)")
+    print(f"AV3A built: {prefix} ({len(sources)} C sources; arm64 iOS 16.1)")
 
 if __name__ == "__main__":
     main()

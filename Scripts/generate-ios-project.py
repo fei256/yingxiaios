@@ -22,8 +22,8 @@ spec["name"] = "Yingxia-iOS"
 spec["targets"] = {"TVBox-iOS": spec["targets"]["TVBox-iOS"]}
 spec["packages"] = {name: value for name, value in spec["packages"].items()
                     if name in ("TVCore", "Perception")}
-spec["options"]["deploymentTarget"] = {"iOS": "16.2"}
-spec["settings"]["base"]["IPHONEOS_DEPLOYMENT_TARGET"] = "16.2"
+spec["options"]["deploymentTarget"] = {"iOS": "16.1"}
+spec["settings"]["base"]["IPHONEOS_DEPLOYMENT_TARGET"] = "16.1"
 destination = root / "build/ios-project.json"
 destination.parent.mkdir(parents=True, exist_ok=True)
 serialized = json.dumps(spec, indent=2, sort_keys=True) + "\n"

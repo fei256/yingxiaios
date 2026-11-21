@@ -238,6 +238,7 @@ private struct ResultRow: Codable { let name: String; let passed: Bool; let fail
             let filename = "[1.5GB]A.Record.of.a.Mortals.Journey.to.Immortality.S01E04.2020.2160p.WEB-DL.H265.HDR.AAC.mp4"
             try expect(TMDBTitleMatching.query(filename) == "A Record of a Mortals Journey to Immortality", "Release metadata polluted the search query")
             try expect(TMDBTitleMatching.sourceYear(nil, title: "凡人修仙传", episodes: [filename]) == "2020", "Post-episode release year was missed")
+            try expect(TMDBTitleMatching.query(filename.replacingOccurrences(of: "E04", with: "EP04")) == "A Record of a Mortals Journey to Immortality", "EP-prefixed releases polluted the query")
         }
         await run("aliases deduplicate queries and resolve one work") {
             let request = TMDBMatch.Request(video: Video("凡人修仙传 / A Record of a Mortal's Journey to Immortality", year: "2020", category: "剧集", episodes: ["S01E04", "S01E200"]))
@@ -263,6 +264,9 @@ private struct ResultRow: Codable { let name: String; let passed: Bool; let fail
             let request = TMDBMatch.Request(video: Video("https://media.fixture/private-film"))
             let answer = try await CustomTMDBService.lookup(request, config: config, session: session, progress: { _ in })
             try expect(answer.status == .notFound && FixtureServer.shared.calls.isEmpty, "A playback URL was sent to metadata search")
+            let mixed = TMDBMatch.Request(video: Video("凡人修仙传 / https://media.fixture/private-film"))
+            let ignored = try await CustomTMDBService.lookup(mixed, config: config, session: session, progress: { _ in })
+            try expect(ignored.status == .notFound && FixtureServer.shared.calls.isEmpty, "A mixed alias exposed a playback URL")
         }
         await run("explicit refresh bypasses HTTP metadata cache") {
             _ = try await CustomTMDBService.details(.tv, id: 107371, season: 1, language: "zh-CN", config: config, session: session, refresh: true)

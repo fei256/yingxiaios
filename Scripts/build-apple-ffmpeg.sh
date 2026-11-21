@@ -2,7 +2,7 @@
 # Builds the unified native iOS FFmpeg used by KSPlayer and TVMedia.
 # All stock decoders/demuxers/parsers, dav1d AV1, davs2 AVS2, uavs3d AVS3,
 # patched reference AV3A, selected
-# audio/video filters, HTTP/HTTPS and DASH are compiled for iOS 16.2 arm64.
+# audio/video filters, HTTP/HTTPS and DASH are compiled for iOS 16.1 arm64.
 # AV3A reference-code policy is reflected by FFmpeg's --enable-nonfree build flag.
 # Output and disposable build caches stay inside this maintained project.
 set -euo pipefail
@@ -191,9 +191,9 @@ for slice in "${selected_slices[@]}"; do
   case "$slice" in
     macos-arm64) build_slice "$slice" macosx aarch64 arm64-apple-macos14.0 ;;
     macos-x86_64) build_slice "$slice" macosx x86_64 x86_64-apple-macos14.0 ;;
-    ios) build_slice "$slice" iphoneos aarch64 arm64-apple-ios16.2 ;;
-    ios-simulator) build_slice "$slice" iphonesimulator aarch64 arm64-apple-ios16.2-simulator ;;
-    ios-simulator-x86_64) build_slice "$slice" iphonesimulator x86_64 x86_64-apple-ios16.2-simulator ;;
+    ios) build_slice "$slice" iphoneos aarch64 arm64-apple-ios16.1 ;;
+    ios-simulator) build_slice "$slice" iphonesimulator aarch64 arm64-apple-ios16.1-simulator ;;
+    ios-simulator-x86_64) build_slice "$slice" iphonesimulator x86_64 x86_64-apple-ios16.1-simulator ;;
     tvos) build_slice "$slice" appletvos aarch64 arm64-apple-tvos17.0 ;;
     tvos-simulator) build_slice "$slice" appletvsimulator aarch64 arm64-apple-tvos17.0-simulator ;;
   esac

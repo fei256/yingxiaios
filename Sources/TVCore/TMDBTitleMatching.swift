@@ -30,7 +30,7 @@ enum TMDBTitleMatching {
         raw = replacing(#"<[^>]*>|[\p{So}\p{Cf}]"#, in: raw).trimmingCharacters(in: .whitespacesAndNewlines)
         raw = replacing(#"(?i)^[\[【(]\s*\d+(?:\.\d+)?\s*[KMGT]i?B?\s*[\]】)]\s*"#, in: raw, with: "")
         raw = replacing(#"^(?:[\[【](?:国剧|泰剧|韩剧|日剧|美剧|短剧|电视剧|剧集|电影|标题)[\]】]\s*[:：]?\s*|(?:电视剧|剧集|电影)\s*[:：]\s*|国剧(?=[\p{Han}「『]))"#, in: raw, with: "")
-        if let release = first(#"(?i)(?:^|[ ._-])S\d{1,3}[ ._-]*E\d{1,4}(?!\d)"#, raw), release.range.location > 0,
+        if let release = first(#"(?i)(?:^|[ ._-])S\d{1,3}[ ._-]*E(?:P)?\d{1,4}(?!\d)"#, raw), release.range.location > 0,
            let range = Range(release.range, in: raw) { raw = String(raw[..<range.lowerBound]) }
         if let year = first(#"[\[【(]\s*(?:19|20)\d{2}\s*[\]】)]"#, raw), year.range.location > 0,
            let range = Range(year.range, in: raw), first(#"^\s*[:：]"#, String(raw[range.upperBound...])) == nil {
@@ -78,7 +78,7 @@ enum TMDBTitleMatching {
         if let bracket = capture(#"[\[【(]\s*((?:19|20)\d{2})\s*[\]】)]"#, title.precomposedStringWithCompatibilityMapping) { return bracket }
         let years = Set(episodes.compactMap {
             capture(#"(?i)(?:^|[ ._-])((?:19|20)\d{2})(?=[ ._-]+S\d+[ ._-]*E\d+)"#, $0)
-                ?? capture(#"(?i)S\d+[ ._-]*E\d+[ ._-]+((?:19|20)\d{2})(?=[ ._-]|$)"#, $0)
+                ?? capture(#"(?i)S\d+[ ._-]*E(?:P)?\d+[ ._-]+((?:19|20)\d{2})(?=[ ._-]|$)"#, $0)
         })
         return years.count == 1 ? years.first : nil
     }

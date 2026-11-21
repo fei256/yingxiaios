@@ -292,7 +292,7 @@ public enum TMDBMatch {
                         details: (MediaType, Int, Int?) async throws -> Details) async throws -> Answer {
         try Task.checkCancellation()
         let query = TMDBTitleMatching.query(request.title)
-        guard !query.isEmpty, !request.title.lowercased().hasPrefix("http://"), !request.title.lowercased().hasPrefix("https://") else {
+        guard !query.isEmpty, request.title.range(of: #"https?://"#, options: [.regularExpression, .caseInsensitive]) == nil else {
             return Answer(status: .notFound, match: nil, season: nil, numbering: .season, unmatched: "", candidates: [], details: nil)
         }
         var results: [SearchResult] = [], seen = Set<String>()

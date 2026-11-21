@@ -2,7 +2,7 @@
 """Prepare the pinned no-TTS sherpa/ONNX iOS arm64 dependency entirely offline.
 
 The upstream iOS static library supplies the engine. Five model objects are
-rebuilt for iOS 16.2 to pass cancellable Ort::RunOptions to every inference.
+rebuilt for iOS 16.1 to pass cancellable Ort::RunOptions to every inference.
 No simulator, host app, model download, signing or Git operation is performed.
 """
 from __future__ import annotations
@@ -79,7 +79,7 @@ def archive_metadata(library, destination):
     if not re.search(r'platform\s+IOS\s*\n', metadata):
         raise RuntimeError('Expected iOS object metadata: ' + metadata)
     minimum = re.search(r'minos\s+([\d.]+)', metadata).group(1)
-    if tuple(map(int, minimum.split('.'))) > (16, 2):
+    if tuple(map(int, minimum.split('.'))) > (16, 1):
         raise RuntimeError('Dependency requires newer iOS: ' + metadata)
     return thin, {'architecture': 'arm64', 'platform': 'IOS', 'minimumOS': minimum,
                   'sha256': digest(library), 'bytes': Path(library).stat().st_size}
@@ -121,7 +121,7 @@ def main():
     sherpa, sherpa_meta = archive_metadata(package / 'sherpa-onnx.xcframework/ios-arm64/sherpa-onnx.a', work)
     ortlib, ort_meta = archive_metadata(ort / 'onnxruntime', work)
     objects = work / 'objects'; objects.mkdir()
-    cxx = [compiler, '-std=c++17', '-O2', '-DNDEBUG', '-target', 'arm64-apple-ios16.2', '-isysroot', sdk,
+    cxx = [compiler, '-std=c++17', '-O2', '-DNDEBUG', '-target', 'arm64-apple-ios16.1', '-isysroot', sdk,
            '-I', str(source), '-I', str(ort / 'Headers'), '-I', str(VENDOR),
            '-I', str(work / 'inputs/openfst-1.8.5-2026-04-11/src/include'),
            '-I', str(work / 'inputs/kaldifst-1.8.0'), '-I', str(work / 'inputs/eigen-5.0.1')]
@@ -151,8 +151,8 @@ def main():
         raise RuntimeError('Combined ASR archive is not arm64')
     # Check the bridge deployment metadata and required library symbols.
     bridge_metadata = run(['xcrun', 'vtool', '-show-build', bridge])
-    if not re.search(r'minos\s+16\.2\s*\n', bridge_metadata):
-        raise RuntimeError('ASR bridge was not compiled for iOS 16.2')
+    if not re.search(r'minos\s+16\.1\s*\n', bridge_metadata):
+        raise RuntimeError('ASR bridge was not compiled for iOS 16.1')
     symbols = run(['nm', '-gU', combined], work / 'symbols.log')
     required = ['tvasr_create', 'tvasr_transcribe', 'tvasr_cancellation_cancel', 'tvasr_destroy',
                 'SherpaOnnxCreateOnlineRecognizer', 'SherpaOnnxDecodeOnlineStream',
@@ -170,11 +170,11 @@ def main():
     ensure_directory_link(VENDOR / 'TVASR.xcframework', '../../build/NativeASR/TVASR.xcframework')
     outputs = {str(path.relative_to(OUTPUT)): digest(path) for path in sorted(target.rglob('*')) if path.is_file()}
     manifest.write_text(json.dumps({'signature': fingerprint, 'sherpaVersion': '1.13.4', 'onnxRuntimeVersion': '1.27.0',
-                                   'platform': 'IOS', 'architecture': 'arm64', 'minimumOS': '16.2',
+                                   'platform': 'IOS', 'architecture': 'arm64', 'minimumOS': '16.1',
                                    'inputs': inventory['files'], 'upstreamArchives': {'sherpa': sherpa_meta, 'onnxruntime': ort_meta},
                                    'patchedModels': patches, 'requiredSymbols': required, 'outputs': outputs,
                                    'runtimeInferenceVerified': False}, indent=2) + '\n')
-    print('Prepared iOS 16.2 offline ASR: ' + str(target), flush=True)
+    print('Prepared iOS 16.1 offline ASR: ' + str(target), flush=True)
 
 
 if __name__ == '__main__':

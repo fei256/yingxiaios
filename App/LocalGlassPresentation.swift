@@ -142,7 +142,7 @@ extension View {
         modifier(LocalPlayerGlassSurface(radius: cornerRadius))
     }
 
-    /// A separate modal controller preserves native dismissal and navigation on iOS 16.2.
+    /// A separate modal controller preserves native dismissal and navigation on iOS 16.1.
     /// It uses a transparent presentation host so the card floats above the existing page.
     func localGlassDialog<Dialog: View>(isPresented: Binding<Bool>, title: String,
                                        maxWidth: CGFloat = 560, maxHeight: CGFloat? = nil,
@@ -329,7 +329,7 @@ private struct LocalPlayerGlassSurface: ViewModifier {
     }
 }
 
-/// iOS 16.2 has no presentationBackground. Clear only this modal's hosting ancestors;
+/// iOS 16.1 has no presentationBackground. Clear only this modal's hosting ancestors;
 /// never change the underlying window, page, or a system document picker.
 private struct LocalTransparentPresentation: UIViewRepresentable {
     func makeUIView(context: Context) -> ClearView { ClearView() }

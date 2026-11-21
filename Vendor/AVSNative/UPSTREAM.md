@@ -18,7 +18,7 @@ description or packet-position fields.
 
 `Scripts/build-ios-avs.py` builds only native static archives, with no downloads,
 Java, subprocess decoder or executable runtime dependency. The default target
-is `arm64-apple-ios16.2`; explicit simulator targets append `-simulator` and can
+is `arm64-apple-ios16.1`; explicit simulator targets append `-simulator` and can
 use arm64 or x86_64. Both dependencies use the 10-bit-capable implementation,
 which accepts 8-bit and 10-bit streams. uavs3d targets AVS3-P2 baseline profiles;
 this is not a claim to cover every AVS profile.

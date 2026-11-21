@@ -6,7 +6,7 @@
 
 首次成功的 [build06](https://github.com/fei256/yingxiaios/actions/runs/44439647067) 对应提交 `b11852e`，耗时 43 分 56 秒，其中应用归档约 28 分 47 秒。交付报告的错误列表为空，包含 104 个 framework、105 个 Mach-O 文件；构建期间没有检测到源码变化。
 
-这证明该提交在当时的 macOS / Xcode 环境中完成了编译、链接与未签名 IPA 打包。不能把它扩大为“所有功能已经测试”或“未来永不失败”。截至 2026-11-21，后续 [build35](https://github.com/fei256/yingxiaios/actions/runs/44849028761) 的完整云端构建和模拟器测试均已通过；最新缓存与耗时复核见 [IPA 构建加速验证结果](build-optimization-results.md)。当前使用预装的 Xcode 16.4 / iOS 18.5，最低支持版本仍为 iOS 16.2；下表中的 Xcode 16.1 / iOS 18.1 是审计当时的历史处理记录。
+这证明该提交在当时的 macOS / Xcode 环境中完成了编译、链接与未签名 IPA 打包。不能把它扩大为“所有功能已经测试”或“未来永不失败”。截至 2026-11-21，后续 [build35](https://github.com/fei256/yingxiaios/actions/runs/44849028761) 的完整云端构建和模拟器测试均已通过；最新缓存与耗时复核见 [IPA 构建加速验证结果](build-optimization-results.md)。当前使用预装的 Xcode 16.4 / iOS 18.5，当前兼容目标为 iOS 16.1；下表中的 Xcode 16.1 / iOS 18.1 是审计当时的历史处理记录。
 
 ## 已发生的问题、原因与处理
 

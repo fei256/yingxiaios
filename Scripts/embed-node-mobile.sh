@@ -57,7 +57,7 @@ rsync -a --delete --exclude Headers --exclude Modules "$FRAMEWORK/" "$COPY/"
 # A higher binary deployment target cannot be repaired by lowering its plist.
 # Reject incompatible overrides before signing or shipping the app.
 case "$PLATFORM_NAME" in
-  iphone*) MAXIMUM_OS="${IPHONEOS_DEPLOYMENT_TARGET:-16.2}" ;;
+  iphone*) MAXIMUM_OS="${IPHONEOS_DEPLOYMENT_TARGET:-16.1}" ;;
   appletv*) MAXIMUM_OS="${TVOS_DEPLOYMENT_TARGET:-17.0}" ;;
 esac
 for NEEDED in $(xcrun vtool -show-build "$COPY/NodeMobile" | awk '/minos/ {print $2}'); do

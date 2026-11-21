@@ -3,7 +3,7 @@ import PackageDescription
 let package = Package(
     name: "TVCore",
     defaultLocalization: "en",
-    platforms: [.iOS("16.2")],
+    platforms: [.iOS("16.1")],
     products: [.library(name: "KSPlayer", targets: ["KSPlayer"]), .library(name: "TVCore", targets: ["TVCore"])],
     dependencies: [
         .package(url: "https://github.com/pointfreeco/swift-perception", exact: "2.0.10"),

@@ -100,7 +100,7 @@ def download_archive(folder, version):
     raise RuntimeError('Could not download a complete, verified iOS ' + version + ' platform package.')
 
 
-def install_platform(root, version='18.1'):
+def install_platform(root, version='18.1', require_matching_sdk=True):
     root = Path(root).resolve()
     folder = root / 'build/ios-platform-cache'
     # The only recursive replacement is this explicitly scoped generated cache.
@@ -108,7 +108,7 @@ def install_platform(root, version='18.1'):
         raise RuntimeError('Unsafe iOS platform cache path: ' + str(folder))
     folder.parent.mkdir(parents=True, exist_ok=True)
     sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'], text=True).strip()
-    if sdk != version:
+    if require_matching_sdk and sdk != version:
         raise RuntimeError(f'Selected iPhoneOS SDK is {sdk}; this workflow requires {version}.')
     if installed(version):
         print('iOS ' + version + ' platform and SDK are already available.', flush=True)
@@ -130,9 +130,10 @@ def main():
     require_validation_enabled()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--version', default='18.1')
+    parser.add_argument('--runtime-only', action='store_true', help='Install an older simulator runtime without changing or requiring the selected device SDK.')
     parser.add_argument('--report', type=Path)
     args = parser.parse_args()
-    report = install_platform(Path(__file__).resolve().parent.parent, args.version)
+    report = install_platform(Path(__file__).resolve().parent.parent, args.version, require_matching_sdk=not args.runtime_only)
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(json.dumps(report, indent=2) + '\n')

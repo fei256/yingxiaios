@@ -55,7 +55,7 @@ def reset_recipe_work(root, fingerprint):
     if not re.fullmatch(r'[0-9a-f]{64}', fingerprint):
         raise ValueError('Invalid Python recipe fingerprint.')
     base = Path(root).resolve() / 'build/apple-python'
-    work = base / ('ios16.2-' + fingerprint)
+    work = base / ('ios16.1-' + fingerprint)
     # Only this generated recipe directory is disposable. Other platform builds
     # and any files from older layouts remain untouched.
     if base.parent.is_symlink() or base.is_symlink() or work.is_symlink() or work.resolve().parent != base.resolve():
@@ -76,7 +76,7 @@ def prepare_python_runtime(root):
         'sdk': subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'], text=True).strip(),
         'clang': subprocess.check_output(['xcrun', '--sdk', 'iphoneos', 'clang', '--version'], text=True).strip(),
         'host_python': subprocess.check_output([host, '-I', '-c', 'import sys; print(sys.version)'], text=True).strip(),
-        'target': 'arm64-apple-ios16.2',
+        'target': 'arm64-apple-ios16.1',
     }
     fingerprint = recipe_fingerprint(root, toolchain)
     runtime = root / 'build/ApplePython/iphoneos'

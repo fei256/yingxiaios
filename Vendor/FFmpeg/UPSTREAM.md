@@ -3,7 +3,7 @@
 Upstream: https://github.com/FFmpeg/FFmpeg, tag n8.1.3, commit
 `1041abdc962f4cc4f394aa8de9dc5236c0c3b9e7`. FFmpeg's license text is retained in `LICENSE`.
 
-`Scripts/build-apple-ffmpeg.sh` prepares a single iOS 16.2 arm64 static archive shared by
+`Scripts/build-apple-ffmpeg.sh` prepares a single iOS 16.1 arm64 static archive shared by
 KSPlayer's native demux/decode path and the TVMedia utility APIs. This prevents duplicate FFmpeg
 symbols or mixed ABI versions. Its default builds only the iOS device slice. Prepared sources,
 objects, archive and xcframework live inside `build/FFmpeg/`; this vendor directory links to it.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build pinned AVS2/AVS3 static libraries offline for iOS 16.2.
+"""Build pinned AVS2/AVS3 static libraries offline for iOS 16.1.
 
 The default is iPhoneOS arm64. Simulator targets require --platform
 iphonesimulator and an explicit architecture; no app, signing or Xcode build
@@ -75,10 +75,10 @@ def validate_archive(archive: Path, arch: str, sdk_name: str, required: list[str
     obj.write_bytes(subprocess.check_output(['ar', '-p', str(archive), member]))
     metadata = run(['xcrun', 'vtool', '-show-build', obj])
     expected = 'IOS' if sdk_name == 'iphoneos' else 'IOSSIMULATOR'
-    if not re.search(r'platform\s+' + expected + r'\s*\n', metadata) or not re.search(r'minos\s+16\.2\s*\n', metadata):
+    if not re.search(r'platform\s+' + expected + r'\s*\n', metadata) or not re.search(r'minos\s+16\.1\s*\n', metadata):
         raise RuntimeError(f'Wrong iOS deployment metadata:\n{metadata}')
     return {'sha256': sha(archive), 'bytes': archive.stat().st_size,
-            'architecture': arch, 'platform': expected, 'minimum_os': '16.2',
+            'architecture': arch, 'platform': expected, 'minimum_os': '16.1',
             'required_symbols': required, 'build_metadata': metadata}
 
 
@@ -94,7 +94,7 @@ def build(prefix: Path, sdk_name: str, arch: str, jobs: int) -> None:
     sdk = run(['xcrun', '--sdk', sdk_name, '--show-sdk-path'])
     cc = run(['xcrun', '--sdk', sdk_name, '--find', 'clang'])
     cxx = run(['xcrun', '--sdk', sdk_name, '--find', 'clang++'])
-    target = f'{arch}-apple-ios16.2' + ('-simulator' if sdk_name == 'iphonesimulator' else '')
+    target = f'{arch}-apple-ios16.1' + ('-simulator' if sdk_name == 'iphonesimulator' else '')
     fingerprint = hashlib.sha256(Path(__file__).read_bytes())
     for path in sorted(VENDOR.rglob('*')):
         if path.is_file():

@@ -58,7 +58,7 @@ native_changed = changed_inputs(native_before, native_after)
 (out / 'native-changes-during-build.json').write_text(json.dumps(native_changed, indent=2) + '\n')
 assert not native_changed, f'Native dependencies changed during build: {native_changed}'
 
-archive = out / 'Yingxia-local-iOS16.2.xcarchive'
+archive = out / 'Yingxia-local-iOS16.1.xcarchive'
 apps = list((archive / 'Products/Applications').glob('*.app'))
 assert len(apps) == 1, apps
 app = apps[0]
@@ -77,7 +77,7 @@ player_validation = json.loads((out / 'player-validation.json').read_text())
 assert not player_validation['errors'], player_validation['errors']
 info = plistlib.loads((app / 'Info.plist').read_bytes())
 assert str(info['CFBundleVersion']) == str(config['build_number']), info['CFBundleVersion']
-assert info['MinimumOSVersion'] == '16.2', info['MinimumOSVersion']
+assert info['MinimumOSVersion'] == '16.1', info['MinimumOSVersion']
 signing = subprocess.run(['codesign', '-dv', str(app)], text=True, capture_output=True)
 (out / 'codesign-check.log').write_text(signing.stdout + signing.stderr)
 assert signing.returncode != 0 and 'not signed at all' in signing.stderr, signing.stderr
@@ -104,7 +104,7 @@ payload = stage / 'Payload'
 payload.mkdir(parents=True, exist_ok=False)
 shutil.copytree(app, payload / app.name, symlinks=True)
 build_label = str(info['CFBundleVersion']).zfill(2)
-ipa = out / f"Yingxia-{info['CFBundleShortVersionString']}-build{build_label}-iOS16.2-NoJava-unsigned.ipa"
+ipa = out / f"Yingxia-{info['CFBundleShortVersionString']}-build{build_label}-iOS16.1-NoJava-unsigned.ipa"
 assert not ipa.exists(), ipa
 subprocess.run(['ditto', '-c', '-k', '--norsrc', '--keepParent', 'Payload', str(ipa)], cwd=stage, check=True)
 with zipfile.ZipFile(ipa) as z:
@@ -129,6 +129,7 @@ report = {
     'validation_errors': validation['errors'],
     'player_validation': player_validation,
     'native_source_changes_during_build': native_changed,
+    'native_deployment': json.loads((out / 'native-deployment.json').read_text()),
     'post_archive_validation_tool_updates': tool_updates,
 }
 (out / 'ipa-delivery.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
@@ -144,7 +145,7 @@ assert not pending.exists() and not previous.exists(), 'An interrupted publicati
 pending.mkdir()
 for name in [ipa.name, 'SHA256SUMS.txt', 'ipa-validation.json', 'source-sha256-after.json',
              'archive.log', 'archive-result.json', 'build-command.json', 'player-validation.json',
-             'native-sha256-before.json', 'ios-linkmap.txt']:
+             'native-sha256-before.json', 'native-deployment.json', 'ios-linkmap.txt']:
     shutil.copy2(out / name, pending / name)
 if args.revalidate_tools:
     shutil.copy2(out / 'packaging-source-sha256.json', pending / 'packaging-source-sha256.json')

@@ -19,7 +19,7 @@ for filename in files + ["App/DiscoverArtwork.swift"]:
 sources = [str(output / Path(path).name) for path in files + ["App/DiscoverArtwork.swift"]]
 sources += [str(root / "Tests/DetailAppearance" / name) for name in ["Harness.swift", "HarnessSupport.swift"]]
 spec = {
-    "name": "DetailChecks", "settings": {"base": {"SWIFT_VERSION": "6.0", "IPHONEOS_DEPLOYMENT_TARGET": "16.2", "CODE_SIGNING_ALLOWED": "NO"}},
+    "name": "DetailChecks", "settings": {"base": {"SWIFT_VERSION": "6.0", "IPHONEOS_DEPLOYMENT_TARGET": "16.1", "CODE_SIGNING_ALLOWED": "NO"}},
     "targets": {
         "DetailChecks": {"type": "application", "platform": "iOS", "sources": [{"path": path} for path in sources],
                          "settings": {"base": {"PRODUCT_BUNDLE_IDENTIFIER": "com.yingxia.detail-checks", "TARGETED_DEVICE_FAMILY": "1,2"}},

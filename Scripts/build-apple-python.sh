@@ -19,7 +19,7 @@ case "$TARGET" in
 esac
 VERSION=3.14; SUPPORT=b13
 case "$FAMILY" in
-  iOS) MINIMUM_OS=16.2 ;;
+  iOS) MINIMUM_OS=16.1 ;;
   tvOS) MINIMUM_OS=17.0 ;;
 esac
 case "$FAMILY" in
@@ -125,7 +125,7 @@ find "$DEST/python" "$DEST/PythonHost" -name '*.so' | sort | while read -r libra
   echo "$framework/$module" > "${library%.so}.fwork"
   echo "${relative%.so}.fwork" > "$DEST/$framework/$module.origin"
 done
-# BeeWare's templates say iOS 13 / tvOS 9, but our wheels target iOS 16.2 / tvOS 17.0, some tvOS modules 12.0 and the simulator's
+# BeeWare's templates say iOS 13 / tvOS 9, but our wheels target iOS 16.1 / tvOS 17.0, some tvOS modules 12.0 and the simulator's
 # Python.framework 14.0. App Store processing rejects a framework whose binary needs a newer OS than its
 # MinimumOSVersion (ITMS-90208), so declare the app's deployment target, which covers them all.
 # _ssl and _hashlib link OpenSSL, which Apple lists as a commonly used third-party SDK: TestFlight review rejects

@@ -1,7 +1,7 @@
 # AV3A audio in the independent iOS edition
 
 This directory contains the native AVS3A reference decoder used by the local
-iOS 16.2 arm64 build. The application calls it in process through the unified
+iOS 16.1 arm64 build. The application calls it in process through the unified
 FFmpeg library. It does not launch an external executable.
 
 The reference source is pinned to:
@@ -52,7 +52,7 @@ Build with `python3 Scripts/build-ios-av3a.py`, then apply
 unified FFmpeg configuration. Both steps are called by `build-apple-ffmpeg.sh`.
 The library output is `build/AV3A/iphoneos/lib/libtvav3a.a`; its build manifest
 records target, pinned source, source fingerprint, and library hash. Only iPhoneOS
-arm64 with minimum iOS 16.2 is built. NEON matrix operations are enabled.
+arm64 with minimum iOS 16.1 is built. NEON matrix operations are enabled.
 
 The builder makes one temporary source adaptation: it preserves the upstream
 implausible-latent clamp while removing its process-global diagnostic counters

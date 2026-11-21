@@ -284,6 +284,95 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  legacy-ui-tests:
+    if: github.event_name != 'workflow_dispatch' || !inputs.journal_preview_only
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
+        with:
+          persist-credentials: false
+      - name: Install and verify the iOS 16.1 simulator runtime
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+          brew install xcodegen
+          mkdir -p build/ci
+          python3 Scripts/prepare-ios-platform.py --runtime-only --version 16.1 \
+            --report build/ci/ios16.1-runtime.json 2>&1 | tee build/ci/ios16.1-runtime.log
+      - name: Prepare production component hosts for iOS 16.1
+        run: |
+          python3 Tests/DetailAppearance/prepare-native-checks.py
+          xcodegen generate --spec build/ci/detail-native/project.json --project build/ci/detail-native
+          python3 - <<'PY'
+          from pathlib import Path
+          import json, os, plistlib, re, subprocess
+          base = Path('Tests/SearchInput').resolve()
+          folder = Path('build/ci/search-input'); folder.mkdir(parents=True, exist_ok=True)
+          source = (base / 'project.yml').read_text()
+          source = re.sub(r'(?m)^([ ]*- path: )(.+)$', lambda m: m.group(1) + json.dumps(str((base / m.group(2).strip()).resolve(strict=True))), source)
+          (folder / 'project.yml').write_text(source)
+          with (folder / 'Info.plist').open('wb') as output:
+              orientations = ['UIInterfaceOrientationPortrait', 'UIInterfaceOrientationLandscapeLeft', 'UIInterfaceOrientationLandscapeRight']
+              plistlib.dump({'CFBundleIdentifier': '$(PRODUCT_BUNDLE_IDENTIFIER)', 'CFBundleExecutable': '$(EXECUTABLE_NAME)',
+                  'CFBundleName': '$(PRODUCT_NAME)', 'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1',
+                  'CFBundleShortVersionString': '1.0', 'UIDeviceFamily': [1, 2], 'UILaunchScreen': {},
+                  'UIApplicationSceneManifest': {'UIApplicationSupportsMultipleScenes': False, 'UISceneConfigurations': {}},
+                  'UISupportedInterfaceOrientations': orientations, 'UISupportedInterfaceOrientations~ipad': orientations}, output)
+          runtimes = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'runtimes', '--json']))['runtimes']
+          runtime = next(x for x in runtimes if x.get('isAvailable') and x.get('version') == '16.1' and 'iOS' in x['name'])
+          identifier = subprocess.check_output(['xcrun', 'simctl', 'create', 'Yingxia iOS 16.1 Checks',
+              'com.apple.CoreSimulator.SimDeviceType.iPad-10th-generation', runtime['identifier']], text=True).strip()
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('LEGACY_TEST_SIMULATOR=' + identifier + '\n')
+          subprocess.run(['xcrun', 'simctl', 'boot', identifier], check=True, timeout=60)
+          subprocess.run(['xcrun', 'simctl', 'bootstatus', identifier, '-b'], check=True, timeout=240)
+          PY
+          xcodegen generate --spec build/ci/search-input/project.yml --project build/ci/search-input
+      - name: Test input, controls and detail paint on iOS 16.1
+        run: |
+          xcodebuild test -project build/ci/search-input/SearchInputChecks.xcodeproj -scheme SearchInputChecks \
+            -destination "platform=iOS Simulator,id=$LEGACY_TEST_SIMULATOR" -destination-timeout 60 \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 180 \
+            -maximum-test-execution-time-allowance 300 -derivedDataPath build/ci/legacy-input-derived \
+            -resultBundlePath build/ci/legacy-input-results.xcresult CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/ci/legacy-input-tests.log
+          xcodebuild test -project build/ci/detail-native/DetailChecks.xcodeproj -scheme DetailChecks \
+            -destination "platform=iOS Simulator,id=$LEGACY_TEST_SIMULATOR" -destination-timeout 60 \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 120 \
+            -maximum-test-execution-time-allowance 180 -derivedDataPath build/ci/legacy-detail-derived \
+            -resultBundlePath build/ci/legacy-detail-results.xcresult CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee build/ci/legacy-detail-tests.log
+      - name: Export iOS 16.1 screenshots and release simulator
+        if: always()
+        run: |
+          for kind in input detail; do
+            if test -d "build/ci/legacy-$kind-results.xcresult"; then
+              xcrun xcresulttool export attachments --path "build/ci/legacy-$kind-results.xcresult" \
+                --output-path "build/ci/legacy-$kind-attachments"
+            fi
+          done
+          if test -n "$LEGACY_TEST_SIMULATOR"; then
+            xcrun simctl shutdown "$LEGACY_TEST_SIMULATOR" || true
+            xcrun simctl delete "$LEGACY_TEST_SIMULATOR" || true
+          fi
+      - name: Upload iOS 16.1 test evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
+        with:
+          name: iOS16.1-native-checks-${{ github.run_id }}
+          path: |
+            build/ci/ios16.1-runtime.*
+            build/ci/legacy-*-tests.log
+            build/ci/legacy-*-attachments
+          retention-days: 14
+          if-no-files-found: ignore
+
   build:
     needs: metadata-tests
     if: github.event_name != 'workflow_dispatch' || inputs.build_ipa
@@ -351,7 +440,7 @@ jobs:
           provider = source.split(marker, 1)[0].replace('import TVCore\n', '')
           Path('build/ci/reorder-provider.swift').write_text(provider)
           PY
-          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
+          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.1 \
             -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" build/ci/reorder-provider.swift
 
       - name: Check home navigation and settings surfaces
@@ -359,9 +448,9 @@ jobs:
           xcrun swiftc -swift-version 6 App/LocalHomeSourceSelection.swift App/LocalHomeNavigationState.swift \
             Sources/TVCore/LocalDockLayout.swift Tests/NavigationState/main.swift -o build/ci/navigation-state-checks
           build/ci/navigation-state-checks
-          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
+          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.1 \
             -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" App/LocalSettingsAppearance.swift
-          xcrun swiftc -frontend -parse -swift-version 6 -target arm64-apple-ios16.2 \
+          xcrun swiftc -frontend -parse -swift-version 6 -target arm64-apple-ios16.1 \
             -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" App/*.swift
 
       - name: Check search suggestions and input
@@ -369,7 +458,7 @@ jobs:
           xcrun swiftc -swift-version 6 -parse-as-library Sources/TVCore/SearchSuggestions.swift \
             Tests/SearchSuggestions/checks.swift -o build/ci/search-suggestion-checks
           build/ci/search-suggestion-checks
-          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.2 \
+          xcrun swiftc -typecheck -swift-version 6 -target arm64-apple-ios16.1 \
             -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" App/GlobalSearchInput.swift
 
       - name: Check detail layout across iPhone and iPad
@@ -530,6 +619,7 @@ jobs:
             artifacts/latest/ipa-delivery.json
             artifacts/latest/ipa-validation.json
             artifacts/latest/player-validation.json
+            artifacts/latest/native-deployment.json
           if-no-files-found: error
           overwrite: true
           compression-level: 0

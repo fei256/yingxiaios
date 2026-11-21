@@ -67,8 +67,8 @@ DISC_CC="$(xcrun --sdk iphoneos --find clang)"
 (
  cd "$DISC_BUILD"
  CC="$DISC_CC" AR="$(xcrun --sdk iphoneos --find ar)" RANLIB="$(xcrun --sdk iphoneos --find ranlib)" \
- CFLAGS="-O2 -target arm64-apple-ios16.2 -isysroot $DISC_SDK -fPIC -fvisibility=hidden" \
- LDFLAGS="-target arm64-apple-ios16.2 -isysroot $DISC_SDK" \
+ CFLAGS="-O2 -target arm64-apple-ios16.1 -isysroot $DISC_SDK -fPIC -fvisibility=hidden" \
+ LDFLAGS="-target arm64-apple-ios16.1 -isysroot $DISC_SDK" \
  "$DISC_SOURCE/configure" --host=aarch64-apple-darwin --prefix="$DISC_PREFIX" \
  --disable-shared --enable-static --without-external-libudfread \
  --without-libxml2 --without-freetype --without-fontconfig --disable-bdjava-jar \
@@ -87,6 +87,6 @@ link_disc
 python3 - "$DISC_OUTPUT" "$DISC_SHA" <<'PY'
 import hashlib,json,pathlib,sys
 p=pathlib.Path(sys.argv[1]); lib=next(p.rglob('libbluray.a'))
-(p.parent/'manifest.json').write_text(json.dumps({'library':'libbluray','version':'1.3.4','sourceSha256':sys.argv[2],'librarySha256':hashlib.sha256(lib.read_bytes()).hexdigest(),'platform':'iOS','architecture':'arm64','minimumOS':'16.2','libudfread':'bundled','java':False,'encryptedDiscs':False,'menus':False},indent=2)+'\n')
+(p.parent/'manifest.json').write_text(json.dumps({'library':'libbluray','version':'1.3.4','sourceSha256':sys.argv[2],'librarySha256':hashlib.sha256(lib.read_bytes()).hexdigest(),'platform':'iOS','architecture':'arm64','minimumOS':'16.1','libudfread':'bundled','java':False,'encryptedDiscs':False,'menus':False},indent=2)+'\n')
 PY
 echo "DiscNative iOS arm64 built: $DISC_OUTPUT"

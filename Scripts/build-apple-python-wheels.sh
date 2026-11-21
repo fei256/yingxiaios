@@ -23,7 +23,7 @@ PYCRYPTODOME="$(pinned pycryptodome)"; LXML="$(pinned lxml)"
 HOST_PYTHON="${HOST_PYTHON:-$(command -v python$VERSION || true)}"
 if [ ! -x "$HOST_PYTHON" ]; then HOST_PYTHON="$(bash Scripts/fetch-build-python.sh)"; fi
 case "$FAMILY" in
-  iOS) MINIMUM_OS=16.2 ;;
+  iOS) MINIMUM_OS=16.1 ;;
   tvOS) MINIMUM_OS=17.0 ;;
 esac
 WORK="${APPLE_PYTHON_WORK:-$PWD/build/apple-python}"
@@ -32,7 +32,7 @@ XCFRAMEWORK="$WORK/$FAMILY-$VERSION-$SUPPORT/Python.xcframework"
 WHEELS="$WORK/wheels/$PLATFORM/$MINIMUM_OS"
 mkdir -p "$WHEELS" "$WORK/sources"
 # BeeWare's compiler wrappers (arm64-apple-ios-clang and so on) read the deployment target from here.
-export IPHONEOS_DEPLOYMENT_TARGET=16.2 TVOS_DEPLOYMENT_TARGET=17.0
+export IPHONEOS_DEPLOYMENT_TARGET=16.1 TVOS_DEPLOYMENT_TARGET=17.0
 export PATH="$XCFRAMEWORK/$SLICE/bin:$PATH"
 
 # pip in this venv believes it runs on the device's platform, so it compiles for it with the wrappers.

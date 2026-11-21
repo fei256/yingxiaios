@@ -20,7 +20,7 @@ prepared inputs. The upload package records these inputs without bundling their 
 
 `Scripts/prepare-ios-asr.py` works offline using the pinned archives. It selects
 only iPhoneOS arm64 and compiles the app bridge and five model implementation
-objects with `arm64-apple-ios16.2` using the maintained Xcode compiler. Model
+objects with `arm64-apple-ios16.1` using the maintained Xcode compiler. Model
 objects are rebuilt to replace empty `Ort::RunOptions` arguments with
 `TVASRCurrentRunOptions()`. The script checks the expected number of call sites
 and records original/patched/object hashes. Cancellation calls the actual ONNX
@@ -40,7 +40,7 @@ The app's existing generation/audio/seek identity prevents old results
 from returning to playback.
 
 The upstream sherpa objects have minimum iOS 13.0 and ONNX Runtime iOS 15.1;
-rebuilt model/bridge objects and the app have minimum iOS 16.2. The output
+rebuilt model/bridge objects and the app have minimum iOS 16.1. The output
 `build/NativeASR/TVASR.xcframework` contains only iPhoneOS arm64. The Vendor link
 is relative and disposable output remains under `build/`. The IPA build links Accelerate/CoreML/Foundation
 and checks the resulting native symbols and deployment metadata. Preparation requires neither
