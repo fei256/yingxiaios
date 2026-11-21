@@ -303,7 +303,9 @@ test('an interrupted forward read resumes its validated bytes before the decoder
   const first = await iterator.next();
   await waitFor(() => owner.bytes === media.length, 'a recoverable upstream interruption must not end pre-reading');
   assert.equal(requests.length, 2);
-  assert.equal(requests[1].start, 2 * blockBytes);
+  // A stream error can discard a queued chunk before the reader stores it.
+  assert.ok(requests[1].start > 0 && requests[1].start <= 2 * blockBytes,
+    'recovery must resume within the validated prefix sent by the first response');
   assert.equal(requests[1].ifRange, '"video-v1"');
   assert.deepEqual(await consume(iterator, first), media);
 });
