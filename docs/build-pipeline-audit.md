@@ -6,7 +6,7 @@
 
 首次成功的 [build06](https://github.com/fei256/yingxiaios/actions/runs/44439647067) 对应提交 `b11852e`，耗时 43 分 56 秒，其中应用归档约 28 分 47 秒。交付报告的错误列表为空，包含 104 个 framework、105 个 Mach-O 文件；构建期间没有检测到源码变化。
 
-这证明该提交在当时的 macOS / Xcode 环境中完成了编译、链接与未签名 IPA 打包。不能把它扩大为“所有功能已经测试”或“未来永不失败”。本次整改的 Windows 回归测试已通过；整改后的完整云端构建结果将在验证完成后补录。
+这证明该提交在当时的 macOS / Xcode 环境中完成了编译、链接与未签名 IPA 打包。不能把它扩大为“所有功能已经测试”或“未来永不失败”。截至 2026-11-21，后续 [build35](https://github.com/fei256/yingxiaios/actions/runs/44849028761) 的完整云端构建和模拟器测试均已通过；最新缓存与耗时复核见 [IPA 构建加速验证结果](build-optimization-results.md)。当前使用预装的 Xcode 16.4 / iOS 18.5，最低支持版本仍为 iOS 16.2；下表中的 Xcode 16.1 / iOS 18.1 是审计当时的历史处理记录。
 
 ## 已发生的问题、原因与处理
 
@@ -44,7 +44,7 @@
 - Python 文件、工作流内嵌 Python 与 Bash 脚本语法检查通过。
 - actionlint 1.7.12 工作流检查通过；测试工具归档按官方 release 的 SHA-256 校验，临时工具在审计结束时清理。
 - 已跟踪文件中未发现 `.p12`、`.p8`、`.mobileprovision`、`.ipa` 或本项目列出的个人配置文件。此检查针对明确文件类型，不等于任意形式秘密的全局证明。
-- 整改后完整 GitHub Actions 运行：待补录最终结果。
+- 后续完整 GitHub Actions 运行：[build35](https://github.com/fei256/yingxiaios/actions/runs/44849028761) 已成功，48 个流水线回归测试、19 个播放缓存测试、13 个模拟器测试及 IPA 校验均通过；IPA 任务耗时 38 分 11 秒。应用编译缓存命中但仍发生重复编译，不能宣称增量编译加速已验证，详见 [加速验证结果](build-optimization-results.md)。
 
 回归测试使用临时目录和模拟下载 / Xcode 返回结果，验证故障处理分支；它们不能替代实际 macOS 编译。完整构建仍须通过工程生成、固定 Swift 包解析、Release 归档、源码 / 原生一致性检查、包体验证和上传。
 
