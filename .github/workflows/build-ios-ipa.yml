@@ -334,7 +334,7 @@ jobs:
           subprocess.run(['xcrun', 'simctl', 'bootstatus', identifier, '-b'], check=True, timeout=240)
           PY
           xcodegen generate --spec build/ci/search-input/project.yml --project build/ci/search-input
-      - name: Test input, controls and detail paint on iOS 16.1
+      - name: Test input and controls on iOS 16.1
         run: |
           xcodebuild test -project build/ci/search-input/SearchInputChecks.xcodeproj -scheme SearchInputChecks \
             -destination "platform=iOS Simulator,id=$LEGACY_TEST_SIMULATOR" -destination-timeout 60 \
@@ -342,6 +342,9 @@ jobs:
             -maximum-test-execution-time-allowance 300 -derivedDataPath build/ci/legacy-input-derived \
             -resultBundlePath build/ci/legacy-input-results.xcresult CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee build/ci/legacy-input-tests.log
+      - name: Test detail paint on iOS 16.1
+        if: success() || failure()
+        run: |
           xcodebuild test -project build/ci/detail-native/DetailChecks.xcodeproj -scheme DetailChecks \
             -destination "platform=iOS Simulator,id=$LEGACY_TEST_SIMULATOR" -destination-timeout 60 \
             -parallel-testing-enabled NO -test-timeouts-enabled YES -default-test-execution-time-allowance 120 \

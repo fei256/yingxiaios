@@ -35,6 +35,7 @@ targets:
     sources:
       - path: InputTests.swift
       - path: JournalDateTests.swift
+      - path: PictureGestureHitTests.swift
     dependencies:
       - target: SearchInputChecks
   ControlHitTests:

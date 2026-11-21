@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class ControlHitTests: XCTestCase {
     @MainActor func testPictureRemainsInteractiveOutsideControlFrames() {
@@ -18,6 +19,25 @@ final class ControlHitTests: XCTestCase {
     }
     @MainActor func testNativeReferenceControlCorners() {
         checkReferences(arguments: ["controls"], ids: ["native.reference"])
+    }
+    @MainActor func testControlCornersAfterPortraitAndOppositeLandscapeRotation() {
+        let app = XCUIApplication()
+        app.launchArguments = ["controls"]
+        app.launch()
+        let result = app.staticTexts["control.last"]
+        var events = 0
+        for orientation in [UIDeviceOrientation.portrait, .landscapeRight, .landscapeLeft] {
+            XCUIDevice.shared.orientation = orientation
+            for id in ["plain", "dock.2"] {
+                let button = app.buttons[id]
+                XCTAssertTrue(button.waitForExistence(timeout: 5))
+                for point in [CGVector(dx: 0.04, dy: 0.04), CGVector(dx: 0.96, dy: 0.04), CGVector(dx: 0.5, dy: 0.5), CGVector(dx: 0.04, dy: 0.96), CGVector(dx: 0.96, dy: 0.96)] {
+                    button.coordinate(withNormalizedOffset: point).tap()
+                    events += 1
+                    XCTAssertEqual(result.label, "\(id):\(events)", "Rotation must update the picture's control exclusions")
+                }
+            }
+        }
     }
     @MainActor private func checkReferences(arguments: [String], ids: [String]) {
         let app = XCUIApplication()
