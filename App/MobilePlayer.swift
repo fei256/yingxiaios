@@ -1638,9 +1638,9 @@ private struct SeekBar<Accessory: View>: View {
                 let trackWidth = viewport.size.width
                 let x = duration > 0 ? trackWidth * value / duration : 0
                 ZStack(alignment: .leading) {
-                    Capsule().fill(.white.opacity(0.2)).frame(height: held ? 6 : 4)
-                    Capsule().fill(.white.opacity(0.4)).frame(width: duration > 0 ? max(0, min(trackWidth, trackWidth * clock.bufferedPosition / duration)) : 0, height: held ? 6 : 4)
-                    Capsule().fill(.white).frame(width: max(0, x), height: held ? 6 : 4)
+                    PlayerTimelineTrack(played: duration > 0 ? value / duration : 0,
+                                        buffered: duration > 0 ? clock.bufferedPosition / duration : 0,
+                                        thickness: held ? 6 : 4)
                     Circle().fill(.white)
                         .frame(width: held ? 24 : 14, height: held ? 24 : 14)
                         .shadow(color: .black.opacity(0.35), radius: 3)

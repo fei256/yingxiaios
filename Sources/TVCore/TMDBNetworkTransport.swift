@@ -47,12 +47,15 @@ extension TMDBServiceSettings {
                     "url": .string(url.absoluteString),
                     "proxy": .object(proxy.mapValues(JSONValue.string)),
                     "headers": .object((request.allHTTPHeaderFields ?? [:]).mapValues(JSONValue.string)),
+                    "timeoutMs": .number(min(30, max(1, request.timeoutInterval)) * 1000),
                 ])
             } catch {
                 try Task.checkCancellation()
                 let message = error.localizedDescription
                 if let range = message.range(of: #"HTTP\s+\d{3}"#, options: .regularExpression),
                    let status = Int(message[range].suffix(3)) { throw TMDBConnectionError.http(status) }
+                if message.contains("代理认证失败") { throw TMDBConnectionError.http(407) }
+                if message.contains("超时") { throw TMDBConnectionError.network(URLError.timedOut.rawValue) }
                 throw TMDBConnectionError.network(URLError.cannotConnectToHost.rawValue)
             }
             guard let encoded = response.object?["data"]?.string, let data = Data(base64Encoded: encoded) else {

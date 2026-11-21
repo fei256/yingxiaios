@@ -55,6 +55,7 @@ concurrency:
 
 jobs:
   metadata-tests:
+    if: github.event_name != 'workflow_dispatch' || !inputs.journal_preview_only
     runs-on: ${{ inputs.test_runner || 'macos-15' }}
     timeout-minutes: 10
     defaults:
@@ -81,6 +82,7 @@ jobs:
           xcrun swiftc -swift-version 6 -parse-as-library Sources/TVCore/PlaybackCacheProgress.swift \
             Tests/PlaybackCache/progress.swift -o build/ci/cache-progress-checks
           build/ci/cache-progress-checks 2>&1 | tee build/ci/cache-progress-checks.log
+          node --test Tests/TMDB/transport.test.mjs 2>&1 | tee build/ci/tmdb-transport-checks.log
       - name: Upload metadata and cache test reports
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
@@ -89,6 +91,7 @@ jobs:
           path: |
             build/ci/tmdb-checks.*
             build/ci/cache-progress-checks.log
+            build/ci/tmdb-transport-checks.log
           retention-days: 14
           if-no-files-found: ignore
   native-tests:
@@ -221,6 +224,65 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
           compression-level: 6
+
+  detail-tests:
+    if: github.event_name != 'workflow_dispatch' || !inputs.journal_preview_only
+    runs-on: ${{ inputs.test_runner || 'macos-15' }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5, Node 24
+        with:
+          persist-credentials: false
+      - name: Prepare native detail layout host
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+          brew install xcodegen
+          python3 Tests/DetailAppearance/prepare-native-checks.py
+          xcodegen generate --spec build/ci/detail-native/project.json --project build/ci/detail-native
+          python3 - <<'PY'
+          import json, os, subprocess
+          runtimes = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'runtimes', '--json']))['runtimes']
+          runtime = next(x for x in runtimes if x.get('isAvailable') and x.get('version') == '18.5')
+          device = 'com.apple.CoreSimulator.SimDeviceType.iPad-10th-generation'
+          identifier = subprocess.check_output(['xcrun', 'simctl', 'create', 'Yingxia Detail Checks', device, runtime['identifier']], text=True).strip()
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('DETAIL_TEST_SIMULATOR=' + identifier + '\n')
+          subprocess.run(['xcrun', 'simctl', 'boot', identifier], check=True, timeout=60)
+          subprocess.run(['xcrun', 'simctl', 'bootstatus', identifier, '-b'], check=True, timeout=240)
+          PY
+      - name: Test detail artwork, action targets and actual cache track paint
+        run: |
+          xcodebuild test -project build/ci/detail-native/DetailChecks.xcodeproj -scheme DetailChecks \
+            -destination "platform=iOS Simulator,id=$DETAIL_TEST_SIMULATOR" -destination-timeout 60 \
+            -parallel-testing-enabled NO -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 120 -maximum-test-execution-time-allowance 180 \
+            -derivedDataPath build/ci/detail-native-derived -resultBundlePath build/ci/detail-native-results.xcresult \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build/ci/detail-native-tests.log
+      - name: Export detail screenshots and shut down simulator
+        if: always()
+        run: |
+          if test -d build/ci/detail-native-results.xcresult; then
+            xcrun xcresulttool export attachments --path build/ci/detail-native-results.xcresult \
+              --output-path build/ci/detail-native-attachments
+          fi
+          if test -n "$DETAIL_TEST_SIMULATOR"; then
+            xcrun simctl shutdown "$DETAIL_TEST_SIMULATOR" || true
+            xcrun simctl delete "$DETAIL_TEST_SIMULATOR" || true
+          fi
+      - name: Upload detail visual regression results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, Node 24
+        with:
+          name: Detail-native-checks-${{ github.run_id }}
+          path: |
+            build/ci/detail-native-tests.log
+            build/ci/detail-native-attachments
+          retention-days: 14
+          if-no-files-found: ignore
 
   build:
     needs: metadata-tests
