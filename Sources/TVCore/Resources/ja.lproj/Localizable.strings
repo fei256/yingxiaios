@@ -498,6 +498,7 @@
 "The video link stopped working (HTTP %lld) and could not be renewed. Try again later." = "動画のリンクが無効になり（HTTP %lld）、再取得できませんでした。しばらくしてからお試しください。";
 "Live streams can't be downloaded." = "ライブ配信はダウンロードできません。";
 "This video is protected and can't be downloaded." = "この動画は保護されているため、ダウンロードできません。";
+"This video cannot be saved completely for offline playback. Choose another source or watch it online." = "この動画をオフライン再生用に完全に保存することはできません。別の配信元を選ぶか、オンラインで視聴してください。";
 "This link didn't return a video." = "このリンクから動画を取得できませんでした。";
 "The server stopped allowing resumed downloads. Retry to start again." = "サーバーが再開ダウンロードに対応しなくなりました。再試行すると最初からダウンロードします。";
 "The server closed the connection early." = "サーバーが接続を途中で切断しました。";

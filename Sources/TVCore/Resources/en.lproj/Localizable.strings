@@ -499,6 +499,7 @@
 "The video link stopped working (HTTP %lld) and could not be renewed. Try again later." = "The video link stopped working (HTTP %lld) and could not be renewed. Try again later.";
 "Live streams can't be downloaded." = "Live streams can't be downloaded.";
 "This video is protected and can't be downloaded." = "This video is protected and can't be downloaded.";
+"This video cannot be saved completely for offline playback. Choose another source or watch it online." = "This video cannot be saved completely for offline playback. Choose another source or watch it online.";
 "This link didn't return a video." = "This link didn't return a video.";
 "The server stopped allowing resumed downloads. Retry to start again." = "The server stopped allowing resumed downloads. Retry to start again.";
 "The server closed the connection early." = "The server closed the connection early.";

@@ -80,7 +80,7 @@ enum TransferError: LocalizedError, Equatable {
         case .notMedia: L10n.text("This link didn't return a video.")
         case .rangeLost: L10n.text("The server stopped allowing resumed downloads. Retry to start again.")
         case .incomplete: L10n.text("The server closed the connection early.")
-        case .unsupportedHLS(let feature): L10n.text("This HLS playlist uses %@, which can't be downloaded yet.", feature)
+        case .unsupportedHLS: L10n.text("This video cannot be saved completely for offline playback. Choose another source or watch it online.")
         case .noSpace(let needed, let available):
             L10n.text("Not enough storage: this needs %@ more, and %@ is free.", Self.size(needed), Self.size(available))
         }

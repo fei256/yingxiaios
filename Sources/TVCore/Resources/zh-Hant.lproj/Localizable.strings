@@ -498,6 +498,7 @@
 "The video link stopped working (HTTP %lld) and could not be renewed. Try again later." = "影片連結已失效（HTTP %lld），且無法重新取得。請稍後再試。";
 "Live streams can't be downloaded." = "直播無法下載。";
 "This video is protected and can't be downloaded." = "此影片受保護，無法下載。";
+"This video cannot be saved completely for offline playback. Choose another source or watch it online." = "此影片無法完整儲存供離線播放，請更換線路或線上播放。";
 "This link didn't return a video." = "此連結未傳回影片。";
 "The server stopped allowing resumed downloads. Retry to start again." = "伺服器不再支援續傳。請重試以重新下載。";
 "The server closed the connection early." = "伺服器提前中斷了連線。";
