@@ -8,7 +8,7 @@ private func require(_ value: @autoclosure () throws -> Bool, _ message: String)
     if try !value() { throw CheckFailure(description: message) }
 }
 
-private func eventually(_ condition: () async throws -> Bool) async throws {
+private func eventually(_ condition: @Sendable () async throws -> Bool) async throws {
     let deadline = ContinuousClock.now + .seconds(8)
     while !(try await condition()) {
         if ContinuousClock.now >= deadline { throw CheckFailure(description: "Timed out waiting for the HTTP fixture") }

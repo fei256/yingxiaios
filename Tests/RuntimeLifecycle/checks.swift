@@ -32,7 +32,7 @@ private actor Gate {
     }
 }
 
-private func eventually(_ condition: () async -> Bool) async throws {
+private func eventually(_ condition: @Sendable () async -> Bool) async throws {
     let deadline = ContinuousClock.now + .seconds(5)
     while !(await condition()) {
         if ContinuousClock.now >= deadline { throw CheckFailure.assertion("Timed out waiting for the test admission barrier") }
