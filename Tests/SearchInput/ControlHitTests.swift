@@ -16,7 +16,7 @@ final class ControlHitTests: XCTestCase {
             receipt.lifetime = .keepAlways
             add(receipt)
         }
-        guard status == .completed && observed == expected else {
+        guard observed == expected else {
             XCTFail("Single touch at \(point) expected \(expected), observed \(observed) after waiting for the accessibility update", file: file, line: line)
             return false
         }

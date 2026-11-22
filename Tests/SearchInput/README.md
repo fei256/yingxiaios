@@ -10,7 +10,7 @@ Focus requests are acknowledged after the native responder state matches the com
 
 Control labels and bands publish their global frames. The production picture gesture view excludes those frames in both UIKit and SwiftUI, since iOS 16 can otherwise hit the representable wrapper after its native view rejects a touch. Checks cover an ordinary UIKit button, SwiftUI reference buttons with and without the picture layer, 60 player/dock taps, 30 taps while changing portrait/landscape orientation, overlapping exclusions, and a picture tap outside the controls.
 
-Each coordinate receives one tap, followed by a predicate wait of at most two seconds for the exact action identifier and cumulative count. Delayed accessibility observations and missing or duplicate actions retain a `control-action-receipt` attachment. A mismatch fails immediately at its original coordinate, so later assertions do not cascade from an already incorrect count.
+Each coordinate receives one tap, followed by a predicate wait of at most two seconds and a fresh read of the exact action identifier and cumulative count. The final observed count determines success; waiter status and delayed observations retain a `control-action-receipt` attachment. Missing or duplicate actions fail at their original coordinate, so later assertions do not cascade from an already incorrect count.
 
 The host also validates literal app symbol names and names from icon enum getters/category arrays against the running system's UIImage symbol catalogue. It compiles the production alias resolver, so controls using symbols introduced after iOS 16 retain an available icon. Dynamic icon names supplied by external sources are outside this static catalogue check.
 

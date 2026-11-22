@@ -151,24 +151,35 @@ struct GlobalSearchInput: UIViewRepresentable {
 
 class GlobalSearchTextField: UITextField {
     var focusAvailabilityChanged: (@MainActor (UITextField) -> Void)?
+    private var keyWindowObserver: GlobalSearchKeyWindowObserver?
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         stopObservingFocusAvailability()
         if let window {
-            NotificationCenter.default.addObserver(self, selector: #selector(windowBecameKey(_:)),
-                name: UIWindow.didBecomeKeyNotification, object: window)
+            keyWindowObserver = GlobalSearchKeyWindowObserver(field: self, window: window)
             focusAvailabilityChanged?(self)
         }
     }
 
     func stopObservingFocusAvailability() {
-        NotificationCenter.default.removeObserver(self, name: UIWindow.didBecomeKeyNotification, object: nil)
+        keyWindowObserver = nil
+    }
+}
+
+@MainActor private final class GlobalSearchKeyWindowObserver: NSObject {
+    private weak var field: GlobalSearchTextField?
+
+    init(field: GlobalSearchTextField, window: UIWindow) {
+        self.field = field
+        super.init()
+        NotificationCenter.default.addObserver(self, selector: #selector(windowBecameKey(_:)),
+            name: UIWindow.didBecomeKeyNotification, object: window)
     }
 
     @objc private func windowBecameKey(_ notification: Notification) {
-        guard let target = notification.object as? UIWindow, target === window else { return }
-        focusAvailabilityChanged?(self)
+        guard let field, let target = notification.object as? UIWindow, target === field.window else { return }
+        field.focusAvailabilityChanged?(field)
     }
 
     deinit { NotificationCenter.default.removeObserver(self) }
