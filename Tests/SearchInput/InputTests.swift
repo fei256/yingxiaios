@@ -16,6 +16,12 @@ final class SearchInputTests: XCTestCase {
         return view.subviews.compactMap { self.field(in: $0) }.first
     }
     @MainActor private func settle() async throws { try await Task.sleep(for: .milliseconds(250)) }
+    @MainActor private func waitForFocus(_ focused: Bool, in field: UITextField) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 2
+        while field.isFirstResponder != focused, ProcessInfo.processInfo.systemUptime < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
 
     @MainActor func testFirstTypingKeepsFieldAndKeyboardFocus() async throws {
         let state = SearchInputState()
@@ -38,11 +44,15 @@ final class SearchInputTests: XCTestCase {
         state.focused = false; state.revision += 1
         try await settle()
         XCTAssertTrue(original.isFirstResponder)
-        state.request = GlobalSearchFocusRequest(focused: false)
+        original.insertText("g"); original.sendActions(for: .editingChanged)
         try await settle()
+        XCTAssertEqual(state.text, "fang", "A stale focus observation must not drop subsequent native input")
+        XCTAssertTrue(state.focused)
+        state.request = GlobalSearchFocusRequest(focused: false)
+        try await waitForFocus(false, in: original)
         XCTAssertFalse(original.isFirstResponder)
         state.request = GlobalSearchFocusRequest(focused: true)
-        try await settle()
+        try await waitForFocus(true, in: original)
         XCTAssertTrue(original.isFirstResponder)
     }
 

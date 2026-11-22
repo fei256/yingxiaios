@@ -6,6 +6,8 @@ The journal checks also compile the production background, cards, week strip and
 
 Hosted UIKit tests check that the first input and IME updates keep the same text field and first responder, explicit focus requests still work, and the caret is vertically centered. UI tests tap the centers and corners of player and navigation buttons above the actual native gesture layer and check which action actually fires.
 
+Focus requests are acknowledged after the native responder state matches the command. Four additional checks use the production text field and coordinator to cover delayed window attachment/activation, a transient UIKit refusal, a newer dismissal during a failed attempt, and the four-attempt retry limit. Explicit focus assertions wait for the native responder state for at most two seconds.
+
 Control labels and bands publish their global frames. The production picture gesture view excludes those frames in both UIKit and SwiftUI, since iOS 16 can otherwise hit the representable wrapper after its native view rejects a touch. Checks cover an ordinary UIKit button, SwiftUI reference buttons with and without the picture layer, 60 player/dock taps, 30 taps while changing portrait/landscape orientation, overlapping exclusions, and a picture tap outside the controls.
 
 Each coordinate receives one tap, followed by a predicate wait of at most two seconds for the exact action identifier and cumulative count. Delayed accessibility observations and missing or duplicate actions retain a `control-action-receipt` attachment. A mismatch fails immediately at its original coordinate, so later assertions do not cascade from an already incorrect count.

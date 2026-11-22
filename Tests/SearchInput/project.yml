@@ -36,6 +36,7 @@ targets:
     platform: iOS
     sources:
       - path: InputTests.swift
+      - path: FocusRequestTests.swift
       - path: JournalDateTests.swift
       - path: PictureGestureHitTests.swift
       - path: SymbolAvailabilityTests.swift
