@@ -2,14 +2,36 @@ import XCTest
 import UIKit
 
 final class ControlHitTests: XCTestCase {
+    @MainActor private func requireAction(_ result: XCUIElement, id: String, events: Int, point: CGVector,
+                                         file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        let expected = "\(id):\(events)"
+        let started = ProcessInfo.processInfo.systemUptime
+        let initial = result.label
+        let response = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", expected), object: result)
+        let status = XCTWaiter.wait(for: [response], timeout: 2)
+        let observed = result.label
+        if initial != expected || status != .completed || observed != expected {
+            let receipt = XCTAttachment(string: "expected=\(expected)\ninitial=\(initial)\nobserved=\(observed)\npoint=\(point)\nwait=\(status)\nelapsed=\(ProcessInfo.processInfo.systemUptime - started)")
+            receipt.name = "control-action-receipt"
+            receipt.lifetime = .keepAlways
+            add(receipt)
+        }
+        guard status == .completed && observed == expected else {
+            XCTFail("Single touch at \(point) expected \(expected), observed \(observed) after waiting for the accessibility update", file: file, line: line)
+            return false
+        }
+        return true
+    }
+
     @MainActor func testPictureRemainsInteractiveOutsideControlFrames() {
         let app = XCUIApplication()
         app.launchArguments = ["controls"]
         app.launch()
         XCUIDevice.shared.orientation = .landscapeLeft
         XCTAssertTrue(app.buttons["top.0"].waitForExistence(timeout: 5))
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)).tap()
-        XCTAssertTrue(app.staticTexts["control.last"].label.hasPrefix("picture:"))
+        let point = CGVector(dx: 0.1, dy: 0.5)
+        app.coordinate(withNormalizedOffset: point).tap()
+        _ = requireAction(app.staticTexts["control.last"], id: "picture", events: 1, point: point)
     }
     @MainActor func testReferenceControlCorners() {
         checkReferences(arguments: ["controls"], ids: ["reference", "plain", "styled.rectangle"])
@@ -34,7 +56,7 @@ final class ControlHitTests: XCTestCase {
                 for point in [CGVector(dx: 0.04, dy: 0.04), CGVector(dx: 0.96, dy: 0.04), CGVector(dx: 0.5, dy: 0.5), CGVector(dx: 0.04, dy: 0.96), CGVector(dx: 0.96, dy: 0.96)] {
                     button.coordinate(withNormalizedOffset: point).tap()
                     events += 1
-                    XCTAssertEqual(result.label, "\(id):\(events)", "Rotation must update the picture's control exclusions")
+                    guard requireAction(result, id: id, events: events, point: point) else { return }
                 }
             }
         }
@@ -54,7 +76,7 @@ final class ControlHitTests: XCTestCase {
             for point in [CGVector(dx: 0.04, dy: 0.04), CGVector(dx: 0.96, dy: 0.04), CGVector(dx: 0.5, dy: 0.5), CGVector(dx: 0.04, dy: 0.96), CGVector(dx: 0.96, dy: 0.96)] {
                 button.coordinate(withNormalizedOffset: point).tap()
                 events += 1
-                XCTAssertEqual(result.label, "\(id):\(events)")
+                guard requireAction(result, id: id, events: events, point: point) else { return }
             }
         }
     }
@@ -78,7 +100,7 @@ final class ControlHitTests: XCTestCase {
             for point in [CGVector(dx: 0.04, dy: 0.04), CGVector(dx: 0.96, dy: 0.04), CGVector(dx: 0.5, dy: 0.5), CGVector(dx: 0.04, dy: 0.96), CGVector(dx: 0.96, dy: 0.96)] {
                 button.coordinate(withNormalizedOffset: point).tap()
                 events += 1
-                XCTAssertEqual(result.label, "\(id):\(events)", "Every center/corner touch must trigger exactly the selected button")
+                guard requireAction(result, id: id, events: events, point: point) else { return }
             }
         }
     }
