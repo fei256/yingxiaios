@@ -171,6 +171,7 @@ extension Timebase {
 }
 
 final class Packet: ObjectQueueItem {
+    var memoryReservation: PlaybackPacketBudget.Reservation?
     /// Track timeline when this packet entered its decode queue.
     var decodeGeneration: UInt64?
     var duration: Int64 = 0

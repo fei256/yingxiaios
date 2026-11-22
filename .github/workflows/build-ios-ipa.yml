@@ -39,6 +39,8 @@ on:
       - 'Tests/TMDB/**'
       - 'Tests/RuntimeLifecycle/**'
       - 'Tests/PlaybackStability/**'
+      - 'Tests/PlaybackResilience/**'
+      - 'Tests/HTTPResponse/**'
       - 'Tests/SettingsLifecycle/**'
       - 'Tests/DownloadTransfer/**'
       - 'Sources/**'
@@ -115,11 +117,26 @@ jobs:
             build/ci/settings-lifecycle/ProductionDeclarations.swift \
             Sources/TVCore/LocalDanmakuPreferences.swift Sources/TVCore/DanmakuTrackSelection.swift \
             Sources/TVCore/TMDBServiceSettings.swift Sources/TVCore/LocalDetailEpisodeNumbers.swift \
-            App/PlayerBadgeRules.swift App/LocalMediaBadgeStore.swift App/LocalMediaBadgeImporter.swift \
+            App/PlayerBadgeRules.swift App/LocalMediaBadgeStore.swift App/BoundedHTTPResponse.swift App/LocalMediaBadgeImporter.swift \
             Tests/SettingsLifecycle/Support.swift Tests/SettingsLifecycle/checks.swift \
             -o build/ci/settings-lifecycle/checks
           build/ci/settings-lifecycle/checks build/ci/settings-lifecycle/results.json \
             2>&1 | tee build/ci/settings-lifecycle/checks.log
+      - name: Test bounded playback recovery and packet memory ownership
+        run: |
+          xcrun swiftc -swift-version 6 -parse-as-library \
+            Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackResilience.swift \
+            Tests/PlaybackResilience/checks.swift -o build/ci/playback-resilience-checks
+          build/ci/playback-resilience-checks build/ci/playback-resilience-checks.json \
+            2>&1 | tee build/ci/playback-resilience-checks.log
+          xcrun swiftc -swift-version 6 -parse-as-library -sanitize=thread \
+            Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackResilience.swift \
+            Tests/PlaybackResilience/checks.swift -o build/ci/playback-resilience-tsan
+          build/ci/playback-resilience-tsan 2>&1 | tee build/ci/playback-resilience-tsan.log
+      - name: Test production bounded HTTP responses and decompression limits
+        run: |
+          python3 -B Tests/HTTPResponse/run_checks.py --report build/ci/http-response-checks.json \
+            2>&1 | tee build/ci/http-response-checks.log
       - name: Test production download retries and HLS audio integrity
         run: |
           mkdir -p build/ci/download-transfer
@@ -138,6 +155,9 @@ jobs:
             build/ci/runtime-lifecycle-checks.json
             build/ci/runtime-lifecycle-checks.log
             build/ci/playback-stability*.log
+            build/ci/playback-resilience*.json
+            build/ci/playback-resilience*.log
+            build/ci/http-response-checks.*
             build/ci/ai-revision-checks.log
             build/ci/settings-lifecycle/*.json
             build/ci/settings-lifecycle/*.log

@@ -15,6 +15,7 @@ struct LocalMediaBadgeSource: Codable, Identifiable, Equatable, Sendable {
 }
 
 struct LocalMediaBadgeStore: Codable, Sendable {
+    static let maximumDataBytes = 4 * 1024 * 1024
     static let key = "local.mediaBadges.v1"
     static let enabledKey = "local.mediaBadges.enabled"
     static let changed = Notification.Name("LocalMediaBadgesChanged")
@@ -42,21 +43,26 @@ struct LocalMediaBadgeStore: Codable, Sendable {
     }
     /// Parse before mutating, so a failed refresh preserves the previously saved catalog.
     mutating func add(address: String, data: Data) throws {
+        try add(Self.validatedSource(address: address, data: data))
+    }
+    mutating func add(_ source: LocalMediaBadgeSource) throws {
+        guard sources.count < 31 || sources.contains(where: { $0.id == source.id }) else { throw BadgeError.tooMany }
+        if let index = sources.firstIndex(where: { $0.id == source.id }) { sources[index] = source }
+        else { sources.append(source) }
+    }
+    static func validatedSource(address: String, data: Data) throws -> LocalMediaBadgeSource {
         let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard data.count <= 4 * 1024 * 1024, let url = URL(string: address), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+        guard data.count <= maximumDataBytes, let url = URL(string: address), ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
               url.host != nil, url.user == nil, url.password == nil, url.fragment == nil else { throw BadgeError.invalidAddress }
         let rules = try PlayerBadgeRules(data: data)
         guard !rules.rules.isEmpty, rules.rules.count <= 2000,
               Set(rules.rules.map(\.row.id)).count == rules.rules.count else { throw BadgeError.emptyCatalog }
         let id = SHA256.hash(data: Data(address.utf8)).map { String(format: "%02x", $0) }.joined()
-        guard sources.count < 31 || sources.contains(where: { $0.id == id }) else { throw BadgeError.tooMany }
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         let supplied = ((object?["name"] as? String) ?? (object?["title"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let filename = url.deletingPathExtension().lastPathComponent
         let name = String((supplied.isEmpty ? (filename.isEmpty ? url.host! : filename) : supplied).prefix(80))
-        let source = LocalMediaBadgeSource(id: id, name: name, address: address, data: data)
-        if let index = sources.firstIndex(where: { $0.id == id }) { sources[index] = source }
-        else { sources.append(source) }
+        return LocalMediaBadgeSource(id: id, name: name, address: address, data: data)
     }
     enum BadgeError: LocalizedError {
         case invalidAddress, emptyCatalog, tooMany, changed

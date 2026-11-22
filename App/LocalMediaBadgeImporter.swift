@@ -23,23 +23,29 @@ import Foundation
             guard let self else { return }
             defer { if self.revision == active { self.work = nil } }
             do {
-                let (data, response) = try await self.session.data(for: URLRequest(url: url, timeoutInterval: 30))
+                let configuration = self.session.configuration
+                let loading = Task.detached(priority: .userInitiated) {
+                    let data = try await BoundedHTTPResponse.data(for: URLRequest(url: url, timeoutInterval: 30),
+                        configuration: configuration, maximumBytes: LocalMediaBadgeStore.maximumDataBytes)
+                    try Task.checkCancellation()
+                    return try LocalMediaBadgeStore.validatedSource(address: address, data: data)
+                }
+                let source = try await withTaskCancellationHandler { try await loading.value } onCancel: { loading.cancel() }
                 try Task.checkCancellation()
                 guard self.revision == active else { return }
-                guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
-                    throw URLError(.badServerResponse)
-                }
                 // Other pages may have applied or removed a scheme during the request.
                 var next = LocalMediaBadgeStore.load(defaults: self.defaults)
                 guard next.sources.first(where: { $0.address == address }) == previous else {
                     throw LocalMediaBadgeStore.BadgeError.changed
                 }
-                try next.add(address: address, data: data)
+                try next.add(source)
                 try next.save(defaults: self.defaults)
                 completion(.success(next))
             } catch {
                 guard self.revision == active, !Task.isCancelled, !(error is CancellationError) else { return }
-                completion(.failure(error))
+                let failure: Error = (error as? URLError)?.code == .dataLengthExceedsMaximum
+                    ? LocalMediaBadgeStore.BadgeError.invalidAddress : error
+                completion(.failure(failure))
             }
         }
         return true

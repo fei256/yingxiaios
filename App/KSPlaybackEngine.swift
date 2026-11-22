@@ -11,6 +11,13 @@ struct KSPlaybackFailure: LocalizedError {
     var errorDescription: String? { message }
 }
 
+struct KSAudioServicesResumeContext: Sendable {
+    let mediaID: String
+    let position: Double
+    let duration: Double
+    let selections: KSPlaybackSelections
+}
+
 struct KSPlaybackTrack: Identifiable, Equatable {
     enum Kind: String { case video, audio, subtitle }
     let id: String
@@ -148,6 +155,10 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     var onReady: (() -> Void)?
     var onTick: (() -> Void)?
     var onFinish: ((Error?) -> Void)?
+    var onAudioServicesResume: ((KSAudioServicesResumeContext) -> Bool)?
+    @PerceptionIgnored private var audioServicesGate = PlaybackUserResumeGate<KSAudioServicesResumeContext>()
+    var requiresAudioServicesResume: Bool { audioServicesGate.context != nil }
+    var audioServicesAvailable: Bool { audioServicesGate.available }
     var onDecoderChange: (() -> Void)?
     /// External and AI cues remain owned by the session; PiP samples them at the decoded frame time.
     var pictureInPictureSubtitleProvider: ((Double) -> (primary: PlayerSubtitlePresentation, secondary: PlayerSubtitlePresentation))?
@@ -225,6 +236,13 @@ struct KSPlaybackChapter: Identifiable, Equatable {
               cacheIOURL: URL? = nil, audioCacheIOURL: URL? = nil, selections: KSPlaybackSelections? = nil) {
         shutdown()
         self.mediaID = mediaID
+        if !audioServicesGate.available {
+            let selection = selections ?? KSPlaybackSelections(video: nil, audio: nil, subtitle: nil, secondarySubtitle: "no")
+            audioServicesGate.suspend(context: KSAudioServicesResumeContext(mediaID: mediaID, position: startTime,
+                duration: 0, selections: selection), available: false)
+            onFinish?(PlaybackAudioFailure.unavailable())
+            return
+        }
         openID = UUID(); let activeOpen = openID
         thumbnailReader = PlaybackThumbnailReader(url: cacheIOURL ?? url, headers: cacheIOURL == nil ? headers : [:])
         let options = KSPlaybackOptions()
@@ -331,6 +349,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         }
     }
     func shutdown() {
+        audioServicesGate.clearPending()
         PictureInPicture.shared.stop(engine: self)
         openID = UUID()
         if let output = core?.videoOutput as? MetalPlayView {
@@ -360,6 +379,13 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         for request in cancelled { request.completion(false) }
     }
     func play() {
+        guard audioServicesGate.available else { return }
+        if let context = audioServicesGate.userResumeContext {
+            wantsPlaying = true; paused = false
+            if onAudioServicesResume?(context) == true { audioServicesGate.clearPending() }
+            else { wantsPlaying = false; paused = true }
+            return
+        }
         guard !failedVideo else { return }
         wantsPlaying = true; paused = false
         if isReady, duration > 0, position >= duration - 0.1 {
@@ -368,6 +394,21 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         synchronizePictureInPictureClock()
     }
     func pause() { wantsPlaying = false; paused = true; core?.pause(); synchronizePictureInPictureClock() }
+    func suspendForAudioServices(available: Bool) {
+        let context = audioServicesGate.context ?? mediaID.map {
+            KSAudioServicesResumeContext(mediaID: $0, position: position, duration: duration, selections: selections)
+        }
+        shutdown()
+        audioServicesGate.suspend(context: context, available: available)
+        if let context {
+            mediaID = context.mediaID; position = context.position; duration = context.duration
+            videoSelection = context.selections.video; audioSelection = context.selections.audio
+            subtitlePolicy.selectPrimary(context.selections.subtitle)
+            subtitlePolicy.selectSecondary(context.selections.secondarySubtitle)
+            subtitleSelection = subtitlePolicy.primary; secondarySubtitleSelection = subtitlePolicy.secondary
+            audioOff = context.selections.audio == "no"
+        }
+    }
     func resumeAfterForeground() {
         guard let core else { return }
         core.enterForeground()

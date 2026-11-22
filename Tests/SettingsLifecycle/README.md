@@ -19,7 +19,7 @@ xcrun swiftc -swift-version 6 -parse-as-library \
   build/ci/settings-lifecycle/ProductionDeclarations.swift \
   Sources/TVCore/LocalDanmakuPreferences.swift Sources/TVCore/DanmakuTrackSelection.swift \
   Sources/TVCore/TMDBServiceSettings.swift Sources/TVCore/LocalDetailEpisodeNumbers.swift \
-  App/PlayerBadgeRules.swift App/LocalMediaBadgeStore.swift App/LocalMediaBadgeImporter.swift \
+  App/PlayerBadgeRules.swift App/LocalMediaBadgeStore.swift App/BoundedHTTPResponse.swift App/LocalMediaBadgeImporter.swift \
   Tests/SettingsLifecycle/Support.swift Tests/SettingsLifecycle/checks.swift \
   -o build/ci/settings-lifecycle/checks
 build/ci/settings-lifecycle/checks build/ci/settings-lifecycle/results.json

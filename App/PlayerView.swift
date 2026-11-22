@@ -373,11 +373,17 @@ struct PlaybackView: View {
     private func showOnStart() {}
     #endif
 
+    private func retryPlayback() {
+        #if os(iOS)
+        if session.engine.requiresAudioServicesResume { session.engine.play(); return }
+        #endif
+        startCatalogPlayback(session, channel: channel, store: store)
+    }
     @ViewBuilder private var status: some View {
         if let error = session.error {
             #if os(tvOS)
             TVPlaybackFailureView(channelName: channel.name, details: error, symbol: session.errorSymbol, backdrop: waitContent,
-                                  retry: { startCatalogPlayback(session, channel: channel, store: store) }, goBack: { dismiss() })
+                                  retry: { retryPlayback() }, goBack: { dismiss() })
             #elseif os(iOS)
             if playerLayout == .inline {
                 // At the top of a watch page: the same words, small, and Try Again; the page has Back.
@@ -385,7 +391,7 @@ struct PlaybackView: View {
                     Label(L10n.text("Can't play this right now"), systemImage: session.errorSymbol).font(.headline)
                     Text(error).font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(2)
                         .multilineTextAlignment(.center)
-                    Button { startCatalogPlayback(session, channel: channel, store: store) } label: {
+                    Button { retryPlayback() } label: {
                         Label(L10n.text("Try Again"), systemImage: "arrow.clockwise")
                     }
                     .controlButton(prominent: true).tint(Brand.accent).controlSize(.small).padding(.top, 2)
@@ -408,7 +414,7 @@ struct PlaybackView: View {
                         .multilineTextAlignment(.center).frame(maxWidth: 330).padding(.top, 10)
                     GlassGroup(spacing: 12) {
                         HStack(spacing: 12) {
-                            Button { startCatalogPlayback(session, channel: channel, store: store) } label: {
+                            Button { retryPlayback() } label: {
                                 Label(L10n.text("Try Again"), systemImage: "arrow.clockwise")
                             }
                             .controlButton(prominent: true).tint(Brand.accent)
@@ -427,7 +433,7 @@ struct PlaybackView: View {
                 Text(error).multilineTextAlignment(.center).frame(maxWidth: 420)
                 GlassGroup(spacing: 10) {
                     HStack(spacing: 10) {
-                        Button(L10n.text("Retry")) { startCatalogPlayback(session, channel: channel, store: store) }.controlButton(prominent: true).tint(Brand.accent)
+                        Button(L10n.text("Retry")) { retryPlayback() }.controlButton(prominent: true).tint(Brand.accent)
                         Button(L10n.text("Close")) { dismiss() }.controlButton()
                     }
                 }.controlSize(.large)

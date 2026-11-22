@@ -109,6 +109,9 @@ public class AudioEnginePlayer: AudioOutput {
     private var configurationObserver: NSObjectProtocol?
     private var configurationWork: DispatchWorkItem?
     private var startRetry: DispatchWorkItem?
+    private var startRetryID = UUID()
+    private var starter = PlaybackAudioStarter()
+    public var onFailure: ((NSError) -> Void)?
     private var graphGeneration: UInt64 = 0
     private var rebuildingGraph = false
     private var needsGraphRebuild = false
@@ -180,11 +183,13 @@ public class AudioEnginePlayer: AudioOutput {
 
     public func prepare(audioFormat: AVAudioFormat) {
         guard sourceNodeAudioFormat != audioFormat || needsGraphRebuild else { return }
+        let changedFormat = sourceNodeAudioFormat != audioFormat
         guard !rebuildingGraph else { needsGraphRebuild = true; return }
         rebuildingGraph = true
         needsGraphRebuild = false
         graphGeneration &+= 1
-        startRetry?.cancel(); startRetry = nil
+        cancelStartRetry()
+        if changedFormat { starter.reset() }
         defer {
             rebuildingGraph = false
             if needsGraphRebuild { configurationChanged() }
@@ -231,7 +236,6 @@ public class AudioEnginePlayer: AudioOutput {
         engine.mainMixerNode.outputVolume = mixerVolume
         engine.prepare()
         ensureRunningIfRequested()
-        if outputIntent.canRun && !engine.isRunning { scheduleStartRetry() }
     }
 
     private func configurationChanged() {
@@ -250,32 +254,49 @@ public class AudioEnginePlayer: AudioOutput {
 
     func setAudioSessionInterrupted(_ value: Bool) {
         outputIntent.setInterrupted(value)
-        startRetry?.cancel(); startRetry = nil
+        cancelStartRetry(); starter.reset()
         if value, engine.isRunning { engine.pause() }
         if !value, needsGraphRebuild { configurationChanged() }
     }
 
     func ensureRunningIfRequested() {
-        guard outputIntent.canRun, sourceNode != nil, !engine.isRunning else { return }
+        guard outputIntent.canRun, sourceNode != nil, startRetry == nil else { return }
         if needsGraphRebuild, !rebuildingGraph, let format = sourceNodeAudioFormat {
             prepare(audioFormat: format)
             return
         }
-        do { try engine.start() }
-        catch { KSLog(error) }
+        switch starter.attempt(revision: outputIntent.revision,
+                               allowed: outputIntent.canRun, running: engine.isRunning, start: {
+            try engine.start()
+            guard engine.isRunning else {
+                throw NSError(domain: PlaybackAudioFailure.domain, code: 3,
+                              userInfo: [NSLocalizedDescriptionKey: "音频设备尚未启动。"])
+            }
+        }) {
+        case .idle, .running: break
+        case let .retry(delay): scheduleStartRetry(after: delay)
+        case let .failed(error):
+            KSLog(error)
+            onFailure?(PlaybackAudioFailure.startup(error))
+        }
     }
 
-    private func scheduleStartRetry() {
+    private func cancelStartRetry() {
+        startRetryID = UUID(); startRetry?.cancel(); startRetry = nil
+    }
+    private func scheduleStartRetry(after delay: TimeInterval) {
         guard startRetry == nil, sourceNode != nil else { return }
+        let ticket = UUID(); startRetryID = ticket
         let revision = outputIntent.revision, generation = graphGeneration
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            guard self.graphGeneration == generation, self.outputIntent.acceptsRestart(revision: revision) else { return }
+            guard self.startRetryID == ticket else { return }
             self.startRetry = nil
+            guard self.graphGeneration == generation, self.outputIntent.acceptsRestart(revision: revision) else { return }
             self.ensureRunningIfRequested()
         }
         startRetry = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     func audioNodes() -> [AVAudioNode] {
@@ -284,15 +305,14 @@ public class AudioEnginePlayer: AudioOutput {
 
     public func play() {
         outputIntent.setPlaying(true)
-        startRetry?.cancel(); startRetry = nil
+        cancelStartRetry()
         if needsGraphRebuild, let format = sourceNodeAudioFormat { prepare(audioFormat: format) }
         else { ensureRunningIfRequested() }
-        if outputIntent.canRun && !engine.isRunning { scheduleStartRetry() }
     }
 
     public func pause() {
         outputIntent.setPlaying(false)
-        startRetry?.cancel(); startRetry = nil
+        cancelStartRetry(); starter.reset()
         if engine.isRunning {
             engine.pause()
         }

@@ -3,6 +3,15 @@ import SwiftUI
 import Perception
 import AVKit
 import TVCore
+import KSPlayer
+
+private final class AudioServiceObservation: @unchecked Sendable {
+    private let token: NSObjectProtocol
+    init(name: Notification.Name, action: @escaping @Sendable () -> Void) {
+        token = NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { _ in action() }
+    }
+    deinit { NotificationCenter.default.removeObserver(token) }
+}
 
 /// iPhone and iPad share one playback session, including while its PiP window owns the picture.
 /// Every operation below targets KSPlaybackEngine; AVQueuePlayer is retained idle only for
@@ -45,6 +54,8 @@ import TVCore
     var audioChoice: CMPersistentTrackID? { engine.tracks.first { $0.kind == .audio && $0.selected }.flatMap { Int32($0.id) } }
     private(set) var activeChannelID: String?
     @PerceptionIgnored private var activeObserver: NSObjectProtocol?
+    @PerceptionIgnored private var audioResetObserver: AudioServiceObservation?
+    @PerceptionIgnored private var audioLostObserver: AudioServiceObservation?
     @PerceptionIgnored private var videoCacheObserver: NSObjectProtocol?
     @PerceptionIgnored private var cachePreparation: Task<Void, Never>?
     @PerceptionIgnored private var cachePreparationID = UUID()
@@ -173,6 +184,9 @@ import TVCore
         engine.onReady = { [weak self] in self?.ready() }
         engine.onTick = { [weak self] in self?.updatePictureState(); self?.updateSubtitles() }
         engine.onFinish = { [weak self] error in self?.finished(error) }
+        engine.onAudioServicesResume = { [weak self] context in
+            self?.recoverPlayback(reusePrepared: true, audioServices: context) ?? false
+        }
         engine.onDecoderChange = { [weak self] in self?.reopenCurrent() }
         engine.pictureInPictureSubtitleProvider = { [weak self] time in
             guard let self else { return (PlayerSubtitlePresentation(), PlayerSubtitlePresentation()) }
@@ -192,6 +206,12 @@ import TVCore
         }
         activeObserver = NotificationCenter.default.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.recoverAfterForeground() }
+        }
+        audioResetObserver = AudioServiceObservation(name: AVAudioSession.mediaServicesWereResetNotification) { [weak self] in
+            Task { @MainActor [weak self] in self?.audioServicesChanged(available: true) }
+        }
+        audioLostObserver = AudioServiceObservation(name: AVAudioSession.mediaServicesWereLostNotification) { [weak self] in
+            Task { @MainActor [weak self] in self?.audioServicesChanged(available: false) }
         }
         videoCacheObserver = NotificationCenter.default.addObserver(forName: MobileMediaServices.videoCacheChanged,
             object: nil, queue: .main) { [weak self] notification in
@@ -482,6 +502,10 @@ import TVCore
         }
     }
     private func finished(_ failure: Error?) {
+        if let failure, PlaybackAudioFailure.isUnavailable(failure) {
+            engine.pause(); error = failure.localizedDescription; loading = false; buffering = false
+            return
+        }
         guard recovery == nil else { return }
         if let failure {
             Diagnostics.shared.record(.warning, "player.recovery", "event=failure code=\(PlaybackFailureDiagnostics.codes(failure)) attempts=\(recoveryAttempts) decoderAttempts=\(decoderRecoveryAttempts) \(engine.failureDiagnostic)")
@@ -562,6 +586,7 @@ import TVCore
         }
     }
     private func reopenCurrent() {
+        guard !engine.requiresAudioServicesResume else { return }
         guard let channel = playing, let prepared = currentPrepared else { return }
         cancelDiscSelection()
         recovery?.cancel(); recovery = nil
@@ -694,26 +719,44 @@ import TVCore
         guard !paused else { return }
         if prepared.disc?.isAvailable == false || error != nil { _ = recoverPlayback() }
     }
-    @discardableResult private func recoverPlayback(reusePrepared: Bool = false) -> Bool {
-        guard recovery == nil, recoveryAttempts < 2, !selectingDiscTitle,
+    private func audioServicesChanged(available: Bool) {
+        let hadPlayback = engine.mediaID != nil || currentPrepared != nil
+        if hadPlayback {
+            saveHistory(); watchSampler.interrupt()
+            recovery?.cancel(); recovery = nil
+            cancelDiscSelection(); discardUpcoming()
+            cachePreparationID = UUID(); cachePreparation?.cancel(); cachePreparation = nil
+        }
+        engine.suspendForAudioServices(available: available)
+        if hadPlayback {
+            clearBoost()
+            loading = false; buffering = false; showsPicture = false
+            error = available ? "音频服务已重置，请点重试继续播放。" : "系统音频服务暂不可用，请稍后重试。"
+            Diagnostics.shared.record(.warning, "player.audio", "event=media-services \(available ? "reset" : "lost")")
+        }
+    }
+    @discardableResult private func recoverPlayback(reusePrepared: Bool = false, audioServices: KSAudioServicesResumeContext? = nil) -> Bool {
+        guard audioServices != nil || !engine.requiresAudioServicesResume else { return false }
+        guard recovery == nil, audioServices != nil || recoveryAttempts < 2, !selectingDiscTitle,
               preparation == nil || engine.mediaID == generation.uuidString,
               let selected = playing ?? sourceChannel else { return false }
         let source: Channel
         if !reusePrepared, let room = sourceChannel, LiveCatalog.isRoom(room.url) { source = room }
         else { source = selected }
         if reusePrepared, currentPrepared == nil { return false }
-        if let lastRecovery, Date().timeIntervalSince(lastRecovery) < 2 { return false }
+        if audioServices == nil, let lastRecovery, Date().timeIntervalSince(lastRecovery) < 2 { return false }
+        if audioServices != nil { recoveryAttempts = 0; lastRecovery = nil }
         saveHistory()
         cancelDiscSelection()
         preparation?.cancel(); preparation = nil; discardUpcoming()
         recoveryAttempts += 1; lastRecovery = Date()
         Diagnostics.shared.record(.info, "player.recovery", "event=begin reuseInput=\(reusePrepared) attempt=\(recoveryAttempts) \(engine.failureDiagnostic)")
-        let savedPosition = pendingResume ?? position, savedTimeline = engine.timelineRevision
+        let savedPosition = pendingResume ?? audioServices?.position ?? position, savedTimeline = engine.timelineRevision
         generation = UUID(); let active = generation
         restoringPosition = false; seekingSegment = false; pendingResume = nil
         preparationStarted = Date()
         error = nil; loading = true; buffering = false
-        steps = [reusePrepared ? "正在恢复视频解码" : "正在重新解析播放地址"]
+        steps = [audioServices != nil ? "正在恢复音频服务" : reusePrepared ? "正在恢复视频解码" : "正在重新解析播放地址"]
         recovery = Task { [weak self] in
             guard let self, self.generation == active, !Task.isCancelled else { return }
             do {
@@ -728,8 +771,8 @@ import TVCore
                 // Take the latest intent: pause/seek can be used while network
                 // preparation runs. Shutdown callbacks belong to the old epoch.
                 let wasPaused = self.paused
-                let resume = self.engine.seeking || self.engine.timelineRevision != savedTimeline ? self.position : savedPosition
-                let selections = self.engine.selections
+                let resume = audioServices == nil && (self.engine.seeking || self.engine.timelineRevision != savedTimeline) ? self.position : savedPosition
+                let selections = audioServices?.selections ?? self.engine.selections
                 self.externalSubtitles.prepareForReopen()
                 self.engine.shutdown()
                 if !reusePrepared, let previous = self.currentPrepared { Self.release(source, previous) }

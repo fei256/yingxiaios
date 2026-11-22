@@ -32,7 +32,7 @@ generated = "import Foundation\n\n" + "\n\n".join([
 sources = [models, danmaku, catalog, "Sources/TVCore/LocalDanmakuPreferences.swift",
            "Sources/TVCore/DanmakuTrackSelection.swift", "Sources/TVCore/TMDBServiceSettings.swift",
            "App/PlayerBadgeRules.swift", "Sources/TVCore/LocalDetailEpisodeNumbers.swift",
-           "App/LocalMediaBadgeStore.swift", "App/LocalMediaBadgeImporter.swift"]
+           "App/LocalMediaBadgeStore.swift", "App/LocalMediaBadgeImporter.swift", "App/BoundedHTTPResponse.swift"]
 evidence = [{"path": filename, "sha256": hashlib.sha256((root / filename).read_bytes()).hexdigest()}
             for filename in sources]
 (output / "production-sources.json").write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")

@@ -142,6 +142,7 @@ public class KSMEPlayer: NSObject {
         super.init()
         playerItem.delegate = self
         audioOutput.renderSource = playerItem
+        (audioOutput as? AudioEnginePlayer)?.onFailure = { [weak self] error in self?.sourceDidFailed(error: error) }
         videoOutput?.renderSource = playerItem
         videoOutput?.displayLayerDelegate = self
         #if !os(macOS)
@@ -169,6 +170,8 @@ private extension KSMEPlayer {
     func playOrPause() {
         runOnMainThread { [weak self] in
             guard let self else { return }
+            self.options.packetBudget.setPlaybackActive(self.playbackState == .playing && !self.isAudioInterrupted && !self.failedSource,
+                                                        outputReady: self.loadState == .playable)
             let isPaused = !(self.playbackState == .playing && self.loadState == .playable) || self.isAudioInterrupted
             self.options.updateVideoClockPlayback(isPlaying: !isPaused, rate: Double(self.audioOutput.playbackRate))
             self.playerItem.updateAudioClockPlayback(isPlaying: !isPaused, rate: Double(self.audioOutput.playbackRate))

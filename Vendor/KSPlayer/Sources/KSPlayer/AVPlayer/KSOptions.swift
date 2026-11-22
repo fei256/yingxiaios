@@ -23,6 +23,7 @@ open class KSOptions {
     public var preferredForwardBufferDuration = KSOptions.preferredForwardBufferDuration
     /// 最大缓存视频时间
     public var maxBufferDuration = KSOptions.maxBufferDuration
+    public var packetBudget = PlaybackPacketBudget()
     /// 是否开启秒开
     public var isSecondOpen = KSOptions.isSecondOpen
     /// 开启精确seek
@@ -172,6 +173,7 @@ open class KSOptions {
         audio.startPlayTime = startPlayTime
         audio.preferredForwardBufferDuration = preferredForwardBufferDuration
         audio.maxBufferDuration = maxBufferDuration
+        audio.packetBudget = packetBudget
         audio.syncDecodeAudio = syncDecodeAudio
         audio.preferredAudioTrackID = preferredAudioTrackID
         audio.audioFilters = audioFilters
@@ -234,6 +236,9 @@ open class KSOptions {
             if (syncDecodeVideo && capacity.mediaType == .video) || (syncDecodeAudio && capacity.mediaType == .audio) {
                 return true
             }
+            // A byte-limited input cannot build five seconds of a high-bitrate
+            // stream. Two decoded frames on every selected track still remain mandatory.
+            if packetBudget.hasPressure { return true }
             if isFirst || isSeek {
                 // 让纯音频能更快的打开
                 if capacity.mediaType == .audio || isSecondOpen {
@@ -286,8 +291,9 @@ open class KSOptions {
         return tracks.firstIndex { $0.trackID == preferredAudioTrackID }
     }
 
-    open func videoFrameMaxCount(fps _: Float, naturalSize _: CGSize, isLive: Bool) -> UInt8 {
-        isLive ? 4 : 16
+    open func videoFrameMaxCount(fps _: Float, naturalSize: CGSize, isLive: Bool) -> UInt8 {
+        PlaybackPacketBudget.videoFrames(width: Double(naturalSize.width), height: Double(naturalSize.height), live: isLive,
+                                         physicalMemory: ProcessInfo.processInfo.physicalMemory)
     }
 
     open func audioFrameMaxCount(fps: Float, channelCount: Int) -> UInt8 {

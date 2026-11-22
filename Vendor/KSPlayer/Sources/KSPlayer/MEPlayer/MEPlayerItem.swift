@@ -10,6 +10,7 @@ import FFmpegKit
 public final class MEPlayerItem: Sendable {
     private let url: URL
     private let options: KSOptions
+    private let memoryOwner: UUID
     private let operationQueue = OperationQueue()
     private let reader = PlaybackReaderCoordinator()
     private var formatCtx: UnsafeMutablePointer<AVFormatContext>?
@@ -188,6 +189,7 @@ public final class MEPlayerItem: Sendable {
     public init(url: URL, options: KSOptions) {
         self.url = url
         self.options = options
+        memoryOwner = options.packetBudget.registerOwner()
         cacheInputIO = PlaybackInputIO(originalURL: url, transportURL: options.cacheIOURL ?? url)
         timer.fireDate = Date.distantFuture
         operationQueue.name = "KSPlayer_" + String(describing: self).components(separatedBy: ".").last!
@@ -549,6 +551,7 @@ extension MEPlayerItem {
             videoAudioTracks.append(track)
             isAudioStalled = false
         }
+        options.packetBudget.setTrackCount(videoAudioTracks.count, owner: memoryOwner)
     }
 
     private func read() {
@@ -602,6 +605,7 @@ extension MEPlayerItem {
         if notifyReady, state == .reading { delegate?.sourceDidOpened() }
         while let command = reader.nextCommand(reader: reservation) {
             if case let .seek(request) = command {
+                options.packetBudget.resetProgress()
                 colorProbePackets.removeAll(); colorProbePacketIndex = 0
                 dolbyPacketPairer?.reset()
                 inlineDolbyConverters.values.forEach { $0.reset() }
@@ -716,6 +720,10 @@ extension MEPlayerItem {
                     self.finishAudioClockSeek(time: seekClockTime, generation: clockGeneration)
                 }
             } else if case let .read(revision) = command {
+                if options.packetBudget.shouldPause(owner: memoryOwner) {
+                    pause()
+                    continue
+                }
                 autoreleasepool {
                     _ = reading(revision: revision)
                 }
@@ -1013,6 +1021,22 @@ extension MEPlayerItem {
                     }
                 }
                 packet.assetTrack = first
+                if first.mediaType == .video || first.mediaType == .audio {
+                    var cost = max(0, Int(corePacket.pointee.size)) + 256
+                    if let sides = corePacket.pointee.side_data, corePacket.pointee.side_data_elems > 0 {
+                        for index in 0..<Int(corePacket.pointee.side_data_elems) {
+                            let addition = cost.addingReportingOverflow(Int(clamping: sides[index].size))
+                            cost = addition.overflow ? Int.max : addition.partialValue
+                            if cost > options.packetBudget.maximumPacketBytes { break }
+                        }
+                    }
+                    guard let reservation = options.packetBudget.reserve(owner: memoryOwner, track: first.mediaType.rawValue, bytes: cost) else {
+                        guard reader.acceptsRead(revision: revision) else { return 0 }
+                        error = PlaybackPacketBudget.failure(stalled: false)
+                        return AVError.invalidData.code
+                    }
+                    packet.memoryReservation = reservation
+                }
                 #if DEBUG
                 if seekTracePacketsRemaining > 0, first.mediaType == .video || first.mediaType == .audio {
                     seekTracePacketsRemaining -= 1
@@ -1032,6 +1056,9 @@ extension MEPlayerItem {
                     audioTrack?.putPacket(packet: packet)
                 } else {
                     if !consumesInjectedSubtitleDuplicate(packet) { first.subtitle?.putPacket(packet: packet) }
+                }
+                if options.packetBudget.shouldPause(owner: memoryOwner) {
+                    _ = transitionReader(from: [.reading], to: .paused, revision: revision)
                 }
             }
         } else {
@@ -1123,6 +1150,7 @@ extension MEPlayerItem: MediaPlayback {
 
     public func shutdown() {
         guard let closing = reader.close() else { return }
+        options.packetBudget.unregisterOwner(memoryOwner)
         invalidateAudioClockUpdates()
         readerStateChanged(.closed)
         // Wake both packet consumers and full frame producers before waiting
@@ -1200,9 +1228,18 @@ extension MEPlayerItem: CodecCapacityDelegate {
     func codecDidChangeCapacity() {
         let loadingState = options.playable(capacitys: videoAudioTracks, isFirst: isFirst, isSeek: isSeek)
         delegate?.sourceDidChange(loadingState: loadingState)
+        if loadingState.isPlayable { isFirst = false; isSeek = false }
+        switch options.packetBudget.decision(owner: memoryOwner, ready: loadingState.isPlayable,
+                                             now: ProcessInfo.processInfo.systemUptime) {
+        case .stalled:
+            error = PlaybackPacketBudget.failure(stalled: true)
+            return
+        case .pause:
+            pause()
+            return
+        case .read: break
+        }
         if loadingState.isPlayable {
-            isFirst = false
-            isSeek = false
             if loadingState.loadedTime > options.maxBufferDuration {
                 adaptableVideo(loadingState: loadingState)
                 pause()
