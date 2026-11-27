@@ -10,19 +10,9 @@ private struct LocalDockTopKey: EnvironmentKey { static let defaultValue: CGFloa
 private struct LocalHTMLDockClearanceKey: EnvironmentKey { static let defaultValue = LocalDockLayout.inset(showsMusic: false) }
 private struct LocalDockVisibleKey: EnvironmentKey { static let defaultValue = true }
 private struct LocalHTMLDockHiddenKey: EnvironmentKey { static let defaultValue = Binding.constant(false) }
-private struct LocalDockScrollEnabledKey: EnvironmentKey { static let defaultValue = false }
-private struct LocalDockActivityKey: EnvironmentKey { static let defaultValue: (@MainActor @Sendable (UUID, Bool) -> Void)? = nil }
 private struct LocalPageActiveKey: EnvironmentKey { static let defaultValue = true }
 private struct LocalHomeSourcePanelKey: EnvironmentKey { static let defaultValue: (@MainActor @Sendable () -> Void)? = nil }
 extension EnvironmentValues {
-    var localDockScrollEnabled: Bool {
-        get { self[LocalDockScrollEnabledKey.self] }
-        set { self[LocalDockScrollEnabledKey.self] = newValue }
-    }
-    var localDockActivity: (@MainActor @Sendable (UUID, Bool) -> Void)? {
-        get { self[LocalDockActivityKey.self] }
-        set { self[LocalDockActivityKey.self] = newValue }
-    }
     var localDockVisible: Bool {
         get { self[LocalDockVisibleKey.self] }
         set { self[LocalDockVisibleKey.self] = newValue }
@@ -69,8 +59,6 @@ struct LocalAppNavigation: View {
     @State private var pickedSites: [AppSection: Site] = [:]
     @State private var metadataRevision = TMDBServiceSettings.identity
     @State private var keyboardVisible = false
-    @State private var dockHiddenByScroll = false
-    @State private var activeScrollObservers: Set<UUID> = []
     @State private var htmlDockHidden = false
     @State private var restoredDestination = false
     @State private var preparedHomeSource = false
@@ -80,7 +68,6 @@ struct LocalAppNavigation: View {
     @State private var homeTaps = LocalHomeTapState()
     @State private var pendingHomeNavigation = false
     @State private var homeNotice: String?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @ScaledMetric(relativeTo: .caption2) private var dockLabelSize: CGFloat = 11
     @AppStorage(LocalHTMLHomeStore.key) private var htmlHomeData = Data()
@@ -98,7 +85,7 @@ struct LocalAppNavigation: View {
         _ = htmlHomeData
         return current == .home && LocalHTMLHomeStore.load().active != nil
     }
-    private var dockVisible: Bool { !keyboardVisible && !dockHiddenByScroll && !(htmlHomeSelected && htmlDockHidden) }
+    private var dockVisible: Bool { !keyboardVisible && !(htmlHomeSelected && htmlDockHidden) }
 
     var body: some View {
         WithPerceptionTracking {
@@ -163,10 +150,8 @@ struct LocalAppNavigation: View {
             .environment(\.localDockVisible, dockVisible)
             .environment(\.localHTMLDockClearance, dockInset)
             .environment(\.localHTMLDockHidden, $htmlDockHidden)
-            .environment(\.localDockScrollEnabled, !keyboardVisible && !sourcePanelBlocksInput)
-            .environment(\.localDockActivity, { id, active in scrolled(id: id, active: active) })
             .environment(\.openLocalHomeSources, { openHomeSources() })
-            .onAppear { prepareHomeDestination(); visited.insert(current); revealDock() }
+            .onAppear { prepareHomeDestination(); visited.insert(current) }
             .task(id: sourceRevision) { prepareHomeDestination(); synchronizeSources() }
             .appOnChange(of: store.section) { _, section in
                 if section != .home && section != .sites && section != .python {
@@ -174,7 +159,6 @@ struct LocalAppNavigation: View {
                 }
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                 visited.insert(current)
-                revealDock()
             }
             .appOnChange(of: scenePhase) { _, phase in
                 if phase != .active { homeTaps.reset(); pendingHomeNavigation = false }
@@ -203,7 +187,6 @@ struct LocalAppNavigation: View {
                 .environment(store)
                 .toolbarBackground(.hidden, for: .navigationBar)
             }
-            .onDisappear { revealDock() }
             .task(id: homeNotice) {
                 guard homeNotice != nil else { return }
                 do { try await Task.sleep(for: .seconds(4)) } catch { return }
@@ -459,18 +442,6 @@ struct LocalAppNavigation: View {
 
     private var dockControlHeight: CGFloat { max(LocalDockLayout.controlHeight, 32 + dockLabelSize * 1.4) }
 
-    private func scrolled(id: UUID, active: Bool) {
-        if active { activeScrollObservers.insert(id) } else { activeScrollObservers.remove(id) }
-        let hidden = !activeScrollObservers.isEmpty
-        guard dockHiddenByScroll != hidden else { return }
-        withAnimation(reduceMotion ? nil : .easeOut(duration: hidden ? 0.16 : 0.18)) { dockHiddenByScroll = hidden }
-    }
-
-    private func revealDock() {
-        activeScrollObservers.removeAll()
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) { dockHiddenByScroll = false }
-    }
-
     private func dock(availableWidth: CGFloat) -> some View {
         let metrics = LocalDockLayout.metrics(availableWidth: availableWidth)
         return HStack(spacing: 0) {
@@ -492,11 +463,11 @@ struct LocalAppNavigation: View {
             else { selectSection(entry) }
         } label: {
             VStack(spacing: 3) {
-                Image(systemName: dockSymbol(entry, selected: selected)).font(.system(size: 23, weight: selected ? .semibold : .regular))
+                Image(systemName: dockSymbol(entry, selected: selected)).font(.system(size: 21, weight: selected ? .semibold : .regular))
                 Text(entry.title).font(.system(size: dockLabelSize)).lineLimit(1).minimumScaleFactor(0.75)
             }
             .frame(width: width, height: dockControlHeight)
-            .foregroundStyle(Color.primary.opacity(selected ? 1 : 0.55))
+            .foregroundStyle(selected ? JournalPalette.rose : Color.primary.opacity(0.80))
             .background {
                 Capsule().fill(selected ? Color.primary.opacity(0.12) : .clear).allowsHitTesting(false)
             }

@@ -8,13 +8,9 @@ private struct LocalDockScrollInsets: ViewModifier {
     @Environment(\.usesLocalDock) private var usesDock
     @Environment(\.isLocalPageActive) private var active
     @Environment(\.localDockInset) private var inset
-    @Environment(\.localDockScrollEnabled) private var scrollEnabled
-    @Environment(\.localDockActivity) private var activity
     func body(content: Content) -> some View {
         content.background {
             LocalDockInsetObserver(inset: usesDock ? inset : 0, enabled: usesDock && active)
-                .allowsHitTesting(false)
-            LocalDockScrollObserver(enabled: usesDock && active && scrollEnabled) { id, scrolling in activity?(id, scrolling) }
                 .allowsHitTesting(false)
         }
     }

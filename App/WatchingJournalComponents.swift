@@ -16,15 +16,6 @@ enum JournalLibrarySection: String, CaseIterable, Identifiable {
     }
 }
 
-enum JournalStatisticsPeriod: String, CaseIterable, Identifiable {
-    case today, week, month
-    var id: String { rawValue }
-    var title: String { switch self { case .today: "今天"; case .week: "本周"; case .month: "本月" } }
-    func interval(containing date: Date, calendar: Calendar = JournalCalendarDates.calendar) -> DateInterval? {
-        calendar.dateInterval(of: self == .today ? .day : self == .week ? .weekOfYear : .month, for: date)
-    }
-}
-
 enum JournalCalendarDates {
     static var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
@@ -52,13 +43,6 @@ enum JournalCalendarDates {
     static func weekday(_ date: Date) -> String {
         ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][calendar.component(.weekday, from: date) - 1]
     }
-    static func range(_ interval: DateInterval) -> String {
-        let end = calendar.date(byAdding: .day, value: -1, to: interval.end) ?? interval.start
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.dateFormat = "MM/dd"
-        return formatter.string(from: interval.start) + " – " + formatter.string(from: end)
-    }
 }
 
 enum JournalPalette {
@@ -67,11 +51,19 @@ enum JournalPalette {
 }
 
 struct JournalPanel<Content: View>: View {
+    var overview = false
     @ViewBuilder let content: () -> Content
     var body: some View {
         content().padding(20).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(red: 0.035, green: 0.050, blue: 0.075).opacity(0.68),
-                        in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .background {
+                let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+                if overview {
+                    shape.fill(LinearGradient(colors: [Color(red: 0.15, green: 0.17, blue: 0.27),
+                                                       Color(red: 0.09, green: 0.11, blue: 0.14),
+                                                       Color(red: 0.14, green: 0.18, blue: 0.21)],
+                                              startPoint: .leading, endPoint: .trailing))
+                } else { shape.fill(Color(red: 0.075, green: 0.091, blue: 0.12).opacity(0.86)) }
+            }
             .overlay { RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(.white.opacity(0.035), lineWidth: 1) }
     }
 }
@@ -95,9 +87,8 @@ struct JournalOverviewCard: View {
     let seconds: Double
     let days: Int
     let counts: [JournalLibrarySection: Int]
-    @Binding var section: JournalLibrarySection
     var body: some View {
-        JournalPanel {
+        JournalPanel(overview: true) {
             VStack(alignment: .leading, spacing: 22) {
                 HStack {
                     Label("观影时光", systemImage: "sparkles").font(.subheadline.weight(.medium))
@@ -114,17 +105,14 @@ struct JournalOverviewCard: View {
                 Divider().overlay(.white.opacity(0.025))
                 HStack(spacing: 0) {
                     ForEach(JournalLibrarySection.allCases) { value in
-                        Button { section = value } label: {
+                        NavigationLink(value: value) {
                             VStack(spacing: 8) {
                                 Image(systemName: value.symbol).font(.system(size: 23, weight: .medium))
                                     .foregroundStyle(value == .favorites ? JournalPalette.rose : JournalPalette.purple)
                                 Text(value.title).font(.subheadline.weight(.medium))
                                 Text("\(counts[value, default: 0])").font(.caption).foregroundStyle(.white.opacity(0.57))
                             }.frame(maxWidth: .infinity, minHeight: 82).contentShape(Rectangle())
-                                .background(section == value ? .white.opacity(0.035) : .clear,
-                                            in: RoundedRectangle(cornerRadius: 14))
                         }.buttonStyle(.plain).accessibilityIdentifier("journal.section.\(value.rawValue)")
-                            .accessibilityAddTraits(section == value ? .isSelected : [])
                     }
                 }
             }
@@ -174,62 +162,5 @@ struct JournalProgress: View {
                         .frame(width: geometry.size.width * min(1, max(0, value.isFinite ? value : 0)))
                 }
         }.frame(height: 3).accessibilityHidden(true)
-    }
-}
-
-struct JournalStatisticsCard: View {
-    let seconds: Double
-    let range: String
-    let bars: [(date: Date, seconds: Double)]
-    let shows: Int
-    let episodes: Int
-    @Binding var period: JournalStatisticsPeriod
-    var body: some View {
-        JournalPanel {
-            VStack(alignment: .leading, spacing: 18) {
-                ViewThatFits(in: .horizontal) {
-                    HStack { Text("观看统计").font(.headline); Spacer(); periodPicker }
-                    VStack(alignment: .leading, spacing: 12) { Text("观看统计").font(.headline); periodPicker }
-                }
-                Text(range).font(.caption).foregroundStyle(.white.opacity(0.50))
-                JournalDuration(seconds: seconds).accessibilityIdentifier("journal.statistics.duration")
-                HStack(spacing: 16) {
-                    Label("\(shows) 部作品", systemImage: "film")
-                    Label("\(episodes) 集 / 部", systemImage: "play.rectangle")
-                }.font(.caption).foregroundStyle(.white.opacity(0.62))
-                if !bars.isEmpty {
-                    let highest = max(60, bars.map(\.seconds).max() ?? 0)
-                    HStack(alignment: .bottom, spacing: bars.count > 10 ? 3 : 8) {
-                        ForEach(Array(bars.enumerated()), id: \.offset) { _, bar in
-                            VStack(spacing: 7) {
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(JournalPalette.purple.opacity(bar.seconds > 0 ? 0.70 : 0.10))
-                                    .frame(height: max(3, 48 * min(1, max(0, bar.seconds / highest))))
-                                if bars.count <= 7 {
-                                    Text("\(JournalCalendarDates.calendar.component(.day, from: bar.date))")
-                                        .font(.system(size: 10)).foregroundStyle(.white.opacity(0.42))
-                                }
-                            }.frame(maxWidth: .infinity).accessibilityElement(children: .ignore)
-                                .accessibilityLabel("\(JournalCalendarDates.key(bar.date))，\(Int(max(0, bar.seconds) / 60)) 分钟")
-                        }
-                    }.frame(height: bars.count > 7 ? 48 : 68, alignment: .bottom)
-                }
-                Text("观看时长从此版本开始累计，暂停、缓冲和跳转进度不计入。")
-                    .font(.caption2).foregroundStyle(.white.opacity(0.46))
-            }
-        }
-    }
-    private var periodPicker: some View {
-        HStack(spacing: 0) {
-            ForEach(JournalStatisticsPeriod.allCases) { value in
-                Button { period = value } label: {
-                    Text(value.title).font(.caption.weight(period == value ? .semibold : .regular))
-                        .foregroundStyle(.white.opacity(period == value ? 0.96 : 0.48))
-                        .padding(.horizontal, 12).frame(minHeight: 44).contentShape(Rectangle())
-                        .background(period == value ? .white.opacity(0.045) : .clear, in: Capsule())
-                }.buttonStyle(.plain).accessibilityIdentifier("journal.statistics.\(value.rawValue)")
-                    .accessibilityAddTraits(period == value ? .isSelected : [])
-            }
-        }.padding(3).background(.white.opacity(0.025), in: Capsule())
     }
 }

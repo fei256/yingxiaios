@@ -51,7 +51,7 @@ private struct LocalSettingsSurface: ViewModifier {
                     if opaque { shape.fill(Color(uiColor: .secondarySystemGroupedBackground)) }
                     else if navigation {
                         shape.fill(.ultraThinMaterial)
-                            .overlay { shape.fill(dark ? Color(white: 0.28).opacity(0.64) : Color.white.opacity(0.12)) }
+                            .overlay { shape.fill(dark ? Color(white: 0.19).opacity(0.56) : Color.white.opacity(0.10)) }
                     } else { shape.fill(Color.white.opacity(dark ? 0.065 : 0.55)) }
                 }
                 .shadow(color: .black.opacity(navigation ? (dark ? 0.18 : 0.08) : 0), radius: 12, y: 4)

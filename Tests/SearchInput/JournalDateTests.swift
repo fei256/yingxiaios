@@ -17,13 +17,4 @@ final class JournalDateTests: XCTestCase {
         XCTAssertNil(JournalCalendarDates.date("2026-11-20T01:00:00Z"))
         XCTAssertNotNil(JournalCalendarDates.date("2028-02-29"))
     }
-    func testTodayAndMonthStatisticsUseExclusiveEndDates() throws {
-        let date = try XCTUnwrap(JournalCalendarDates.date("2026-11-20"))
-        let today = try XCTUnwrap(JournalStatisticsPeriod.today.interval(containing: date))
-        XCTAssertEqual(JournalCalendarDates.key(today.start), "2026-11-20")
-        XCTAssertEqual(JournalCalendarDates.key(today.end), "2026-11-21")
-        let month = try XCTUnwrap(JournalStatisticsPeriod.month.interval(containing: date))
-        XCTAssertEqual(JournalCalendarDates.key(month.start), "2026-11-01")
-        XCTAssertEqual(JournalCalendarDates.key(month.end), "2026-12-01")
-    }
 }

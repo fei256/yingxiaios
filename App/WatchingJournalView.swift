@@ -11,8 +11,6 @@ struct WatchingJournalView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var schedule = WatchingJournalSchedule()
     @State private var selectedDate = Date()
-    @State private var section: JournalLibrarySection = .history
-    @State private var period: JournalStatisticsPeriod = .week
     @State private var editing = false
     @State private var confirmsClear = false
     @State private var calendarShown = false
@@ -38,7 +36,7 @@ struct WatchingJournalView: View {
         var seen = Set<String>()
         return (works + later).filter { seen.insert($0.id).inserted }
     }
-    private var libraryWorks: [JournalTrackedWork] {
+    private func libraryWorks(for section: JournalLibrarySection) -> [JournalTrackedWork] {
         switch section {
         case .history: works
         case .watching: watching
@@ -57,28 +55,6 @@ struct WatchingJournalView: View {
             }
         }
     }
-    private var statisticsInterval: DateInterval {
-        period.interval(containing: today) ?? DateInterval(start: today, duration: 86_400)
-    }
-    private var statisticDays: [(date: Date, seconds: Double)] {
-        let interval = statisticsInterval
-        let secondsByDay = activity
-        var result: [(date: Date, seconds: Double)] = []
-        var day = interval.start
-        while day < interval.end, result.count < 32 {
-            result.append((day, secondsByDay[JournalCalendarDates.key(day), default: 0]))
-            guard let next = JournalCalendarDates.calendar.date(byAdding: .day, value: 1, to: day), next > day else { break }
-            day = next
-        }
-        return result
-    }
-    private var statisticsEntries: [PlaybackHistoryEntry] {
-        let days = Set(statisticDays.map { JournalCalendarDates.key($0.date) })
-        return entries.filter { entry in
-            entry.watchActivity?.days.contains { days.contains($0.key) && $0.value > 0 } ?? false
-        }
-    }
-
     var body: some View {
         WithPerceptionTracking {
             ScrollView {
@@ -90,13 +66,8 @@ struct WatchingJournalView: View {
                         }
                         JournalOverviewCard(seconds: activity.values.reduce(0, +), days: activity.count,
                                             counts: [.history: works.count, .favorites: favorites.count,
-                                                     .later: later.count, .watching: watching.count], section: $section)
+                                                     .later: later.count, .watching: watching.count])
                         calendarPanel
-                        JournalStatisticsCard(seconds: statisticDays.reduce(0) { $0 + $1.seconds },
-                                              range: JournalCalendarDates.range(statisticsInterval), bars: statisticDays,
-                                              shows: JournalTrackedWork.history(statisticsEntries).count,
-                                              episodes: statisticsEntries.count, period: $period)
-                        libraryPanel
                     }
                     .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 108)
                     .frame(maxWidth: 900).frame(maxWidth: .infinity)
@@ -106,6 +77,24 @@ struct WatchingJournalView: View {
             .libraryBackdrop()
             .navigationTitle("").navigationBarTitleDisplayMode(.inline)
             .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: JournalLibrarySection.self) { section in
+                WithPerceptionTracking {
+                    ScrollView {
+                        WithPerceptionTracking {
+                            libraryPanel(section)
+                                .padding(20).frame(maxWidth: 900).frame(maxWidth: .infinity)
+                        }
+                    }
+                    .libraryBackdrop()
+                    .navigationTitle(section.title).navigationBarTitleDisplayMode(.inline)
+                    .toolbar(.visible, for: .navigationBar)
+                    .toolbar {
+                        ToolbarItem(placement: .primaryAction) {
+                            Button(editing ? "完成" : "编辑") { editing.toggle() }
+                        }
+                    }
+                }
+            }
             .disabled(!canInteract)
             .task(id: requestKey) {
                 guard pageActive else { return }
@@ -196,15 +185,15 @@ struct WatchingJournalView: View {
                     }
                 }
                 if !tracked.isEmpty, tracked.contains(where: { schedule.details[$0.id] == nil }) {
-                    Text("未匹配或未公布日期的剧集仍保留在下方，打开详情匹配后即可查看排期。")
+                    Text("部分剧集还没有排期，可从观影时光打开作品详情。")
                         .font(.caption2).foregroundStyle(.white.opacity(0.45))
                 }
             }
         }
     }
 
-    private var libraryPanel: some View {
-        let libraryWorks = self.libraryWorks
+    private func libraryPanel(_ section: JournalLibrarySection) -> some View {
+        let libraryWorks = self.libraryWorks(for: section)
         return JournalPanel {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
@@ -218,7 +207,7 @@ struct WatchingJournalView: View {
                 } else {
                     ForEach(libraryWorks) { work in
                         WithPerceptionTracking {
-                            showRow(work)
+                            showRow(work, section: section)
                             if work.id != libraryWorks.last?.id { Divider().overlay(.white.opacity(0.04)) }
                         }
                     }
@@ -230,7 +219,7 @@ struct WatchingJournalView: View {
         }
     }
 
-    private func showRow(_ work: JournalTrackedWork, airing: JournalScheduledEpisode? = nil) -> some View {
+    private func showRow(_ work: JournalTrackedWork, airing: JournalScheduledEpisode? = nil, section: JournalLibrarySection = .history) -> some View {
         let details = schedule.details[work.id]
         let progress = schedule.progress(work)
         return HStack(alignment: .top, spacing: 14) {
@@ -248,7 +237,7 @@ struct WatchingJournalView: View {
                             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityIdentifier("journal.work.\(work.videoID)")
                     if editing {
-                        Button(role: .destructive) { remove(work) } label: {
+                        Button(role: .destructive) { remove(work, from: section) } label: {
                             Image(systemName: "minus.circle.fill").font(.system(size: 19)).foregroundStyle(JournalPalette.rose)
                                 .frame(width: 44, height: 44).contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityLabel("移除 \(work.title)")
@@ -283,7 +272,7 @@ struct WatchingJournalView: View {
         } else if work.latest != nil { resume(work) }
         else { store.searchVideos(work.title) }
     }
-    private func remove(_ work: JournalTrackedWork) {
+    private func remove(_ work: JournalTrackedWork, from section: JournalLibrarySection) {
         guard canInteract else { return }
         if section == .favorites || section == .later, let saved = work.saved { store.favorites.removeTitle(saved) }
         else { store.playbackHistory.remove(Set(work.entries.map(\.id))) }

@@ -36,7 +36,7 @@ final class JournalInteractionTests: XCTestCase {
         add(portrait)
     }
 
-    @MainActor func testDayShortcutsAndStatisticsPickTheirOwnValues() {
+    @MainActor func testDatesAndAllFourLibraryDestinations() {
         let app = XCUIApplication()
         app.launchArguments = ["journal"]
         app.launch()
@@ -52,21 +52,14 @@ final class JournalInteractionTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(button.frame.width, 44)
             XCTAssertGreaterThanOrEqual(button.frame.height, 44)
             button.tap()
-            XCTAssertTrue(app.staticTexts["journal.selection"].label.hasPrefix("2026-11-\(day)|"))
+            XCTAssertTrue(app.staticTexts["journal.selection"].label == "2026-11-\(day)")
         }
-        app.buttons["journal.section.watching"].tap()
-        XCTAssertTrue(app.staticTexts["journal.selection"].label.contains("|watching|"))
-        let month = app.buttons["journal.statistics.month"]
-        for _ in 0..<3 where !month.isHittable { app.scrollViews.firstMatch.swipeUp() }
-        XCTAssertTrue(month.isHittable)
-        month.tap()
-        XCTAssertTrue(app.staticTexts["journal.selection"].label.hasSuffix("|month"))
-        XCTAssertEqual(app.descendants(matching: .any)["journal.statistics.duration"].firstMatch.label, "0 小时 40 分钟")
-        let statistics = XCTAttachment(screenshot: app.screenshot())
-        statistics.name = "journal-statistics"
-        statistics.lifetime = .keepAlways
-        add(statistics)
-        app.buttons["journal.statistics.today"].tap()
-        XCTAssertTrue(app.staticTexts["journal.selection"].label.hasSuffix("|today"))
+        for section in ["history", "favorites", "later", "watching"] {
+            let link = app.buttons["journal.section." + section]
+            XCTAssertTrue(link.waitForExistence(timeout: 5))
+            link.tap()
+            XCTAssertTrue(app.staticTexts["journal.list." + section].waitForExistence(timeout: 5))
+            app.navigationBars.buttons.firstMatch.tap()
+        }
     }
 }
