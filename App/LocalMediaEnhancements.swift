@@ -4,6 +4,8 @@ import AVFoundation
 import TVCore
 
 @MainActor @Perceptible final class NativeMediaEnhancements {
+    @PerceptionIgnored var waitForAutomaticLoad: (@MainActor () async throws -> Void)?
+    @PerceptionIgnored private var hasSourceComments = false
     private(set) var comments: [Danmaku] = []
     private(set) var revision = UUID()
     /// Stable across window refreshes and live batches; only replacing/retiming a track resets its sprites.
@@ -59,6 +61,7 @@ import TVCore
         notice = message.isEmpty ? nil : PlayerNotice(message: message, kind: kind)
     }
     func sourceLoaded(count: Int) {
+        hasSourceComments = count > 0
         guard !catalog.selection.hasExplicitChoice else { return }
         setStatus(count > 0 ? "已加载订阅弹幕 · \(count) 条" : "订阅没有返回弹幕",
                   kind: count > 0 ? .success : .information)
@@ -93,10 +96,19 @@ import TVCore
                 guard active == self.generation else { return }
                 self.ready = true
                 guard self.catalog.enabled else { return }
+                let ticket = self.catalog.selection.ticket
+                try await self.waitForAutomaticLoad?()
+                guard self.generation == active, !Task.isCancelled, self.catalog.enabled,
+                      self.catalog.selection.ticket == ticket, !self.catalog.selection.hasExplicitChoice else { return }
+                if LocalDanmakuPreferences.builtinEnabled() {
+                    await self.catalog.nativeSourceReload?()
+                    guard self.generation == active, !Task.isCancelled, self.catalog.enabled,
+                          self.catalog.selection.ticket == ticket else { return }
+                }
                 if let saved = self.rememberedFeed(), let source = self.selectedCatalogSource {
                     try await self.prepareRemembered(saved, source: source)
                 } else if self.descriptor != nil, LocalDanmakuPreferences.builtinEnabled() { try await self.useSource() }
-                else { await self.matchCatalogAutomatically() }
+                else if !self.hasSourceComments || !LocalDanmakuPreferences.builtinEnabled() { await self.matchCatalogAutomatically() }
             } catch { if active == self.generation, !Task.isCancelled { self.setStatus("弹幕服务暂不可用，可在弹幕面板重试", kind: .warning) } }
         }
     }
@@ -257,6 +269,7 @@ import TVCore
     }
     func stop() {
         let previous = sessionID
+        hasSourceComments = false
         CatPawDanmaku.endPlayback(sessionID: previous)
         generation = UUID(); loading?.cancel(); loading = nil; ready = false; indexed = false
         comments = []; revision = UUID(); sourceRevision = UUID(); isLive = false; nativeManual = false; descriptor = nil; busy = false

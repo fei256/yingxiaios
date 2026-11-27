@@ -29,6 +29,7 @@ import UniformTypeIdentifiers
         }
     }
 
+    @PerceptionIgnored var waitForAutomaticLoad: (@MainActor () async throws -> Void)?
     private(set) var entries: [Entry] = []
     typealias Target = SubtitleTrackSelection.Target
     private var primarySelected: String?
@@ -89,24 +90,35 @@ import UniformTypeIdentifiers
         guard !wanted.isEmpty else { return }
         entries = wanted.map { Entry(id: $0.url.absoluteString, name: $0.name, imported: false, state: .loading, subtitle: $0) }
         Diagnostics.shared.record(.info, "subtitles", "external files=\(wanted.count) of=\(channel.subtitles.count) in-stream=\(included.count)")
+        loadOffered(Array(wanted))
+    }
+
+    private func loadOffered(_ wanted: [ExternalSubtitle]) {
+        guard !wanted.isEmpty else { return }
         let active = generation, headers = headers
+        let concurrency = waitForAutomaticLoad == nil ? Self.concurrent : 1
         let requests = Dictionary(uniqueKeysWithValues: wanted.map { ($0.url.absoluteString, UUID()) })
         requestIDs.merge(requests) { _, next in next }
         loading = Task { [weak self] in
+            do { try await self?.waitForAutomaticLoad?() } catch { return }
+            guard self?.generation == active, !Task.isCancelled else { return }
             await withTaskGroup(of: (String, UUID, Result<SubtitleDocument, Error>).self) { group in
-                var queued = wanted.makeIterator(), running = 0
+                var queued = wanted[...], running = 0
                 func next() {
-                    guard let subtitle = queued.next() else { return }
+                    guard !Task.isCancelled, let subtitle = queued.popFirst() else { return }
                     running += 1
                     group.addTask { (subtitle.url.absoluteString, requests[subtitle.url.absoluteString]!, await Self.fetch(subtitle, headers: headers)) }
                 }
-                for _ in 0..<Self.concurrent { next() }
+                for _ in 0..<concurrency { next() }
                 while running > 0, let (id, requestID, result) = await group.next() {
                     running -= 1
                     guard let self, self.generation == active, !Task.isCancelled else { group.cancelAll(); return }
                     if self.requestIDs[id] == requestID {
                         self.requestIDs[id] = nil
                         self.finish(id, result)
+                    }
+                    if running == 0 && concurrency == 1 && !queued.isEmpty {
+                        do { try await self.waitForAutomaticLoad?() } catch { return }
                     }
                     next()
                 }
@@ -149,17 +161,21 @@ import UniformTypeIdentifiers
             if let document = entry.document { engine?.registerExternalSubtitle(document, timing: timing) }
         }
         show()
+        loadOffered(entries.compactMap { entry in
+            guard !entry.imported, case .loading = entry.state else { return nil }
+            return entry.subtitle
+        })
         let active = generation
-        for entry in entries {
+        for entry in entries where entry.imported {
             guard case .loading = entry.state else { continue }
             let source = entry.subtitle ?? URL(string: entry.id).flatMap { url in
                 ["http", "https"].contains(url.scheme?.lowercased() ?? "") ? ExternalSubtitle(name: entry.name, url: url) : nil
             }
             guard let source else { continue }
-            let id = entry.id, requestID = UUID(), headers = entry.imported ? [:] : headers
+            let id = entry.id, requestID = UUID()
             requestIDs[id] = requestID
             retries[id] = Task { [weak self] in
-                let result = await Self.fetch(source, headers: headers)
+                let result = await Self.fetch(source, headers: [:])
                 guard let self, self.generation == active, self.requestIDs[id] == requestID, !Task.isCancelled else { return }
                 self.retries[id] = nil; self.requestIDs[id] = nil
                 self.finish(id, result)

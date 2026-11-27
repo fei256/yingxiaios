@@ -1047,8 +1047,8 @@ struct MobilePlayerView: View {
         case .quality: qualityPanel
         case .video: trackChoices(.video)
         case .audio: audioPanel
-        case .subtitle: subtitlesPanel
-        case .danmaku: danmakuPanel
+        case .subtitle: subtitlesPanel.onAppear { session.prioritizeStartupWork(.subtitles) }
+        case .danmaku: danmakuPanel.onAppear { session.prioritizeStartupWork(.danmaku) }
         case .chapters: chaptersPanel
         case .skip: CompactEpisodeSkipPanel(session: session)
         case .subtitleAddress: CompactSubtitleAddressPanel(subtitles: session.externalSubtitles) { localPanel = .subtitle }

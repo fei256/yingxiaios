@@ -52,6 +52,26 @@ private func cancelled<T>(_ result: Result<T, Error>) -> Bool {
         let healthy = NodeHostControl(port: 8123, token: "fixture-token")
         let fallback = "runtime stopped"
         do {
+            var startup = PlaybackStartupWork()
+            let kinds: [PlaybackStartupWork.Kind] = [.subtitles, .remoteSkip, .danmaku]
+            try require(kinds.allSatisfy { !startup.allows($0, now: 100) }, "Network work ran before a picture")
+            startup.observe(ready: true, now: 100)
+            startup.observe(ready: true, now: 101)
+            try require(startup.allows(.subtitles, now: 101) && !startup.allows(.remoteSkip, now: 101),
+                        "Automatic subtitles and remote skip started together")
+            try require(startup.allows(.remoteSkip, now: 102) && !startup.allows(.danmaku, now: 102),
+                        "Automatic metadata and comments started together")
+            startup.observe(ready: false, now: 103)
+            try require(!startup.allows(.danmaku, now: 200), "Buffering admitted automatic comments")
+            startup.request(.subtitles)
+            try require(startup.allows(.subtitles, now: 200) && !startup.allows(.remoteSkip, now: 200),
+                        "Manual subtitles released unrelated automatic work")
+            startup.observe(ready: true, now: 200)
+            try require(!startup.allows(.danmaku, now: 203) && startup.allows(.danmaku, now: 204),
+                        "Newly recovered picture did not get a fresh stable interval")
+            startup = PlaybackStartupWork()
+            try require(kinds.allSatisfy { !startup.allows($0, now: 300) }, "New episode inherited user priority")
+            record("automatic subtitles, intro matching and comments yield to startup and buffering")
             do {
                 let calls = Counter()
                 for control in [NodeHostControl(error: "fixture-stop"), NodeHostControl(port: 0, token: "token"), NodeHostControl(port: 8123)] {

@@ -54,7 +54,7 @@ import TVCore
         pendingAction = nil
         pass = RemoteEpisodeSkipPass(); lookup = TMDBLookup(); attempts = 0; retryAt = .distantPast
     }
-    func tick(settings: EpisodeSkipSettings, duration: Double, chapters: [KSPlaybackChapter], sessionID: String, ready: Bool) {
+    func tick(settings: EpisodeSkipSettings, duration: Double, chapters: [KSPlaybackChapter], sessionID: String, ready: Bool, allowAutomatic: Bool) {
         guard duration.isFinite, duration > 0, !live else { return }
         let chapters = chapters.map { RemoteEpisodeSkipChapter(time: $0.start, title: $0.title, end: $0.end) }
         let next = Input(session: sessionID, settings: settings, duration: duration.rounded(), chapters: chapters)
@@ -67,7 +67,7 @@ import TVCore
         segments = RemoteEpisodeSkipPlan.merging(local: local, remote: remote, duration: duration)
         guard settings.enabled || panelRequested else { setStatus("自动跳过已关闭"); return }
         guard !Set(local.map(\.kind)).isSuperset(of: ["opening", "ending"]) else { setStatus("已采用手动或章节片头片尾时间"); return }
-        guard ready, !sessionID.isEmpty, task == nil, attempts < 2, Date() >= retryAt else { return }
+        guard allowAutomatic || panelRequested, ready, !sessionID.isEmpty, task == nil, attempts < 2, Date() >= retryAt else { return }
         guard let context = channel?.historyContext, !TMDBMatch.skipsSource(key: context.sourceKey, api: "") else {
             setStatus(local.isEmpty ? "尚未识别作品，可手动记录片头片尾" : "已采用章节时间"); return
         }

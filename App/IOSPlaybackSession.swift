@@ -82,6 +82,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
     @PerceptionIgnored private var transferTicker: Task<Void, Never>?
     @PerceptionIgnored private var runtimePinTask: Task<Void, Never>?
     @PerceptionIgnored private var runtimePinnedURLs = Set<URL>()
+    @PerceptionIgnored private var startupWork = PlaybackStartupWork()
     @PerceptionIgnored private var enhancementTicker: Task<Void, Never>?
     @PerceptionIgnored private var preparationStarted = Date()
     @PerceptionIgnored private var discSelection: Task<Void, Never>?
@@ -122,6 +123,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
     @PerceptionIgnored private var automatic: URL?
     @PerceptionIgnored private var currentPrepared: Prepared?
     private var sourceDanmaku: [Danmaku] = []
+    @PerceptionIgnored private var automaticSourceLoad: Task<Void, Never>?
     @PerceptionIgnored private var sourceDanmakuLoading: Task<Void, Never>?
     @PerceptionIgnored private var sourceDanmakuGeneration = UUID()
     @PerceptionIgnored private var sourceDanmakuLoaded = false
@@ -178,6 +180,14 @@ private final class AudioServiceObservation: @unchecked Sendable {
         enhancer = VideoEnhancer(player: player)
         externalSubtitles.cues = subtitles
         catalogDanmaku.nativeSourceReload = { [weak self] in await self?.loadSourceDanmaku() }
+        externalSubtitles.waitForAutomaticLoad = { [weak self] in
+            guard let self else { throw CancellationError() }
+            try await self.waitForStartupWork(.subtitles)
+        }
+        mediaEnhancements.waitForAutomaticLoad = { [weak self] in
+            guard let self else { throw CancellationError() }
+            try await self.waitForStartupWork(.danmaku)
+        }
         externalSubtitles.engine = engine
         externalSubtitles.changed = { [weak self] in self?.updateSubtitles() }
         subtitles.nativeChosen = { [weak self] in self?.externalSubtitles.nativeChosen() }
@@ -288,7 +298,6 @@ private final class AudioServiceObservation: @unchecked Sendable {
                 self.externalSubtitles.begin(next, playing: prepared.url)
                 self.mediaEnhancements.begin(channel: channel, sessionID: active.uuidString.lowercased(), engine: self.engine)
                 self.startSampler(generation: active)
-                await self.loadSourceDanmaku()
             } catch {
                 guard self.generation == active, !Task.isCancelled else { return }
                 self.error = error.localizedDescription; self.loading = false
@@ -314,6 +323,14 @@ private final class AudioServiceObservation: @unchecked Sendable {
     }
     private func begin(_ channel: Channel) {
         watchSampler.reset()
+        startupWork = PlaybackStartupWork()
+        if DanmakuSource.has(channel.url), LocalDanmakuPreferences.enabled(), LocalDanmakuPreferences.builtinEnabled() {
+            automaticSourceLoad = Task { [weak self] in
+                guard let self else { return }
+                do { try await self.waitForStartupWork(.danmaku) } catch { return }
+                await self.loadSourceDanmaku()
+            }
+        }
         error = nil; loading = true; showsPicture = false; buffering = false; steps = ["正在解析播放地址"]
         preparationStarted = Date()
         transfer = Transfer(); transfer.host = channel.url.host()
@@ -333,6 +350,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
                                     source: source, danmaku: catalogDanmaku.enabled, sharper: false)
     }
     private func open(_ prepared: Prepared, channel: Channel, selections: KSPlaybackSelections? = nil) {
+        startupWork.observe(ready: false, now: ProcessInfo.processInfo.systemUptime)
         updateRuntimePlaybackPins(Set([channel.url, prepared.url, prepared.audioURL].compactMap { $0 }))
         error = nil; loading = true; showsPicture = false; buffering = false
         remoteSkip.begin(channel: channel, isLive: isLive)
@@ -413,7 +431,22 @@ private final class AudioServiceObservation: @unchecked Sendable {
         subtitles.advance(to: engine.displayPosition)
         aiSubtitles.tick()
     }
+    func prioritizeStartupWork(_ kind: PlaybackStartupWork.Kind) { startupWork.request(kind) }
+
+    private func waitForStartupWork(_ kind: PlaybackStartupWork.Kind) async throws {
+        let episode = sourceDanmakuGeneration
+        while true {
+            try Task.checkCancellation()
+            guard sourceDanmakuGeneration == episode else { throw CancellationError() }
+            if isLive || startupWork.allows(kind, now: ProcessInfo.processInfo.systemUptime) { return }
+            try await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
     private func updatePictureState() {
+        let ready = recovery == nil && error == nil && engine.isReady && engine.hasPicture &&
+            !engine.buffering && !engine.seeking && !restoringPosition && pendingResume == nil
+        startupWork.observe(ready: ready, now: ProcessInfo.processInfo.systemUptime)
         guard recovery == nil else { return }
         buffering = engine.buffering
         guard engine.isReady, !restoringPosition, pendingResume == nil else { return }
@@ -479,7 +512,8 @@ private final class AudioServiceObservation: @unchecked Sendable {
                     self.throttle = throttle; self.applyBoost()
                 }
                 self.remoteSkip.tick(settings: self.skipSettings, duration: self.duration, chapters: self.engine.chapters,
-                                     sessionID: self.mediaEnhancements.sessionID, ready: self.mediaEnhancements.serviceReady)
+                                     sessionID: self.mediaEnhancements.sessionID, ready: self.mediaEnhancements.serviceReady,
+                                     allowAutomatic: self.startupWork.allows(.remoteSkip, now: ProcessInfo.processInfo.systemUptime))
                 self.updateSkipping()
                 self.queueUpcomingIfDue()
                 self.sampleWatchActivity()
@@ -700,6 +734,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         watchSampler.reset()
         catalogDanmaku.clear(); sourceDanmaku = []; chatGeneration = UUID(); chat?.stop(); chat = nil
         sourceDanmakuGeneration = UUID()
+        automaticSourceLoad?.cancel(); automaticSourceLoad = nil
         sourceDanmakuLoading?.cancel(); sourceDanmakuLoading = nil; sourceDanmakuLoaded = false
         if playing != nil { ErrorReports.shared.stoppedPlaying() }
         playing = nil; sourceChannel = nil; activeChannelID = nil; historyContext = nil; pendingResume = nil
