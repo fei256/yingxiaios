@@ -25,6 +25,7 @@
   },
   "targets": {
     "TVBox-iOS": {
+      "productName": "映匣",
       "info": {
         "properties": {
           "BGTaskSchedulerPermittedIdentifiers": [
@@ -104,6 +105,8 @@
       "settings": {
         "base": {
           "OTHER_LDFLAGS": "$(inherited) -lc++ -lz -liconv -framework Security -framework CoreGraphics -framework Accelerate -framework CoreML",
+          "PRODUCT_NAME": "映匣",
+          "PRODUCT_MODULE_NAME": "TVBox_iOS",
           "PRODUCT_BUNDLE_IDENTIFIER": "com.jo32.yingxia.ios.compare",
           "MARKETING_VERSION": "1.8.14",
           "CURRENT_PROJECT_VERSION": "51",
