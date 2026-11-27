@@ -1115,9 +1115,9 @@ struct MobilePlayerView: View {
         WithPerceptionTracking {
             VStack(alignment: .leading, spacing: 12) {
                 Text("视频解码").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
-                ForEach(["auto", "hardware", "software"], id: \.self) { decoder in
+                ForEach(["auto", "software"], id: \.self) { decoder in
                     WithPerceptionTracking {
-                        selectionRow(decoder == "auto" ? "自动硬解" : decoder == "hardware" ? "VideoToolbox 硬解" : "软件解码", selected: session.engine.decoder == decoder) {
+                        selectionRow(decoder == "auto" ? "自动（优先硬解）" : "软件解码", selected: session.engine.decoder == decoder) {
                             session.engine.setDecoder(decoder)
                         }
                     }
@@ -1410,6 +1410,7 @@ struct MobilePlayerView: View {
                     if kind == .subtitle { session.externalSubtitles.select(nil) }
                     selectTrack(kind, id: "no")
                 }
+                .disabled(kind == .video && !session.engine.tracks.contains { $0.kind == .audio })
                 ForEach(options) { option in
                     WithPerceptionTracking {
                         selectionRow(trackLabel(option), selected: (selection == option.id || kind == .subtitle && selection == nil && option.selected) && (kind != .subtitle || session.externalSubtitles.selected == nil)) {

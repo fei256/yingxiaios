@@ -13,6 +13,12 @@ struct TransferPlan: Codable, Sendable {
         /// False when the server ignores ranges: the file then comes in one request and starts over if stopped.
         var ranged: Bool
         var done: Set<Int> = []
+        var entityTag: String?
+        func matchesVersion(of other: Self) -> Bool {
+            guard let entityTag, let url = urls.first else { return false }
+            return ranged && other.ranged && url == other.urls.first && name == other.name &&
+                entityTag == other.entityTag && length == other.length && initialization == other.initialization && index == other.index
+        }
         /// DASH: the initialization section and `sidx` index, which describe the file as HLS byte ranges.
         var initialization: ClosedRange<Int>?
         var index: ClosedRange<Int>?
@@ -117,7 +123,8 @@ struct Transfer: Sendable {
         if let data = try? Data(contentsOf: planFile), let saved = try? JSONDecoder().decode(TransferPlan.self, from: data) { plan = saved }
         else { plan = try await prepare(try await resolve()); try save(plan) }
         // Old plans discarded the master, so they cannot say whether audio was external.
-        if plan.kind == .hls, plan.hlsRevision != Self.hlsRevision {
+        if (plan.kind == .hls && plan.hlsRevision != Self.hlsRevision) ||
+            (finishedFile(plan) == nil && plan.files.contains { $0.ranged && !$0.done.isEmpty && $0.entityTag == nil }) {
             plan = try await renew(plan)
             try Task.checkCancellation()
             try save(plan)
@@ -173,7 +180,7 @@ struct Transfer: Sendable {
         if mime.hasPrefix("text/html") || mime.hasPrefix("application/json") { throw TransferError.notMedia }
         let ranged = response.statusCode == 206 && Self.plainBody(response)
         let length = ranged ? Self.total(response) : Self.bodyLength(response)
-        let file = TransferPlan.RemoteFile(urls: [base], name: "media.part", length: length, ranged: ranged && length != nil)
+        let file = TransferPlan.RemoteFile(urls: [base], name: "media.part", length: length, ranged: ranged && length != nil, entityTag: Self.strongTag(response))
         return TransferPlan(kind: .file, headers: headers, files: [file], fileExtension: Self.fileExtension(base, mime: mime, head: head))
     }
 
@@ -186,7 +193,7 @@ struct Transfer: Sendable {
             // Keep the mirror that answered first.
             let first = response.url.flatMap { answered in urls.first { $0.host() == answered.host() } }
             files.append(.init(urls: first.map { [$0] + urls.filter { $0 != first } } ?? urls, name: name, length: length, ranged: true,
-                               initialization: initialization, index: index))
+                               entityTag: Self.strongTag(response), initialization: initialization, index: index))
         }
         return TransferPlan(kind: .dash, headers: dash.headers, files: files, quality: dash.quality,
                             streamInfo: dash.streamInfo, label: dash.label, cid: dash.cid, duration: dash.duration)
@@ -243,36 +250,20 @@ struct Transfer: Sendable {
                             hlsRevision: Self.hlsRevision, label: label)
     }
 
-    /// Resolves the episode again after its links expired and carries the progress over when the
-    /// media is the same (same sizes, same segment count); otherwise starts it over.
     private func renew(_ old: TransferPlan) async throws -> TransferPlan {
         let channel = try await resolve()
         var plan: TransferPlan
         if old.kind == .dash, let dash = DashStreams.files(for: channel.url, quality: old.quality) { plan = try await prepare(dash) }
         else { plan = try await prepare(channel) }
-        if plan.kind == old.kind {
-            switch plan.kind {
-            case .file, .dash:
-                if plan.files.count == old.files.count, zip(plan.files, old.files).allSatisfy({ $0.length == $1.length && $0.ranged && $1.ranged }) {
-                    for index in plan.files.indices { plan.files[index].done = old.files[index].done }
-                    return plan
-                }
-            case .hls:
-                let sameParts = plan.parts.count == old.parts.count && zip(plan.parts, old.parts).allSatisfy {
-                    $0.name == $1.name && $0.range == $1.range && $0.transportStream == $1.transportStream
-                }
-                if sameParts, plan.playlist == old.playlist, plan.playlists == old.playlists { return plan }
-                // An old video-only plan can keep its pieces when the new master adds audio.
-                if old.hlsRevision == nil, plan.playlists?["video.m3u8"] == old.playlist,
-                   old.parts.count <= plan.parts.count,
-                   zip(plan.parts.prefix(old.parts.count), old.parts).allSatisfy({
-                       $0.name == $1.name && $0.range == $1.range && $0.transportStream == $1.transportStream
-                   }) { return plan }
-            }
+        if old.kind == plan.kind, plan.kind != .hls, old.files.count == plan.files.count,
+           zip(old.files, plan.files).allSatisfy({ $0.matchesVersion(of: $1) }) {
+            for index in plan.files.indices { plan.files[index].done = old.files[index].done }
+            return plan
         }
-        Diagnostics.shared.record(.info, "download", "renewed media differs; starting over folder=\(folder.lastPathComponent)")
-        try? FileManager.default.removeItem(at: folder.appending(path: "parts"))
-        try FileManager.default.createDirectory(at: folder.appending(path: "parts"), withIntermediateDirectories: true)
+        // A renewed playlist can use the same local names for different media or AES keys.
+        let parts = folder.appending(path: "parts")
+        if FileManager.default.fileExists(atPath: parts.path) { try FileManager.default.removeItem(at: parts) }
+        try FileManager.default.createDirectory(at: parts, withIntermediateDirectories: true)
         return plan
     }
 
@@ -321,19 +312,38 @@ struct Transfer: Sendable {
                     group.addTask {
                         while let part = queue.next() {
                             try Task.checkCancellation()
-                            var (data, _) = try await get([part.url], headers: plan.headers, range: part.range,
-                                                         expectedBytes: part.encryptionKey == true ? 16 : nil)
-                            if part.transportStream { data = MediaPayload.transportStream(data) }
-                            try Task.checkCancellation()
-                            guard !data.isEmpty else { throw TransferError.notMedia }
-                            let target = folder.appending(path: part.name)
-                            try Self.writing { try data.write(to: target, options: .atomic) }
+                            try await fetch(part, headers: plan.headers)
                             meter.finishedPart()
                         }
                     }
                 }
                 try await group.waitForAll()
             }
+        }
+    }
+
+    private func fetch(_ part: TransferPlan.Part, headers: [String: String]) async throws {
+        let target = folder.appending(path: part.name)
+        let staging = target.appendingPathExtension("partial")
+        let files = FileManager.default
+        defer { try? files.removeItem(at: staging) }
+        try Self.writing { try Data().write(to: staging) }
+        let writer = try FileWriter(staging, stripTransportPrefix: part.transportStream)
+        do {
+            _ = try await get([part.url], headers: headers, range: part.range,
+                              expectedBytes: part.encryptionKey == true ? 16 : nil,
+                              restart: { try writer.truncate(0) }, sink: { try writer.append($0) })
+            try writer.finishPrefix()
+            guard try writer.length > 0 else { throw TransferError.notMedia }
+            try writer.close()
+        } catch {
+            try? writer.close()
+            throw error
+        }
+        try Task.checkCancellation()
+        try Self.writing {
+            if files.fileExists(atPath: target.path) { _ = try files.replaceItemAt(target, withItemAt: staging) }
+            else { try files.moveItem(at: staging, to: target) }
         }
     }
 
@@ -381,6 +391,11 @@ struct Transfer: Sendable {
         let writer = try FileWriter(target)
         defer { try? writer.close() }
         try writer.truncate(length)
+        let rangeHeaders: [String: String]
+        if let tag = file.entityTag {
+            rangeHeaders = headers.filter { $0.key.caseInsensitiveCompare("If-Match") != .orderedSame }
+                .merging(["If-Match": tag]) { _, new in new }
+        } else { rangeHeaders = headers }
         let pending = (0..<file.chunks).filter { !box.plan.files[index].done.contains($0) }
         let queue = WorkQueue(pending)
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -389,7 +404,7 @@ struct Transfer: Sendable {
                     while let chunk = queue.next() {
                         try Task.checkCancellation()
                         let range = file.range(chunk)
-                        let (data, _) = try await get(box.plan.files[index].urls, headers: headers, range: range)
+                        let (data, _) = try await get(file.urls, headers: rangeHeaders, range: range)
                         guard data.count == range.count else { meter.add(-Int64(data.count)); throw TransferError.incomplete }
                         try writer.write(data, at: UInt64(range.lowerBound))
                         box.mark(index, chunk: chunk)
@@ -446,14 +461,18 @@ struct Transfer: Sendable {
         let collector = Collector(limit: limit)
         let meter = counts ? meter : nil
         let receiver = Receiver(accept: { response in
-            switch response.statusCode {
+            if response.statusCode == 206, let requiredTag = headers.first(where: { $0.key.caseInsensitiveCompare("If-Match") == .orderedSame })?.value,
+               let actual = response.value(forHTTPHeaderField: "ETag"), actual != requiredTag { return TransferError.expired(412) }
+            return switch response.statusCode {
             case 206: nil
             // A probe accepts the whole file; a range request answered with it can't be resumed from there.
             case 200..<300: range == nil || limit != nil ? nil : TransferError.rangeLost
-            case 401, 403, 404, 410: TransferError.expired(response.statusCode)
+            case 401, 403, 404, 410, 412: TransferError.expired(response.statusCode)
             default: TransferError.http(response.statusCode)
             }
         }, sink: { data in
+            if limit == nil, let maximum = expectedBytes ?? range.map({ Int64($0.count) }),
+               Int64(data.count) > maximum - collector.received { throw TransferError.incomplete }
             if let sink { try sink(data) } else { collector.append(data) }
             meter?.add(Int64(data.count)); collector.count(data.count)
             return !collector.full
@@ -541,6 +560,11 @@ struct Transfer: Sendable {
               let first = Int64(match.1), let last = Int64(match.2), let total = Int64(match.3),
               first >= 0, first <= last, last < total else { return nil }
         return (first...last, total)
+    }
+    private static func strongTag(_ response: HTTPURLResponse) -> String? {
+        guard let tag = response.value(forHTTPHeaderField: "ETag"), tag.count >= 2,
+              tag.hasPrefix("\""), tag.hasSuffix("\"") else { return nil }
+        return tag
     }
     static func plainBody(_ response: HTTPURLResponse) -> Bool {
         let coding = response.value(forHTTPHeaderField: "Content-Encoding")?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -842,20 +866,52 @@ final class FileWriter: @unchecked Sendable {
     private let lock = NSLock()
     private let handle: FileHandle
     private var appended: Int64 = 0
-    init(_ url: URL) throws { handle = try FileHandle(forWritingTo: url) }
+    private let stripTransportPrefix: Bool
+    private var prefix = Data()
+    private var checkingPrefix: Bool
+    init(_ url: URL, stripTransportPrefix: Bool = false) throws {
+        self.stripTransportPrefix = stripTransportPrefix
+        checkingPrefix = stripTransportPrefix
+        handle = try FileHandle(forWritingTo: url)
+    }
     var appendedBytes: Int64 { lock.withLock { appended } }
     var length: Int64 { get throws { try lock.withLock { Int64(try handle.seekToEnd()) } } }
     func truncate(_ length: Int64) throws {
         try Transfer.writing { try lock.withLock {
             if try handle.seekToEnd() != UInt64(length) { try handle.truncate(atOffset: UInt64(length)) }
             appended = 0
+            prefix.removeAll(keepingCapacity: true)
+            checkingPrefix = stripTransportPrefix
         } }
     }
     func write(_ data: Data, at offset: UInt64) throws {
         try Transfer.writing { try lock.withLock { try handle.seek(toOffset: offset); try handle.write(contentsOf: data) } }
     }
     func append(_ data: Data) throws {
-        try Transfer.writing { try lock.withLock { try handle.seekToEnd(); try handle.write(contentsOf: data); appended += Int64(data.count) } }
+        try Transfer.writing { try lock.withLock {
+            try handle.seekToEnd()
+            if checkingPrefix {
+                let count = min(8192 - prefix.count, data.count)
+                prefix.append(data.prefix(count))
+                if prefix.count < 8192 { return }
+                try flushPrefix()
+                try handle.write(contentsOf: data.dropFirst(count))
+                appended += Int64(data.count - count)
+            } else {
+                try handle.write(contentsOf: data)
+                appended += Int64(data.count)
+            }
+        } }
+    }
+    func finishPrefix() throws {
+        try Transfer.writing { try lock.withLock { if checkingPrefix { try flushPrefix() } } }
+    }
+    private func flushPrefix() throws {
+        let payload = MediaPayload.transportStream(prefix)
+        try handle.write(contentsOf: payload)
+        appended += Int64(payload.count)
+        prefix.removeAll()
+        checkingPrefix = false
     }
     func close() throws { try lock.withLock { try handle.close() } }
 }

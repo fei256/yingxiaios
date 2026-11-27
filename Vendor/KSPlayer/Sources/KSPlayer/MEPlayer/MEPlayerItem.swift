@@ -416,7 +416,7 @@ extension MEPlayerItem {
         var colorLayerPair: DolbyVisionLayerProbe.Pair?
         // Generic/live inputs never enter this probe. Only an authored HDMV
         // program with both UHD PIDs permits a bounded RPU inspection.
-        if duration > 0, options.formatName == "mpegts", DolbyVisionLayerProbe.candidate(in: formatCtx) != nil {
+        if !options.videoDisable, duration > 0, options.formatName == "mpegts", DolbyVisionLayerProbe.candidate(in: formatCtx) != nil {
             colorProbeDeadline = ProcessInfo.processInfo.systemUptime + 1.0
             let probe = DolbyVisionLayerProbe.inspect(format: formatCtx, deadline: colorProbeDeadline!)
             colorProbeDeadline = nil
@@ -442,7 +442,7 @@ extension MEPlayerItem {
             if let coreStream = formatCtx.pointee.streams[i] {
                 coreStream.pointee.discard = AVDISCARD_ALL
                 var inlineP7 = false
-                if let parameters = coreStream.pointee.codecpar, DolbyVisionConfiguration.isProfile7(parameters.pointee) {
+                if !options.videoDisable, let parameters = coreStream.pointee.codecpar, DolbyVisionConfiguration.isProfile7(parameters.pointee) {
                     let original = parameters.pointee
                     do {
                         let converter = try DolbyVisionRPUConverter()
@@ -495,7 +495,7 @@ extension MEPlayerItem {
             if let first = videos.first(where: { $0.trackID == videoIndex }) {
                 first.isEnabled = true
                 let rotation = first.rotation
-                if rotation > 0, options.autoRotate {
+                if rotation > 0, options.autoRotate, options.presentationRotation(for: rotation) == 0 {
                     options.hardwareDecode = false
                     if abs(rotation - 90) <= 1 {
                         options.videoFilters.append("transpose=clock")

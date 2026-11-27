@@ -241,9 +241,9 @@ public class FFmpegAssetTrack: MediaPlayerTrack {
                     }
                     ff_isom_write_vpcc(nil, ioContext, nil, 0, &self.codecpar)
                     extradataSize = avio_close_dyn_buf(ioContext, &extradata)
-                    guard let extradata else {
-                        return nil
-                    }
+                    guard let extradata else { return nil }
+                    defer { av_free(extradata) }
+                    guard extradataSize >= 0 else { return nil }
                     var data = Data()
                     var array: [UInt8] = [1, 0, 0, 0]
                     data.append(&array, count: 4)

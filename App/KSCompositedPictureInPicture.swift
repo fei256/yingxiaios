@@ -21,6 +21,7 @@ import UIKit
     private var format: CMVideoFormatDescription?
     private var lastFrame: PixelBufferProtocol?
     private var lastTime = 0.0
+    private var lastRotation: Int16 = 0
     private var lastPrimed = -Double.infinity
     private var lastPausedRefresh = -Double.infinity
     private var hasPresented = false
@@ -89,7 +90,8 @@ import UIKit
 
     /// A bounded warm-up keeps AVKit possible without compositing every inline video frame.
     /// During PiP, every accepted decoded frame uses its own media time and selected cues.
-    func submit(_ original: PixelBufferProtocol, time: Double, active: Bool, force: Bool = false) -> Bool {
+    func submit(_ original: PixelBufferProtocol, time: Double, rotation: Int16, active: Bool, force: Bool = false) -> Bool {
+        lastRotation = rotation
         lastFrame = original
         lastTime = time
         let now = ProcessInfo.processInfo.systemUptime
@@ -100,8 +102,9 @@ import UIKit
         let pixelRatio = original.aspectRatio
         let ratio = pixelRatio.width.isFinite && pixelRatio.height.isFinite && pixelRatio.width > 0 && pixelRatio.height > 0
             ? pixelRatio.width / pixelRatio.height : 1
-        let sourceWidth = CGFloat(original.width) * ratio
-        let sourceHeight = CGFloat(original.height)
+        let swapped = rotation == 90 || rotation == 270
+        let sourceWidth = swapped ? CGFloat(original.height) : CGFloat(original.width) * ratio
+        let sourceHeight = swapped ? CGFloat(original.width) * ratio : CGFloat(original.height)
         let scale = min(1, 960 / sourceWidth, 540 / sourceHeight)
         let size = CGSize(width: max(2, Int(sourceWidth * scale) / 2 * 2), height: max(2, Int(sourceHeight * scale) / 2 * 2))
         guard let buffer = makeBuffer(size: size) else { return false }
@@ -111,8 +114,16 @@ import UIKit
         } else if let image = original.cgImage() {
             source = CIImage(cgImage: image, options: [.toneMapHDRtoSDR: true])
         } else { return false }
-        var rendered = source.transformed(by: CGAffineTransform(scaleX: size.width / CGFloat(original.width),
-                                                                y: size.height / CGFloat(original.height)))
+        let oriented: CIImage
+        switch rotation {
+        case 90: oriented = source.oriented(.right)
+        case 180: oriented = source.oriented(.down)
+        case 270: oriented = source.oriented(.left)
+        default: oriented = source
+        }
+        let extent = oriented.extent
+        var rendered = oriented.transformed(by: CGAffineTransform(translationX: -extent.minX, y: -extent.minY))
+            .transformed(by: CGAffineTransform(scaleX: size.width / extent.width, y: size.height / extent.height))
         if let snapshot = engine?.pictureInPictureSubtitles(at: time),
            let overlay = subtitles.image(primary: snapshot.primary, secondary: snapshot.secondary,
                                          style: snapshot.style, size: size) {
@@ -144,7 +155,7 @@ import UIKit
 
     func refresh(active: Bool) {
         guard let lastFrame else { return }
-        _ = submit(lastFrame, time: lastTime, active: active, force: true)
+        _ = submit(lastFrame, time: lastTime, rotation: lastRotation, active: active, force: true)
     }
 
     func refreshPaused() {

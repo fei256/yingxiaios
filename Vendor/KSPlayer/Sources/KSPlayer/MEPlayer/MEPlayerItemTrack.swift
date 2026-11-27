@@ -201,6 +201,9 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
 //                    startTime = CACurrentMediaTime()
 //                }
                 let frame = try result.get()
+                if let picture = frame as? VideoVTBFrame {
+                    picture.presentationRotation = self.options.presentationRotation(for: packet.assetTrack.rotation)
+                }
                 if self.state == .flush || self.state == .closed {
                     return
                 }
@@ -473,7 +476,6 @@ extension SyncPlayerItemTrack {
                 if mediaType == .video, options.asynchronousDecompression, options.hardwareDecode,
                    let session = DecompressionSession(assetTrack: assetTrack, options: options)
                 {
-                    options.onVideoDecoderChanged?("VideoToolbox")
                     return VideoToolboxDecode(options: options, session: session)
                 } else if mediaType == .video, assetTrack.requiresNativeDolbyVision {
                     // P5 and converted P8.1 require their native Dolby/RPU

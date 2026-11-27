@@ -264,6 +264,42 @@ private func failed(_ transfer: Transfer) async throws -> Error {
             record("three ordinary HTTP ranges reconstruct the exact source bytes")
         }
 
+        do {
+            let target = fixture.root.appending(path: "streamed-prefix.ts")
+            try Data().write(to: target)
+            defer { try? FileManager.default.removeItem(at: target) }
+            let writer = try FileWriter(target, stripTransportPrefix: true)
+            let png = Data([137, 80, 78, 71, 13, 10, 26, 10])
+            var payload = Data(repeating: 0x21, count: 12_000)
+            for index in stride(from: 0, to: payload.count, by: 188) { payload[index] = 0x47 }
+            try writer.append(png.prefix(4))
+            try writer.truncate(0)
+            try writer.append(png)
+            try writer.append(payload.prefix(512))
+            try writer.append(payload.dropFirst(512))
+            try writer.finishPrefix()
+            try writer.close()
+            try require(try Data(contentsOf: target) == payload, "Split TS prefix or retry changed the payload")
+            record("streaming TS prefix removal survives split packets and a retry")
+        }
+
+        for oldTag in [nil, "\"previous\""] as [String?] {
+            let name = oldTag == nil ? "unversioned-resume" : "replaced-resume"
+            let path = "/range-versioned.mp4"
+            let length = (8 << 20) + 333
+            let plan = TransferPlan(kind: .file, headers: Fixture.headers, files: [
+                .init(urls: [fixture.address(path)], name: "media.part", length: Int64(length),
+                      ranged: true, done: [0], entityTag: oldTag)
+            ], fileExtension: "mp4")
+            try fixture.save(plan, name: name)
+            try Data(repeating: 0xff, count: Int(Transfer.chunk))
+                .write(to: fixture.folder(name).appending(path: "parts/media.part"))
+            let meter = DownloadMeter()
+            _ = try await fixture.transfer(path, name: name, meter: meter).run()
+            try verifyWhole(fixture, name, meter: meter, size: length)
+            record("\(name) does not splice old and new equal-length representations")
+        }
+
         for (path, expected) in [("/range-ignore.mp4", TransferError.rangeLost), ("/range-mismatch.mp4", .incomplete)] {
             let name = URL(string: path)!.deletingPathExtension().lastPathComponent, meter = DownloadMeter()
             let error = try await failed(fixture.transfer(path, name: name, meter: meter))
@@ -373,9 +409,9 @@ private func failed(_ transfer: Transfer) async throws -> Error {
             try verifyHLS(fixture, name)
             try require(resolutions.value == 1, "An old video-only HLS plan was not renewed")
             let logs = try await fixture.requests().filter { $0.path.hasPrefix("/hls-legacy/") }
-            try require(!logs.contains { $0.path.hasSuffix(".ts") }, "Legacy plan migration discarded compatible completed video pieces")
+            try require(logs.contains { $0.path.hasSuffix(".ts") }, "Legacy HLS migration trusted an unversioned segment")
             try require(logs.contains { $0.path.hasSuffix(".aac") }, "Legacy plan migration omitted external audio")
-            record("legacy video-only plan migrates to external audio while keeping compatible video pieces")
+            record("legacy video-only plan refreshes unversioned pieces and includes external audio")
         }
 
         for (family, expected) in [("hls-unsupported", TransferError.unsupportedHLS("session encryption keys")),

@@ -14,10 +14,11 @@ metadata/logging fixtures and traps if native DASH or remux work is entered.
 No downloader, retry logic, HLS parser, range writer or progress implementation
 is copied into the harness. Compilation and runtime failures fail the command.
 
-The 19 production Swift checks exercise a 1024-byte interrupted non-Range body
+The production Swift checks exercise a 1024-byte interrupted non-Range body
 followed by exactly 4108 bytes, mirror retries, saved non-Range progress,
 cancellation cleanup and restart, gzip decoding, close-delimited and chunked
 unknown lengths, three production-sized ranges, ignored/mismatched ranges,
+equal-length representation changes and incremental TS prefix removal,
 HLS default/available/in-band audio selections from multi-audio groups, local
 master/media playlists, shared AES keys, initialization maps, explicit/implicit
 byte ranges, cancellation and resume, truncated keys/ranges, old video-only

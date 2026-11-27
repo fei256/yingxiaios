@@ -159,7 +159,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     @PerceptionIgnored private var audioServicesGate = PlaybackUserResumeGate<KSAudioServicesResumeContext>()
     var requiresAudioServicesResume: Bool { audioServicesGate.context != nil }
     var audioServicesAvailable: Bool { audioServicesGate.available }
-    var onDecoderChange: (() -> Void)?
+    var onReopenRequested: (() -> Void)?
     /// External and AI cues remain owned by the session; PiP samples them at the decoded frame time.
     var pictureInPictureSubtitleProvider: ((Double) -> (primary: PlayerSubtitlePresentation, secondary: PlayerSubtitlePresentation))?
     private(set) var renderingRevision = UUID()
@@ -187,7 +187,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     var seekable: Bool { core?.seekable == true }
     /// Direct picture time avoids a prefilling audio queue advancing danmaku ahead of the frame.
     var displayPosition: Double {
-        guard let core else { return position }
+        guard videoSelection != "no", let core else { return position }
         let value = core.displayedVideoTime
         return value.isFinite && value >= 0 ? value : position
     }
@@ -200,6 +200,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     @PerceptionIgnored private var clock: Task<Void, Never>?
     @PerceptionIgnored private var thumbnailReader: PlaybackThumbnailReader?
     @PerceptionIgnored private weak var externalHost: UIView?
+    @PerceptionIgnored private var detachedVideoTracks: [KSPlaybackTrack] = []
     @PerceptionIgnored private var audioOff = false
     @PerceptionIgnored private var defaultTracks: [String: String] = [:]
     @PerceptionIgnored private var subtitlePolicy = SubtitleTrackSelection()
@@ -234,7 +235,13 @@ struct KSPlaybackChapter: Identifiable, Equatable {
               discPlaylist: Int? = nil, startTime: Double = 0, isLive: Bool = false,
               audioURL: URL? = nil, audioHeaders: [String: String] = [:],
               cacheIOURL: URL? = nil, audioCacheIOURL: URL? = nil, selections: KSPlaybackSelections? = nil) {
+        let previousVideoTracks = selections?.video == "no" ? tracks.filter { $0.kind == .video } : []
         shutdown()
+        detachedVideoTracks = previousVideoTracks.map { value in
+            var track = value
+            track.selected = false
+            return track
+        }
         self.mediaID = mediaID
         if !audioServicesGate.available {
             let selection = selections ?? KSPlaybackSelections(video: nil, audio: nil, subtitle: nil, secondarySubtitle: "no")
@@ -247,6 +254,8 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         thumbnailReader = PlaybackThumbnailReader(url: cacheIOURL ?? url, headers: cacheIOURL == nil ? headers : [:])
         let options = KSPlaybackOptions()
         options.selections = selections
+        options.videoDisable = selections?.video == "no"
+        options.rotateAtPresentation = true
         options.preferredAudioTrackID = selections?.audio.flatMap(Int32.init)
         if let selections {
             videoSelection = selections.video; audioSelection = selections.audio
@@ -255,9 +264,11 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             subtitleSelection = subtitlePolicy.primary; secondarySubtitleSelection = subtitlePolicy.secondary
             audioOff = selections.audio == "no"
         }
-        options.appendHeader(headers)
-        options.cacheIOURL = cacheIOURL
-        options.companionAudioURL = audioURL
+        let soloAudioURL = options.videoDisable ? audioURL : nil
+        let playbackURL = soloAudioURL ?? url
+        options.appendHeader(soloAudioURL == nil || audioHeaders.isEmpty ? headers : audioHeaders)
+        options.cacheIOURL = soloAudioURL == nil ? cacheIOURL : audioCacheIOURL
+        options.companionAudioURL = options.videoDisable ? nil : audioURL
         options.companionAudioHeaders = audioHeaders.isEmpty ? headers : audioHeaders
         options.companionAudioCacheIOURL = audioCacheIOURL
         options.isAccurateSeek = true
@@ -299,7 +310,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         if ["rtsp", "rtsps"].contains(url.scheme?.lowercased() ?? "") { options.formatContextOptions["rtsp_transport"] = "tcp" }
         if let discPlaylist { options.formatContextOptions["playlist"] = String(discPlaylist) }
         self.options = options
-        let player = KSMEPlayer(url: url, options: options)
+        let player = KSMEPlayer(url: playbackURL, options: options)
         let playerIdentity = ObjectIdentifier(player)
         core = player
         if let output = player.videoOutput as? MetalPlayView, AVPictureInPictureController.isPictureInPictureSupported() {
@@ -309,7 +320,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             output.pictureInPictureFrame = { [weak self, weak player, weak presenter, weak output] buffer, timestamp in
                 guard let self, let player, let presenter, let output, self.core === player else { return false }
                 return presenter.submit(buffer, time: player.relativeVideoTime(for: timestamp),
-                                        active: output.pictureInPictureActive)
+                                        rotation: output.presentationRotation, active: output.pictureInPictureActive)
             }
         }
         player.delegate = self
@@ -371,6 +382,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         lastStoppedPicture = nil
         isReady = false; paused = true; buffering = false; wantsPlaying = false; hasPicture = false
         hasPresentedPicture = false
+        detachedVideoTracks = []
         externalSubtitleDocuments = [:]; externalSubtitleOrder = []
         tracks = []; chapters = []; clearSubtitleOutput(); presentationSize = .zero
         bytesRead = 0; bitrate = 0; frameRate = 0; audioOff = false
@@ -448,9 +460,9 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         sample()
     }
     func setDecoder(_ value: String) {
-        let next = ["auto", "hardware", "software"].contains(value) ? value : "auto"
+        let next = value == "software" ? "software" : "auto"
         guard decoder != next else { return }
-        decoder = next; onDecoderChange?()
+        decoder = next; onReopenRequested?()
     }
     func setContentMode(_ mode: UIView.ContentMode) { core?.contentMode = mode }
     func showOnExternalDisplay(_ host: UIView?) {
@@ -556,6 +568,11 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     }
     private func applyPendingTrackSelections() {
         guard let player = core, !seeking else { return }
+        if let video = pendingTrackSelections.first(where: { $0.0 == .video }),
+           (video.1 == "no") != (options?.videoDisable == true), onReopenRequested != nil {
+            onReopenRequested?()
+            return
+        }
         let selections = pendingTrackSelections
         pendingTrackSelections = []
         var needsSeek = false
@@ -588,7 +605,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         duration = Self.finite(player.duration)
         bufferedPosition = max(position, Self.finite(player.playableTime))
         presentationSize = player.naturalSize
-        hasPicture = player.videoOutput?.pixelBuffer != nil || (player.isReadyToPlay && player.tracks(mediaType: .video).isEmpty)
+        hasPicture = player.videoOutput?.pixelBuffer != nil || (player.isReadyToPlay && (videoSelection == "no" || player.tracks(mediaType: .video).isEmpty))
         if hasPicture { hasPresentedPicture = true }
         isReady = player.isReadyToPlay
         buffering = wantsPlaying && !failedVideo && (player.loadState != .playable || player.isAudioInterrupted)
@@ -788,6 +805,9 @@ struct KSPlaybackChapter: Identifiable, Equatable {
                                 height: kind == .video && track.naturalSize.height > 0 ? Int(track.naturalSize.height) : nil)
             }
         }
+        if options?.videoDisable == true, !tracks.contains(where: { $0.kind == .video }) {
+            tracks += detachedVideoTracks
+        }
         tracks += externalSubtitleOrder.compactMap { id in
             guard let external = externalSubtitleDocuments[id] else { return nil }
             return KSPlaybackTrack(id: id, kind: .subtitle, title: external.document.name,
@@ -807,7 +827,11 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         var info = PlaybackInfo()
         info.width = Int(presentationSize.width.rounded()); info.height = Int(presentationSize.height.rounded())
         info.videoCodec = video?.formatDescription.map(CMFormatDescriptionGetMediaSubType)
-        info.hardwareDecoding = currentDecoder.contains("VideoToolbox") ? true : currentDecoder == "FFmpeg software" ? false : nil
+        switch currentDecoder {
+        case "VideoToolbox (hardware)": info.hardwareDecoding = true
+        case "VideoToolbox (software)", "FFmpeg software": info.hardwareDecoding = false
+        default: info.hardwareDecoding = nil
+        }
         info.audioCodec = audio?.formatDescription.map(CMFormatDescriptionGetMediaSubType)
         info.dolbyVisionProfile = video?.dovi.map { Int($0.dv_profile) }
         // Media specifications describe the source; sampled presentation FPS

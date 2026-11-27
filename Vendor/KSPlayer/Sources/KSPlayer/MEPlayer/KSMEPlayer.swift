@@ -7,6 +7,7 @@
 
 import AVFoundation
 import AVKit
+import CoreImage
 #if canImport(UIKit)
 import UIKit
 #else
@@ -553,7 +554,11 @@ extension KSMEPlayer: MediaPlayerProtocol {
     }
 
     public func thumbnailImageAtCurrentTime() async -> CGImage? {
-        videoOutput?.pixelBuffer?.cgImage()
+        guard let image = videoOutput?.pixelBuffer?.cgImage() else { return nil }
+        guard let surface = videoOutput as? MetalPlayView, surface.presentationRotation != 0 else { return image }
+        let rotation = surface.presentationRotation
+        let oriented = CIImage(cgImage: image).oriented(rotation == 90 ? .right : rotation == 180 ? .down : .left)
+        return CIContext().createCGImage(oriented, from: oriented.extent)
     }
 
     public func enterBackground() {}

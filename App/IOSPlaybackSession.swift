@@ -187,7 +187,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         engine.onAudioServicesResume = { [weak self] context in
             self?.recoverPlayback(reusePrepared: true, audioServices: context) ?? false
         }
-        engine.onDecoderChange = { [weak self] in self?.reopenCurrent() }
+        engine.onReopenRequested = { [weak self] in self?.reopenCurrent() }
         engine.pictureInPictureSubtitleProvider = { [weak self] time in
             guard let self else { return (PlayerSubtitlePresentation(), PlayerSubtitlePresentation()) }
             self.subtitles.updateKS(lines: self.engine.subtitleLines, pictureSize: self.engine.presentationSize)

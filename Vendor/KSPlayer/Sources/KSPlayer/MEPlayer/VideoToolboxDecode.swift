@@ -193,6 +193,16 @@ class DecompressionSession {
             preserveInputColor = assetTrack.dovi?.dv_profile != 5
         }
         self.decompressionSession = decompressionSession
+        var name = "VideoToolbox"
+        if #available(iOS 17, tvOS 17, macOS 10.9, *) {
+            var property: CFTypeRef?
+            if VTSessionCopyProperty(decompressionSession, key: kVTDecompressionPropertyKey_UsingHardwareAcceleratedVideoDecoder,
+                                     allocator: kCFAllocatorDefault, valueOut: &property) == noErr,
+               let hardware = property as? Bool {
+                name = hardware ? "VideoToolbox (hardware)" : "VideoToolbox (software)"
+            }
+        }
+        options.onVideoDecoderChanged?(name)
     }
 
     fileprivate func applyOutputMetadata(to pixelBuffer: CVPixelBuffer) {

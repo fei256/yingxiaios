@@ -13,7 +13,12 @@ struct TMDBArtwork: View {
     var fill = true
     var aspect: Binding<CGFloat?>? = nil
     @State private var image: CGImage?
-    private static let cache: NSCache<NSURL, Box> = { let cache = NSCache<NSURL, Box>(); cache.countLimit = 24; return cache }()
+    private static let cache: NSCache<NSString, Box> = {
+        let cache = NSCache<NSString, Box>()
+        cache.countLimit = 24
+        cache.totalCostLimit = 48 * 1024 * 1024
+        return cache
+    }()
     final class Box { let image: CGImage; init(_ image: CGImage) { self.image = image } }
     private var artworkURL: URL { _ = tmdbSettings; return TMDBServiceSettings.artworkURL(url) }
 
@@ -26,9 +31,8 @@ struct TMDBArtwork: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .task(id: artworkURL.absoluteString + "|" + tmdbSettings.base64EncodedString()) {
+            .task(id: String(maxPixels) + "|" + artworkURL.absoluteString + "|" + tmdbSettings.base64EncodedString()) {
                 let url = artworkURL
-                if let cached = Self.cache.object(forKey: url as NSURL) { show(cached.image); return }
                 guard let decoded = await Self.load(url, maxPixels: maxPixels), !Task.isCancelled else { return }
                 withAnimation(.easeOut(duration: 0.3)) { show(decoded) }
             }
@@ -38,14 +42,15 @@ struct TMDBArtwork: View {
     /// Downloads and decodes `url` into the shared cache; nil when it doesn't load.
     static func load(_ url: URL, maxPixels: Int) async -> CGImage? {
         let url = TMDBServiceSettings.artworkURL(url)
-        if let cached = cache.object(forKey: url as NSURL) { return cached.image }
+        let key = "\(maxPixels)|\(url.absoluteString)" as NSString
+        if let cached = cache.object(forKey: key) { return cached.image }
         guard let data = try? await TMDBServiceSettings.artworkData(for: url),
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let decoded = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
                 kCGImageSourceThumbnailMaxPixelSize: maxPixels, kCGImageSourceShouldCacheImmediately: true,
               ] as CFDictionary) else { return nil }
-        cache.setObject(Box(decoded), forKey: url as NSURL)
+        cache.setObject(Box(decoded), forKey: key, cost: decoded.bytesPerRow * decoded.height)
         return decoded
     }
 

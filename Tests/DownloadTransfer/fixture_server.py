@@ -297,11 +297,17 @@ class FixtureHandler(BaseHTTPRequestHandler):
             if path == "/range-ignore.mp4" and not probe:
                 self.reply(body, entry=entry)
                 return
+            headers = {}
+            if path == "/range-versioned.mp4":
+                headers["ETag"] = '"current"'
+                if self.headers.get("If-Match", '"current"') != '"current"':
+                    self.reply(b"version changed", 412, entry=entry)
+                    return
             answered_first = first + 1 if path == "/range-mismatch.mp4" and not probe else first
             self.reply(
                 body[first : last + 1],
                 206,
-                {"Content-Range": f"bytes {answered_first}-{last}/{len(body)}"},
+                {**headers, "Content-Range": f"bytes {answered_first}-{last}/{len(body)}"},
                 gate=gate,
                 entry=entry,
             )
