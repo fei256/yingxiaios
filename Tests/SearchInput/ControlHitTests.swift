@@ -7,15 +7,14 @@ final class ControlHitTests: XCTestCase {
         let expected = "\(id):\(events)"
         let started = ProcessInfo.processInfo.systemUptime
         let initial = result.label
+        if initial == expected { return true }
         let response = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", expected), object: result)
         let status = XCTWaiter.wait(for: [response], timeout: 2)
         let observed = result.label
-        if initial != expected || status != .completed || observed != expected {
-            let receipt = XCTAttachment(string: "expected=\(expected)\ninitial=\(initial)\nobserved=\(observed)\npoint=\(point)\nwait=\(status)\nelapsed=\(ProcessInfo.processInfo.systemUptime - started)")
-            receipt.name = "control-action-receipt"
-            receipt.lifetime = .keepAlways
-            add(receipt)
-        }
+        let receipt = XCTAttachment(string: "expected=\(expected)\ninitial=\(initial)\nobserved=\(observed)\npoint=\(point)\nwait=\(status)\nelapsed=\(ProcessInfo.processInfo.systemUptime - started)")
+        receipt.name = "control-action-receipt"
+        receipt.lifetime = .keepAlways
+        add(receipt)
         guard observed == expected else {
             XCTFail("Single touch at \(point) expected \(expected), observed \(observed) after waiting for the accessibility update", file: file, line: line)
             return false
