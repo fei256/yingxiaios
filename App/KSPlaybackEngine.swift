@@ -137,6 +137,9 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     private(set) var bytesRead: Int64 = 0
     private(set) var bitrate: Double = 0
     private(set) var frameRate: Double = 0
+    private(set) var droppedVideoFrames: UInt32 = 0
+    private(set) var droppedVideoPackets: UInt32 = 0
+    @PerceptionIgnored private var previousSamplePictureTime: Double?
     private(set) var decoder = "auto"
     private(set) var currentDecoder = "准备中"
     private(set) var videoSelection: String?
@@ -255,7 +258,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         let options = KSPlaybackOptions()
         options.selections = selections
         options.videoDisable = selections?.video == "no"
-        options.rotateAtPresentation = true
+        options.prefersTabletFrameQueue = UIDevice.current.userInterfaceIdiom == .pad
         options.preferredAudioTrackID = selections?.audio.flatMap(Int32.init)
         if let selections {
             videoSelection = selections.video; audioSelection = selections.audio
@@ -320,7 +323,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             output.pictureInPictureFrame = { [weak self, weak player, weak presenter, weak output] buffer, timestamp in
                 guard let self, let player, let presenter, let output, self.core === player else { return false }
                 return presenter.submit(buffer, time: player.relativeVideoTime(for: timestamp),
-                                        rotation: output.presentationRotation, active: output.pictureInPictureActive)
+                                        active: output.pictureInPictureActive)
             }
         }
         player.delegate = self
@@ -386,6 +389,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         externalSubtitleDocuments = [:]; externalSubtitleOrder = []
         tracks = []; chapters = []; clearSubtitleOutput(); presentationSize = .zero
         bytesRead = 0; bitrate = 0; frameRate = 0; audioOff = false
+        droppedVideoFrames = 0; droppedVideoPackets = 0; previousSamplePictureTime = nil
         videoSelection = nil; audioSelection = nil; subtitleSelection = nil; secondarySubtitleSelection = "no"; subtitlePolicy = SubtitleTrackSelection(); pendingTrackSelections = []; defaultTracks = [:]; suppliedChapters = []; playbackInfo = PlaybackInfo(); currentDecoder = "准备中"
         renderingRevision = UUID()
         for request in cancelled { request.completion(false) }
@@ -617,8 +621,13 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         // Keep the 50 ms picture/subtitle clock free of repeated format/track work.
         if sampleTime >= nextPlaybackInfoSample {
             nextPlaybackInfoSample = sampleTime + 1
-            bitrate = Double((player.dynamicInfo?.audioBitrate ?? 0) + (player.dynamicInfo?.videoBitrate ?? 0))
-            frameRate = Self.finite(player.dynamicInfo?.displayFPS ?? 0)
+            let statistics = player.dynamicInfo
+            bitrate = Double((statistics?.audioBitrate ?? 0) + (statistics?.videoBitrate ?? 0))
+            let pictureTime = player.displayedVideoTime
+            frameRate = previousSamplePictureTime == pictureTime ? 0 : Self.finite(statistics?.displayFPS ?? 0)
+            previousSamplePictureTime = pictureTime
+            droppedVideoFrames = statistics?.droppedVideoFrameCount ?? 0
+            droppedVideoPackets = statistics?.droppedVideoPacketCount ?? 0
             refreshPlaybackInfo()
         }
         #if DEBUG

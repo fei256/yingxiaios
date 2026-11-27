@@ -172,9 +172,15 @@ public final class PlaybackPacketBudget: @unchecked Sendable {
                     ? "当前音视频轨道无法完成缓冲，请切换音轨或播放线路。"
                     : "当前视频的缓冲数据过大，请切换线路或降低画质。"])
     }
-    public static func videoFrames(width: Double, height: Double, live: Bool, physicalMemory: UInt64) -> UInt8 {
+    public static func videoFrames(width: Double, height: Double, live: Bool, physicalMemory: UInt64, tablet: Bool = false) -> UInt8 {
         guard width.isFinite, height.isFinite, width > 0, height > 0 else { return live ? 4 : 16 }
-        let budget = physicalMemory >= 6 * 1024 * 1024 * 1024 ? 96.0 * 1024 * 1024 : 64.0 * 1024 * 1024
+        let ampleMemory = physicalMemory >= 6 * 1024 * 1024 * 1024
+        // Keep the original display runway for up to 4K on higher-memory iPads.
+        // At 60 fps two frames cover only 33 ms of decoder delivery jitter.
+        if tablet && ampleMemory && max(width, height) <= 4096 && min(width, height) <= 2160 {
+            return live ? 4 : 16
+        }
+        let budget = ampleMemory ? 96.0 * 1024 * 1024 : 64.0 * 1024 * 1024
         let estimated = width * height * 4
         guard estimated.isFinite, estimated > 0 else { return 2 }
         // The ring buffer rounds its input up to a power of two. Choose an

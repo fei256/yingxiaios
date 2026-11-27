@@ -24,6 +24,7 @@ open class KSOptions {
     /// 最大缓存视频时间
     public var maxBufferDuration = KSOptions.maxBufferDuration
     public var packetBudget = PlaybackPacketBudget()
+    public var prefersTabletFrameQueue = false
     /// 是否开启秒开
     public var isSecondOpen = KSOptions.isSecondOpen
     /// 开启精确seek
@@ -99,11 +100,6 @@ open class KSOptions {
     public var videoDelay = 0.0 // s
     public var autoDeInterlace = false
     public var autoRotate = true
-    public var rotateAtPresentation = false
-    func presentationRotation(for degrees: Int16) -> Int16 {
-        guard autoRotate, rotateAtPresentation else { return 0 }
-        return [90, 180, 270].contains(degrees) ? degrees : 0
-    }
     public var destinationDynamicRange: DynamicRange?
     public var videoAdaptable = true
     public var videoFilters = [String]()
@@ -298,7 +294,7 @@ open class KSOptions {
 
     open func videoFrameMaxCount(fps _: Float, naturalSize: CGSize, isLive: Bool) -> UInt8 {
         PlaybackPacketBudget.videoFrames(width: Double(naturalSize.width), height: Double(naturalSize.height), live: isLive,
-                                         physicalMemory: ProcessInfo.processInfo.physicalMemory)
+                                         physicalMemory: ProcessInfo.processInfo.physicalMemory, tablet: prefersTabletFrameQueue)
     }
 
     open func audioFrameMaxCount(fps: Float, channelCount: Int) -> UInt8 {

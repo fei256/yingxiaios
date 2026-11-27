@@ -78,7 +78,6 @@ public final class MetalPlayView: UIView, VideoOutput {
     private var outputUsesDisplayLayer: Bool?
     private var outputDisplay: DisplayEnum?
 
-    public private(set) var presentationRotation: Int16 = 0
     public private(set) var pixelBuffer: PixelBufferProtocol?
     /// 用displayLink会导致锁屏无法draw，
     /// 用DispatchSourceTimer的话，在播放4k视频的时候repeat的时间会变长,
@@ -150,12 +149,6 @@ public final class MetalPlayView: UIView, VideoOutput {
 
     override public func didAddSubview(_ subview: UIView) {
         super.didAddSubview(subview)
-        #if os(iOS)
-        if options.rotateAtPresentation, subview === displayView || subview === metalView {
-            layoutPicture(subview)
-            return
-        }
-        #endif
         subview.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             subview.leftAnchor.constraint(equalTo: leftAnchor),
@@ -164,24 +157,6 @@ public final class MetalPlayView: UIView, VideoOutput {
             subview.rightAnchor.constraint(equalTo: rightAnchor),
         ])
     }
-
-    #if os(iOS)
-    public override func layoutSubviews() {
-        super.layoutSubviews()
-        if options.rotateAtPresentation {
-            layoutPicture(displayView)
-            layoutPicture(metalView)
-        }
-    }
-
-    private func layoutPicture(_ view: UIView) {
-        let swapped = presentationRotation == 90 || presentationRotation == 270
-        let size = swapped ? CGSize(width: bounds.height, height: bounds.width) : bounds.size
-        view.bounds = CGRect(origin: .zero, size: size)
-        view.center = CGPoint(x: bounds.midX, y: bounds.midY)
-        view.transform = CGAffineTransform(rotationAngle: CGFloat(presentationRotation) * .pi / 180)
-    }
-    #endif
 
     override public var contentMode: UIViewContentMode {
         didSet {
@@ -350,14 +325,6 @@ extension MetalPlayView {
                 cancelForcedPictureRetry()
                 return false
             }
-            #if os(iOS)
-            if frame.presentationRotation != presentationRotation {
-                presentationRotation = frame.presentationRotation
-                layoutPicture(displayView)
-                layoutPicture(metalView)
-                metalView.invalidateDrawable()
-            }
-            #endif
             isDovi = frame.isDovi
             fps = frame.fps
             let cmtime = frame.cmtime

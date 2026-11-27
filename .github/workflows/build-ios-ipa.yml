@@ -101,11 +101,13 @@ jobs:
           xcrun swiftc -swift-version 6 -parse-as-library \
             Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackSynchronization.swift \
             Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/CircularBuffer.swift \
+            Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackResilience.swift \
             Tests/PlaybackStability/checks.swift -o build/ci/playback-stability-checks
           build/ci/playback-stability-checks 2>&1 | tee build/ci/playback-stability-checks.log
           xcrun swiftc -swift-version 6 -parse-as-library -sanitize=thread \
             Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackSynchronization.swift \
             Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/CircularBuffer.swift \
+            Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackResilience.swift \
             Tests/PlaybackStability/checks.swift -o build/ci/playback-stability-tsan
           build/ci/playback-stability-tsan 2>&1 | tee build/ci/playback-stability-tsan.log
       - name: Test production settings and delayed native imports

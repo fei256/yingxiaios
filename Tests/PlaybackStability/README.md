@@ -10,6 +10,7 @@ On macOS CI:
 xcrun swiftc -swift-version 6 -parse-as-library \
   Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackSynchronization.swift \
   Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/CircularBuffer.swift \
+  Vendor/KSPlayer/Sources/KSPlayer/MEPlayer/PlaybackResilience.swift \
   Tests/PlaybackStability/checks.swift \
   -o "$RUNNER_TEMP/playback-stability-checks"
 "$RUNNER_TEMP/playback-stability-checks"

@@ -201,9 +201,6 @@ class SyncPlayerItemTrack<Frame: MEFrame>: PlayerItemTrackProtocol, CustomString
 //                    startTime = CACurrentMediaTime()
 //                }
                 let frame = try result.get()
-                if let picture = frame as? VideoVTBFrame {
-                    picture.presentationRotation = self.options.presentationRotation(for: packet.assetTrack.rotation)
-                }
                 if self.state == .flush || self.state == .closed {
                     return
                 }

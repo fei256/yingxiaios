@@ -128,6 +128,27 @@ private final class Resource: @unchecked Sendable {
             _ = reader.close()
         }
 
+        try check("tablet UHD queue covers a 100 ms decoder delivery gap at 60 fps") {
+            let memory: UInt64 = 8 * 1024 * 1024 * 1024
+            func missedPictures(tablet: Bool) -> Int {
+                let capacity = PlaybackPacketBudget.videoFrames(width: 3840, height: 2160, live: false,
+                                                               physicalMemory: memory, tablet: tablet)
+                let queue = CircularBuffer<QueueItem>(initialCapacity: Int(capacity), sorted: true, expanding: false)
+                for index in 0..<Int(capacity) { queue.push(QueueItem(timestamp: Int64(index))) }
+                // Six display deadlines elapse before the decoder delivers its next batch.
+                return (0..<6).filter { _ in queue.pop() == nil }.count
+            }
+            try require(missedPictures(tablet: false) == 4, "Two-frame control did not exercise starvation")
+            try require(missedPictures(tablet: true) == 0, "Tablet VOD ran out of decoded frames")
+            try require(PlaybackPacketBudget.videoFrames(width: 2160, height: 3840, live: false,
+                        physicalMemory: memory, tablet: true) == 16, "Portrait UHD lost its display runway")
+            try require(PlaybackPacketBudget.videoFrames(width: 3840, height: 2160, live: true,
+                        physicalMemory: memory, tablet: true) == 4, "Live playback inherited the VOD queue")
+            try require(PlaybackPacketBudget.videoFrames(width: 7680, height: 4320, live: false,
+                        physicalMemory: memory, tablet: true) == 2, "8K bypassed the large-frame memory limit")
+            try require(PlaybackPacketBudget.videoFrames(width: 3840, height: 2160, live: false,
+                        physicalMemory: memory / 2, tablet: true) == 2, "Lower-memory tablets bypassed their budget")
+        }
         try check("bounded frame queue waits before writing a full slot") {
             let queue = CircularBuffer<QueueItem>(initialCapacity: 2, expanding: false)
             queue.push(QueueItem(timestamp: 1)); queue.push(QueueItem(timestamp: 2))

@@ -495,7 +495,7 @@ extension MEPlayerItem {
             if let first = videos.first(where: { $0.trackID == videoIndex }) {
                 first.isEnabled = true
                 let rotation = first.rotation
-                if rotation > 0, options.autoRotate, options.presentationRotation(for: rotation) == 0 {
+                if rotation > 0, options.autoRotate {
                     options.hardwareDecode = false
                     if abs(rotation - 90) <= 1 {
                         options.videoFilters.append("transpose=clock")

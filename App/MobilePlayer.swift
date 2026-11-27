@@ -1123,6 +1123,11 @@ struct MobilePlayerView: View {
                     }
                 }
                 Text("当前解码：" + session.engine.currentDecoder).font(.caption).foregroundStyle(.secondary)
+                if session.engine.videoSelection != "no" {
+                    Text(String(format: "送显 %.1f FPS · 同步累计跳过 %u 帧 / %u 包",
+                                session.engine.frameRate, session.engine.droppedVideoFrames, session.engine.droppedVideoPackets))
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
             }
         }
     }

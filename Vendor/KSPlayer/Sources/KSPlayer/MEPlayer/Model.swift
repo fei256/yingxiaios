@@ -408,7 +408,6 @@ public final class VideoVTBFrame: MEFrame {
     public let fps: Float
     public let isDovi: Bool
     public var edrMetaData: EDRMetaData? = nil
-    var presentationRotation: Int16 = 0
     var corePixelBuffer: PixelBufferProtocol?
     init(fps: Float, isDovi: Bool) {
         self.fps = fps
