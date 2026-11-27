@@ -15,10 +15,10 @@ struct LocalSettingsView: View {
         WithPerceptionTracking {
             ScrollView {
                 VStack(alignment: .leading, spacing: LocalSettingsAppearance.groupSpacing) {
-                    LocalSettingsMenuSection(title: "站源与首页") {
+                    LocalSettingsMenuSection(title: "内容来源与首页") {
                         LocalSettingsMenuRow(symbol: "list.bullet.rectangle", title: "订阅", detail: "\(store.managedSubscriptions(in: .subscription).count) 个订阅") { LocalSourceSettingsView(kind: .subscription) }
                         LocalSettingsMenuRow(symbol: "chevron.left.forwardslash.chevron.right", title: "Python", detail: "\(store.managedSubscriptions(in: .python).count) 个来源", identifier: "python") { LocalSourceSettingsView(kind: .python) }
-                        LocalSettingsMenuRow(symbol: "house", title: "首页设置", detail: "启动与首页配置", identifier: "首页", last: true) { LocalHomeSettingsView() }
+                        LocalSettingsMenuRow(symbol: "house", title: "首页设置", detail: "启动时显示的页面", identifier: "首页", last: true) { LocalHomeSettingsView() }
                     }
                     LocalSettingsMenuSection(title: "播放与显示") {
                         LocalSettingsMenuRow(symbol: "play.rectangle", title: "播放器", detail: "播放信息") { LocalPlayerSettingsView() }
@@ -125,14 +125,12 @@ struct LocalHomeSettingsView: View {
 
 struct LocalAboutView: View {
     @Environment(Updates.self) private var updates
-    @Environment(Store.self) private var store
     var body: some View {
         WithPerceptionTracking {
-            SettingsPage(title: "关于", symbol: "info.circle") {
+            SettingsPage(title: "关于映匣", symbol: "info.circle") {
                 SettingsGroup {
                     LabeledContent("版本", value: updates.current)
-                    LabeledContent("构建", value: String(updates.build))
-                    Text("iOS 16.1 本地维护版").foregroundStyle(.secondary)
+                    LabeledContent("构建号", value: String(updates.build))
                 }
                 SettingsGroup {
                     SettingsLinkRow(symbol: "doc.plaintext", title: "开源许可") { LicensesView() }
@@ -155,8 +153,8 @@ private struct LocalDataSettingsView: View {
                 Toggle("iCloud 同步", isOn: $sync)
                     .appOnChange(of: sync) { _, enabled in store.cloudSync?.setEnabled(enabled) }
                 if sync {
-                    Text(available ? "iCloud 已接受同步请求。" : "同步服务尚未就绪。请检查重签名的 iCloud 权限与设备账号。")
-                    if lastIncoming > 0 { Text("最近收到云端更新 " + Date(timeIntervalSince1970: lastIncoming).formatted()) }
+                    Text(available ? "已向 iCloud 请求同步。" : "iCloud 同步暂不可用。请检查设备是否已登录 iCloud，以及映匣是否有同步权限。")
+                    if lastIncoming > 0 { Text("上次收到更新：" + Date(timeIntervalSince1970: lastIncoming).formatted()) }
                     else { Text("尚未收到云端更新。") }
                 }
                 Text("同步订阅、收藏与观看记录。")

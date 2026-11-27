@@ -110,9 +110,9 @@ public struct LocalBackupArchive: Codable, Sendable {
         public var errorDescription: String? {
             switch self {
             case .tooLarge: "备份不能超过 128 MiB。"
-            case .version: "请选择映匣 iOS 备份。MacCat 桌面版备份格式暂不支持。"
+            case .version: "无法读取此备份格式。请选择从映匣「备份迁移」导出的 JSON 文件。"
             case .checksum: "备份校验失败，文件可能已损坏。"
-            case .invalid: "备份包含无效字段或来源文件。"
+            case .invalid: "备份中的设置或来源文件无效，请重新导出后再试。"
             }
         }
     }

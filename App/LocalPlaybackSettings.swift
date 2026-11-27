@@ -22,7 +22,7 @@ struct LocalCacheSettingsView: View {
     }
     var body: some View {
         SettingsPage(title: "视频缓存", symbol: "internaldrive") {
-            SettingsGroup(title: "视频缓存", footer: "播放时在容量上限内提前缓存媒体数据；播放器顶部显示实际缓存量。切换媒体和退出后释放，用户下载单独保留。") {
+            SettingsGroup(title: "视频缓存", footer: "播放时会提前缓存视频。切换或退出播放后会释放缓存，已下载的视频可继续离线观看。") {
                 Toggle("开启视频缓存", isOn: $enabled)
                 Picker("缓存容量", selection: $size) { ForEach(1...4, id: \.self) { Text("\($0) GB").tag($0) } }.disabled(!enabled)
                 Toggle("预加载下一集", isOn: $prefetch)
@@ -35,7 +35,7 @@ struct LocalCacheSettingsView: View {
                     clearing = true
                     Task {
                         do { try await MobileMediaServices.clearVideoCache(); await refreshUsage() }
-                        catch { cacheStatus = "缓存服务暂不可用，下次播放会按当前设置重试。" }
+                        catch { cacheStatus = "暂时无法连接缓存服务，下次播放时会重试。" }
                         clearing = false
                     }
                 }.disabled(clearing)
@@ -53,7 +53,7 @@ struct LocalCacheSettingsView: View {
                 cacheStatus = nil
             } catch {
                 guard !Task.isCancelled else { return }
-                cacheStatus = "缓存服务暂不可用，下次播放会按当前设置重试。"
+                cacheStatus = "暂时无法连接缓存服务，下次播放时会重试。"
             }
             while refreshActive && !Task.isCancelled {
                 await refreshUsage()
@@ -71,7 +71,7 @@ struct LocalAdSettingsView: View {
     @AppStorage("local.hlsAdClean") private var enabled = true
     var body: some View {
         SettingsPage(title: "去广告", symbol: "shield.lefthalf.filled") {
-            SettingsGroup(footer: "对可识别的 M3U8 广告片段进行清理。分离音视频的流保留同步；遇到异常可关闭后重试。") {
+            SettingsGroup(footer: "播放 M3U8 视频时会过滤可识别的广告片段。如果播放异常，可关闭此项后重新打开视频。") {
                 Toggle("M3U8 去广告", isOn: $enabled)
             }
         }

@@ -80,6 +80,11 @@ info = plistlib.loads((app / 'Info.plist').read_bytes())
 assert str(info['CFBundleVersion']) == str(config['build_number']), info['CFBundleVersion']
 assert info['CFBundleIdentifier'] == 'com.jo32.yingxia.ios.compare', info['CFBundleIdentifier']
 assert info['CFBundleShortVersionString'] == '1.8.14', info['CFBundleShortVersionString']
+for key in ('CFBundleDisplayName', 'CFBundleName'):
+    assert info[key] == '映匣', (key, info[key])
+for language in info['CFBundleLocalizations']:
+    labels = plistlib.loads((app / f'{language}.lproj/InfoPlist.strings').read_bytes())
+    assert labels['CFBundleDisplayName'] == labels['CFBundleName'] == '映匣', language
 assert info['MinimumOSVersion'] == '16.1', info['MinimumOSVersion']
 signing = subprocess.run(['codesign', '-dv', str(app)], text=True, capture_output=True)
 (out / 'codesign-check.log').write_text(signing.stdout + signing.stderr)
@@ -107,7 +112,7 @@ payload = stage / 'Payload'
 payload.mkdir(parents=True, exist_ok=False)
 shutil.copytree(app, payload / app.name, symlinks=True)
 build_label = str(info['CFBundleVersion']).zfill(2)
-ipa = out / f"Yingxia-Compare-{info['CFBundleShortVersionString']}-build{build_label}-iOS16.1-NoJava-unsigned.ipa"
+ipa = out / f"映匣-{info['CFBundleShortVersionString']}-build{build_label}-unsigned.ipa"
 assert not ipa.exists(), ipa
 write_payload_zip(payload, ipa)
 with zipfile.ZipFile(ipa) as z:

@@ -48,7 +48,7 @@ struct LocalBackupSettingsView: View {
     @State private var status = ""
     var body: some View {
         SettingsPage(title: "备份迁移", symbol: "archivebox") {
-            SettingsGroup(title: "备份与迁移", footer: "导出映匣 iOS JSON 备份，不包含账号密码、Cookie、API 密钥、视频缓存和语音模型。来源代码可能带有作者写入的配置；请妥善保管。MacCat 桌面备份格式暂不支持。") {
+            SettingsGroup(title: "备份与迁移", footer: "备份包含订阅、观看记录、收藏和可迁移的设置。账号凭据、视频缓存和语音模型不会随备份导出。来源脚本会保留作者写入的配置，请妥善保存备份文件。") {
                 Button("导出备份") {
                     run {
                         document = LocalBackupDocument(data: try await LocalBackupCoordinator.export(store))
@@ -71,7 +71,7 @@ struct LocalBackupSettingsView: View {
                 if !status.isEmpty { Text(status).font(.footnote).foregroundStyle(.secondary) }
             }
             if let value = preview {
-                SettingsGroup(title: "恢复预览", footer: "恢复会停止播放，并保存恢复前的数据以供撤回。未选择的分类保持现状；恢复的来源保持关闭，需手动启用。") {
+                SettingsGroup(title: "恢复预览", footer: "请选择要恢复的内容。恢复时会停止播放，并保留当前数据供撤回。新导入的来源需要在设置中启用。") {
                     if let createdAt { Text(createdAt.formatted(date: .abbreviated, time: .shortened)).font(.caption) }
                     ForEach(LocalBackupCategory.allCases) { category in
                         Toggle(category.title + "（\(count(category, in: value)) 项）", isOn: Binding(get: { selected.contains(category) }, set: {
@@ -104,7 +104,7 @@ struct LocalBackupSettingsView: View {
                 }
             }
         } cancelled: { status = "已取消文件选择" }
-        .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "Yingxia-iOS-backup-" + Date().formatted(.iso8601.year().month().day().dateSeparator(.dash))) { result in
+        .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "映匣备份-" + Date().formatted(.iso8601.year().month().day().dateSeparator(.dash))) { result in
             switch result { case .success: status = "备份已导出"; case .failure(let error): status = error.localizedDescription }
             document = nil
         }

@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "Yingxia Compare";
-"CFBundleName" = "Yingxia Compare";
-"NSLocalNetworkUsageDescription" = "Connect to the local media and subscription services you configure, and find Yingxia on your other devices.";
-"NSPhotoLibraryAddUsageDescription" = "Saves the sign-in codes or video screenshots you choose to Photos.";
+"CFBundleDisplayName" = "映匣";
+"CFBundleName" = "映匣";
+"NSLocalNetworkUsageDescription" = "Connect to your media servers and subscription services on the local network, and discover other devices running 映匣.";
+"NSPhotoLibraryAddUsageDescription" = "Save login QR codes and video screenshots to your photo library when you choose to save them.";

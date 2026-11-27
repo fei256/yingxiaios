@@ -11,7 +11,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Yingxia Compare</string>
+	<string>映匣</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -26,7 +26,7 @@
 		<string>ja</string>
 	</array>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>映匣</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -58,9 +58,9 @@
 		<string>_yingxia._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to the local media and subscription services you configure, and find Yingxia on your other devices.</string>
+	<string>Connect to your media servers and subscription services on the local network, and discover other devices running 映匣.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Saves the sign-in codes or video screenshots you choose to Photos.</string>
+	<string>Save login QR codes and video screenshots to your photo library when you choose to save them.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

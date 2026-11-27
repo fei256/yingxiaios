@@ -1,4 +1,4 @@
-"CFBundleDisplayName" = "映匣对比版";
-"CFBundleName" = "映匣对比版";
-"NSLocalNetworkUsageDescription" = "连接你配置的局域网媒体和订阅服务，并找到你其他设备上的映匣。";
-"NSPhotoLibraryAddUsageDescription" = "将您选择的登录二维码或视频截图保存到照片。";
+"CFBundleDisplayName" = "映匣";
+"CFBundleName" = "映匣";
+"NSLocalNetworkUsageDescription" = "连接局域网内的媒体与订阅服务，并发现运行映匣的其他设备。";
+"NSPhotoLibraryAddUsageDescription" = "将你选择的登录二维码或视频截图存入相册。";
