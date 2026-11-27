@@ -48,7 +48,8 @@ import TVCore
         remote = []; segments = []; status = ""; notice = nil; pendingAction = nil; panelRequested = false; channel = nil; lookup = TMDBLookup()
         pass = RemoteEpisodeSkipPass(); attempts = 0; retryAt = .distantPast
     }
-    func requestMatch() { panelRequested = true }
+    var matching: Bool { task != nil }
+    func requestMatch(_ visible: Bool = true) { panelRequested = visible }
     func settingsChanged() {
         generation = UUID(); task?.cancel(); task = nil; input = nil
         pendingAction = nil

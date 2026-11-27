@@ -122,7 +122,7 @@ struct MusicView: View {
                 if active { loadNextPage(search) }
                 // Retained tabs keep the same measured tail. Its visibility
                 // callback need not fire again when only tab opacity changes.
-                else { nextPageTask?.cancel() }
+                else { nextPageTask?.cancel(); autoPlayQuery = nil }
             }
             #endif
             .onDisappear { nextPageTask?.cancel(); nextPageTask = nil; searchEndVisible = false }
@@ -180,7 +180,7 @@ struct MusicView: View {
 
     private func playDirectHitIfReady() {
         let search = store.musicSearch
-        guard let wanted = autoPlayQuery, wanted == search.query, !search.busy,
+        guard paginationActive, store.playing == nil, let wanted = autoPlayQuery, wanted == search.query, !search.busy,
               search.kind == .songs || search.kind == .top, search.filter.isEmpty else { return }
         autoPlayQuery = nil
         let hit = search.directHit

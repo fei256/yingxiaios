@@ -93,6 +93,7 @@ import UniformTypeIdentifiers
         loadOffered(Array(wanted))
     }
 
+    private(set) var fetchingOffered = false
     private func loadOffered(_ wanted: [ExternalSubtitle]) {
         guard !wanted.isEmpty else { return }
         let active = generation, headers = headers
@@ -102,6 +103,8 @@ import UniformTypeIdentifiers
         loading = Task { [weak self] in
             do { try await self?.waitForAutomaticLoad?() } catch { return }
             guard self?.generation == active, !Task.isCancelled else { return }
+            self?.fetchingOffered = true
+            defer { if self?.generation == active { self?.fetchingOffered = false } }
             await withTaskGroup(of: (String, UUID, Result<SubtitleDocument, Error>).self) { group in
                 var queued = wanted[...], running = 0
                 func next() {
@@ -147,7 +150,7 @@ import UniformTypeIdentifiers
     /// The playback session owns same-work reopens; an engine input ID changes even
     /// when its current episode and subtitle intent stay the same.
     func prepareForReopen() {
-        generation = UUID(); intentRevision = UUID()
+        fetchingOffered = false; generation = UUID(); intentRevision = UUID()
         loading?.cancel(); loading = nil
         retries.values.forEach { $0.cancel() }; retries = [:]; requestIDs = [:]
         cues?.show(nil, timing: timing, at: nil)
@@ -186,7 +189,7 @@ import UniformTypeIdentifiers
 
     /// Puts everything away: the episode ended or another began.
     func stop() {
-        generation = UUID(); intentRevision = UUID()
+        fetchingOffered = false; generation = UUID(); intentRevision = UUID()
         loading?.cancel(); loading = nil
         retries.values.forEach { $0.cancel() }; retries = [:]; requestIDs = [:]
         #if os(iOS)

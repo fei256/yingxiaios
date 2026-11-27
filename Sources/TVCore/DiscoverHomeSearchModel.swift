@@ -20,9 +20,19 @@ import Perception
     }
 
     public static func search(_ query: String) async throws -> [TMDBCatalog.Item] {
-        async let movies = TMDBCatalog.search(query: query, kind: .movie)
-        async let series = TMDBCatalog.search(query: query, kind: .tv)
-        let pages = try await [movies, series]
+        var pages: [TMDBCatalog.SearchKind: TMDBCatalog.SearchPage] = [:]
+        var failure: Error?
+        await fetch(query, kinds: [.movie, .tv]) { kind, response in
+            switch response {
+            case .success(let page): pages[kind] = page
+            case .failure(let error): failure = error
+            }
+        }
+        try Task.checkCancellation()
+        if pages.isEmpty, let failure { throw failure }
+        return merged([.movie, .tv].compactMap { pages[$0] }, query: query)
+    }
+    private static func merged(_ pages: [TMDBCatalog.SearchPage], query: String) -> [TMDBCatalog.Item] {
         // Keep each provider's relevance order while mixing movies and series; exact titles come first.
         var values: [TMDBCatalog.Item] = [], seen = Set<String>()
         for index in 0..<(pages.map { $0.items.count }.max() ?? 0) {
@@ -33,6 +43,24 @@ import Perception
         }
         return Array((values.filter { $0.name.localizedCaseInsensitiveCompare(query) == .orderedSame }
             + values.filter { $0.name.localizedCaseInsensitiveCompare(query) != .orderedSame }).prefix(30))
+    }
+
+    private typealias PageAnswer = Result<TMDBCatalog.SearchPage, Error>
+    private static func fetch(_ query: String, kinds: [TMDBCatalog.SearchKind],
+                              receive: (TMDBCatalog.SearchKind, PageAnswer) -> Void) async {
+        typealias Answer = (TMDBCatalog.SearchKind, PageAnswer)
+        await withTaskGroup(of: Answer.self) { group in
+            for kind in kinds {
+                group.addTask {
+                    do { return (kind, .success(try await TMDBCatalog.search(query: query, kind: kind))) }
+                    catch { return (kind, .failure(error)) }
+                }
+            }
+            for await (kind, result) in group {
+                guard !Task.isCancelled else { group.cancelAll(); return }
+                receive(kind, result)
+            }
+        }
     }
 
     public func suggest(_ query: String, using read: @escaping @Sendable (String) async throws -> [TMDBCatalog.Item] = DiscoverHomeSearchModel.search) async {
@@ -52,7 +80,33 @@ import Perception
         if own == suggestionGeneration { suggesting = false }
     }
 
-    public func submit(_ query: String, using read: @escaping @Sendable (String) async throws -> [TMDBCatalog.Item] = DiscoverHomeSearchModel.search) async {
+    private var partialPages: [TMDBCatalog.SearchKind: TMDBCatalog.SearchPage] = [:]
+    public func submit(_ query: String) async {
+        let value = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
+        guard !value.isEmpty else { return }
+        let retry = submittedQuery == value && error != nil
+        if !retry { partialPages = [:] }
+        generation += 1; suggestionGeneration += 1
+        let own = generation
+        submittedQuery = value; suggestions = []; suggesting = false; loading = true; error = nil
+        if !retry { items = [] }
+        history.removeAll { $0.caseInsensitiveCompare(value) == .orderedSame }
+        history.insert(value, at: 0); history = Array(history.prefix(10)); saveHistory()
+        defer { if own == generation { loading = false } }
+        let kinds: [TMDBCatalog.SearchKind] = [.movie, .tv]
+        await Self.fetch(value, kinds: kinds.filter { partialPages[$0] == nil }) { kind, response in
+            guard own == generation, !Task.isCancelled else { return }
+            switch response {
+            case .success(let page):
+                partialPages[kind] = page
+                items = Self.merged(kinds.compactMap { partialPages[$0] }, query: value)
+            case .failure(let failure):
+                error = (kind == .movie ? "电影" : "剧集") + "搜索失败：" + failure.localizedDescription
+            }
+        }
+    }
+
+    public func submit(_ query: String, using read: @escaping @Sendable (String) async throws -> [TMDBCatalog.Item]) async {
         let value = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))
         guard !value.isEmpty else { return }
         generation += 1; suggestionGeneration += 1

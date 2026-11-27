@@ -155,9 +155,18 @@ struct CatPawSignInView: View {
             var signIn = try await CatPawSignIn.start(provider, client: client)
             started = signIn
             self.signIn = signIn
-            while true {
+            let deadline = ContinuousClock.now.advanced(by: .seconds(180))
+            var failures = 0
+            while ContinuousClock.now < deadline {
                 try await Task.sleep(for: .seconds(2))
-                try await signIn.poll()
+                do {
+                    try await signIn.poll()
+                    try Task.checkCancellation()
+                    failures = 0
+                } catch let error as URLError where error.code != .cancelled && failures < 3 {
+                    failures += 1
+                    continue
+                }
                 switch signIn.status {
                 case .waiting: continue
                 case .expired: expired = true; return
@@ -169,11 +178,14 @@ struct CatPawSignInView: View {
                     return
                 }
             }
+            expired = true
+            await signIn.cancel()
         } catch is CancellationError {
             // Closed or restarted: the bundle drops the code.
             if let started { Task { await started.cancel() } }
         } catch {
-            self.error = error.localizedDescription
+            if let started { await started.cancel() }
+            if !Task.isCancelled { self.error = error.localizedDescription }
         }
     }
 }

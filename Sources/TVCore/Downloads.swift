@@ -11,13 +11,24 @@ public struct DownloadSource: Codable, Hashable, Sendable {
     public let address: String
     public let flag: String
     public let detailID: String?
-    public init(site: Site, videoID: String, episode: Episode) {
+    public let origin: URL?
+    public let originalSiteKey: String?
+    public let historyScope: String?
+
+    public init(site: Site, videoID: String, episode: Episode, origin: URL, historyScope: String?) {
+        self.origin = site.origin(or: origin)
+        originalSiteKey = site.sourceKey
+        self.historyScope = historyScope ?? ""
         siteKey = site.key; siteName = site.name; self.videoID = videoID
         episodeID = episode.id; episodeName = episode.name; address = episode.address; flag = episode.flag; detailID = episode.videoID
     }
     public var episode: Episode { Episode(id: episodeID, name: episodeName, address: address, flag: flag, videoID: detailID) }
     /// The same episode, on the same source and line.
-    public var key: String { [siteKey, videoID, flag, episodeID].joined(separator: "\u{1F}") }
+    public var showKey: String {
+        guard let origin, let originalSiteKey else { return "legacy|" + siteKey + "|" + videoID }
+        return EpisodeSkipSettings.scope(origin: PlaybackHistoryContext.sourceIdentity(origin), source: originalSiteKey, video: videoID)
+    }
+    public var key: String { [showKey, flag, episodeID].joined(separator: "\u{1F}") }
 }
 
 public struct DownloadItem: Codable, Identifiable, Hashable, Sendable {
@@ -105,6 +116,7 @@ public struct DownloadItem: Codable, Identifiable, Hashable, Sendable {
     @PerceptionIgnored private var running: [String: (run: UUID, task: Task<Void, Never>, meter: DownloadMeter)] = [:]
     @PerceptionIgnored private var samples: [String: (date: Date, bytes: Int64)] = [:]
     @PerceptionIgnored private var ticker: Task<Void, Never>?
+    @PerceptionIgnored private let indexWriter = DispatchQueue(label: "yingxia.download-index", qos: .utility)
     @PerceptionIgnored private var savedAt = Date.distantPast
 
     public init(root: URL = DownloadLibrary.defaultRoot, defaults: UserDefaults = .standard) {
@@ -144,15 +156,22 @@ public struct DownloadItem: Codable, Identifiable, Hashable, Sendable {
     /// a failed one is retried. Returns the episode's download.
     @discardableResult
     public func download(_ source: DownloadSource, title: String, poster: URL?, posterHeaders: [String: String] = [:]) -> DownloadItem {
+        let item = enqueue(source, title: title, poster: poster, posterHeaders: posterHeaders)
+        save(); schedule()
+        return item
+    }
+    public func download(_ sources: [DownloadSource], title: String, poster: URL?, posterHeaders: [String: String]) {
+        for source in sources { _ = enqueue(source, title: title, poster: poster, posterHeaders: posterHeaders) }
+        save(); schedule()
+    }
+    private func enqueue(_ source: DownloadSource, title: String, poster: URL?, posterHeaders: [String: String]) -> DownloadItem {
         if let existing = item(for: source) {
-            if existing.status == .failed || existing.status == .paused { resume(existing.id) }
+            if existing.status == .failed || existing.status == .paused { update(existing.id) { $0.status = .queued; $0.failure = nil } }
             return existing
         }
         let item = DownloadItem(id: UUID().uuidString.lowercased(), title: title, episode: source.episodeName, poster: poster,
                                 posterHeaders: posterHeaders, source: source, created: Date())
         items.append(item)
-        save()
-        schedule()
         return item
     }
 
@@ -193,6 +212,7 @@ public struct DownloadItem: Codable, Identifiable, Hashable, Sendable {
 
     public func pauseAll() {
         for item in items where item.status == .queued || item.isActive { stop(item.id); update(item.id) { $0.status = .paused } }
+        ticker?.cancel(); ticker = nil
         save()
     }
 
@@ -205,6 +225,7 @@ public struct DownloadItem: Codable, Identifiable, Hashable, Sendable {
     /// they continue from where they were on `wake()`.
     public func suspend() {
         for id in running.keys { stop(id); update(id) { $0.status = .queued } }
+        ticker?.cancel(); ticker = nil
         save()
     }
     public func wake() { schedule() }
@@ -220,7 +241,7 @@ public struct DownloadItem: Codable, Identifiable, Hashable, Sendable {
         else if ticker == nil {
             ticker = Task { [weak self] in
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(1))
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
                     self?.tick()
                 }
             }
@@ -240,7 +261,7 @@ public struct DownloadItem: Codable, Identifiable, Hashable, Sendable {
         let task = Task { [weak self] in
             do {
                 let media = try await transfer.run()
-                let size = Self.allocatedSize(folder)
+                let size = await Task.detached(priority: .utility) { Self.allocatedSize(folder) }.value
                 self?.finish(id, run: run) { $0.status = .completed; $0.media = media; $0.size = size; $0.finished = Date(); $0.received = size }
             } catch {
                 if Task.isCancelled || error is CancellationError { return }
@@ -448,9 +469,13 @@ public struct DownloadItem: Codable, Identifiable, Hashable, Sendable {
 
     private func save() {
         savedAt = Date()
-        guard let data = try? JSONEncoder().encode(items) else { return }
-        // The folder itself may have been deleted in Finder.
-        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try? data.write(to: index, options: .atomic)
+        let snapshot = items, destination = index
+        indexWriter.async {
+            do {
+                let data = try JSONEncoder().encode(snapshot)
+                try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: destination, options: .atomic)
+            } catch { Diagnostics.shared.failure("download", "save queue", error) }
+        }
     }
 }

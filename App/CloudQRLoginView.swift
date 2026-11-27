@@ -144,17 +144,19 @@ struct CloudQRLoginView: View {
                 case .waiting: continue
                 case .expired: expired = true; return
                 case .signedIn(let credentials):
-                    var accounts = (try? CloudDriveAccounts.load()) ?? CloudDriveAccounts()
-                    switch drive {
-                    case .quark:
-                        accounts.quarkCookie = credentials.cookie
-                        accounts.quarkServiceTicket = credentials.serviceTicket
-                    case .uc: accounts.ucCookie = credentials.cookie
-                    case .baidu: accounts.baiduCookie = credentials.cookie
-                    case .aliyun: accounts.token = credentials.refreshToken ?? ""
-                    case .pan115: accounts.pan115Cookie = credentials.cookie
+                    try Task.checkCancellation()
+                    try CloudDriveAccounts.update { accounts in
+                        switch drive {
+                        case .quark:
+                            accounts.quarkCookie = credentials.cookie
+                            accounts.quarkServiceTicket = credentials.serviceTicket
+                        case .uc: accounts.ucCookie = credentials.cookie
+                        case .baidu: accounts.baiduCookie = credentials.cookie
+                        case .aliyun: accounts.token = credentials.refreshToken ?? ""
+                        case .pan115: accounts.pan115Cookie = credentials.cookie
+                        }
+                        return true
                     }
-                    try accounts.save()
                     dismiss()
                     signedIn()
                     return

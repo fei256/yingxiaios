@@ -44,9 +44,9 @@ struct JournalTrackedWork: Identifiable, Sendable {
         }
         return order.map { Self(id: $0, entries: groups[$0] ?? [], saved: nil, scope: groups[$0]?.first?.context.libraryScope) }
     }
-    static func favorite(_ saved: FavoriteVideo, history: [Self], scope: String?) -> Self {
+    static func favorite(_ saved: FavoriteVideo, indexed: [String: Self], scope: String?) -> Self {
         let key = catalogKey(origin: saved.origin, source: saved.sourceKey, video: saved.videoID)
-        return Self(id: key, entries: history.first { $0.catalogKey == key }?.entries ?? [], saved: saved, scope: scope)
+        return Self(id: key, entries: indexed[key]?.entries ?? [], saved: saved, scope: scope)
     }
 }
 

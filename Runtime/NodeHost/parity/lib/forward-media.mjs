@@ -57,7 +57,7 @@ export class ForwardMediaReader {
 
   async produce() {
     let iterator = this.upstream.response.body?.[Symbol.asyncIterator]();
-    let position = this.meta.start, node, retries = 0;
+    let position = this.meta.start, inputEnd = this.meta.end, node, retries = 0;
     const closeInput = async () => {
       this.upstream.controller.abort();
       await iterator?.return?.().catch(() => {});
@@ -73,10 +73,10 @@ export class ForwardMediaReader {
           let next;
           try { next = await iterator.next(); } finally { clearTimeout(timer); }
           this.signal.throwIfAborted();
-          if (next.done) throw new Error('truncated media response');
+          if (next.done) throw new Error(position === inputEnd + 1 ? 'range complete' : 'truncated media response');
           const bytes = Buffer.from(next.value);
           this.owner.networkBytes += bytes.length;
-          if (position + bytes.length > this.meta.end + 1) throw new Error('invalid media length');
+          if (position + bytes.length > inputEnd + 1) throw new Error('invalid media length');
           let offset = 0;
           while (offset < bytes.length) {
             this.signal.throwIfAborted();
@@ -89,18 +89,21 @@ export class ForwardMediaReader {
         } catch (error) {
           this.signal.throwIfAborted();
           if (!this.meta.validator || position <= this.meta.start || position > this.meta.end
-            || retries++ >= 2 || error.message === 'invalid media length') throw error;
+            || error.message === 'invalid media length') throw error;
+          const capped = position === inputEnd + 1;
+          if (!capped && ++retries > 2) throw error;
           // A healthy forward queue must survive an idle/reset connection before
           // the decoder reaches its tail. Join only an If-Range validated entity.
           await closeInput();
-          await delay(250 * retries, undefined, { signal: this.signal });
+          if (!capped) await delay(250 * retries, undefined, { signal: this.signal });
           this.upstream = await this.cache.open(this.resource, 'GET',
             `bytes=${position}-${this.meta.end}`, this.meta.validator, this.signal);
           iterator = this.upstream.response.body?.[Symbol.asyncIterator]();
           const resumed = this.cache.accept(this.resource, this.upstream.response);
           if (this.upstream.response.status !== 206 || !resumed || resumed.start !== position
-            || resumed.end !== this.meta.end || resumed.validator !== this.meta.validator)
+            || resumed.end < position || resumed.end > this.meta.end || resumed.total !== this.meta.total || resumed.validator !== this.meta.validator)
             throw new Error('upstream rejected resumed media range');
+          inputEnd = resumed.end;
         }
       }
     } finally {

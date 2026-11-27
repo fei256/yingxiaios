@@ -345,7 +345,7 @@ struct CompactEpisodeSkipPanel: View {
                 }
                 if let issue { Text(issue).font(.caption).foregroundStyle(.orange) }
                 Text("手动记录优先，复位后采用章节或远程匹配；片尾按剩余时长保存到当前剧集系列。").font(.caption).foregroundStyle(.secondary)
-            }.font(.system(size: 12)).onAppear { session.remoteSkip.requestMatch() }
+            }.font(.system(size: 12)).onAppear { session.remoteSkip.requestMatch() }.onDisappear { session.remoteSkip.requestMatch(false) }
         }
     }
     private func skipRow(opening: Bool) -> some View {

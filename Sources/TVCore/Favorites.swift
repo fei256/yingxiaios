@@ -122,9 +122,9 @@ public enum FavoriteItem: Codable, Hashable, Sendable, Identifiable {
             if LiveCatalog.isRoomAddress(channel.url) { return "live|" + channel.url.absoluteString }
             return "live|" + channel.id
         case .video(let video):
-            return "video|" + EpisodeSkipSettings.scope(origin: video.origin, source: video.sourceKey, video: video.videoID)
+            return "video|" + EpisodeSkipSettings.scope(origin: PlaybackHistoryContext.sourceIdentity(video.origin), source: video.sourceKey, video: video.videoID)
         case .episode(let episode):
-            let videoKey = EpisodeSkipSettings.scope(origin: episode.video.origin, source: episode.video.sourceKey, video: episode.video.videoID)
+            let videoKey = EpisodeSkipSettings.scope(origin: PlaybackHistoryContext.sourceIdentity(episode.video.origin), source: episode.video.sourceKey, video: episode.video.videoID)
             return "episode|" + videoKey + "|" + episode.episodeFlag + "|" + episode.episodeName
         case .music(let track):
             return "music|" + track.id

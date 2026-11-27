@@ -78,6 +78,8 @@ player_validation = json.loads((out / 'player-validation.json').read_text())
 assert not player_validation['errors'], player_validation['errors']
 info = plistlib.loads((app / 'Info.plist').read_bytes())
 assert str(info['CFBundleVersion']) == str(config['build_number']), info['CFBundleVersion']
+assert info['CFBundleIdentifier'] == 'com.jo32.yingxia.ios.compare', info['CFBundleIdentifier']
+assert info['CFBundleShortVersionString'] == '1.8.14', info['CFBundleShortVersionString']
 assert info['MinimumOSVersion'] == '16.1', info['MinimumOSVersion']
 signing = subprocess.run(['codesign', '-dv', str(app)], text=True, capture_output=True)
 (out / 'codesign-check.log').write_text(signing.stdout + signing.stderr)
@@ -105,7 +107,7 @@ payload = stage / 'Payload'
 payload.mkdir(parents=True, exist_ok=False)
 shutil.copytree(app, payload / app.name, symlinks=True)
 build_label = str(info['CFBundleVersion']).zfill(2)
-ipa = out / f"Yingxia-{info['CFBundleShortVersionString']}-build{build_label}-iOS16.1-NoJava-unsigned.ipa"
+ipa = out / f"Yingxia-Compare-{info['CFBundleShortVersionString']}-build{build_label}-iOS16.1-NoJava-unsigned.ipa"
 assert not ipa.exists(), ipa
 write_payload_zip(payload, ipa)
 with zipfile.ZipFile(ipa) as z:

@@ -78,7 +78,7 @@ public struct DouyinAccount: Codable, Equatable, Sendable {
 /// iPhone's camera opens the app, which sends the account sealed with that one-time key
 /// (AES-GCM), so nothing readable crosses the network and only the code's holder can send.
 public enum DouyinHandoff {
-    public static let scheme = "yingxia"
+    public static var scheme: String { SubscriptionImportLink.scheme }
     public static let action = "douyin-login"
 
     /// A TV's handoff address, as its code carries it.

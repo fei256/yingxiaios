@@ -67,7 +67,7 @@ public struct LocalBackupArchive: Codable, Sendable {
             && path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { !$0.isEmpty && $0 != "." && $0 != ".." }
     }
     public static func isAllowedSetting(_ key: String) -> Bool {
-        let names: Set<String> = ["local.appearance", "local.home.defaultDestination", "local.home.continueWatching",
+        let names: Set<String> = ["showsPlaybackInfo", "downloadsSimultaneous", SubscriptionUpdateFrequency.enabledKey, SubscriptionUpdateFrequency.frequencyKey, "local.appearance", "local.home.defaultDestination", "local.home.continueWatching",
             "local.library.historyLayout", "local.library.favoritesLayout", "local.videoCache.enabled", "local.videoCache.sizeGB",
             "local.playback.prefetchNext", "local.hlsAdClean", "autoPlayNextEpisode", "subtitleStyle",
             "danmakuEnabled", "danmakuAutoMatch", "danmakuBuiltinEnabled", "danmakuFontSize", "danmakuOpacity", "danmakuArea",

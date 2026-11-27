@@ -34,7 +34,7 @@ import TVCore
         }
     }
 
-    func load(refresh: Bool = false, now: Date = Date()) async {
+    func load(sections: Set<DiscoverSection>, refresh: Bool = false, now: Date = Date()) async {
         guard !Task.isCancelled else { return }
         let identity = TMDBServiceSettings.identity + "|" + TMDBMatch.language
         let changedService = identity != serviceIdentity
@@ -50,8 +50,11 @@ import TVCore
         // Each Home activation checks the carousel without clearing the visible snapshot.
         // Unrelated shelves retain their normal lifetime; overlapping activations coalesce above.
         let carousel: Set<TMDBCatalog.Feed> = [.featured, .trending]
-        let pending = Self.feeds.filter { refresh || carousel.contains($0) || pages[$0] == nil || expired.contains($0) }
-        guard !pending.isEmpty || collections == nil || collectionsFailed else { return }
+        let wanted = sections.reduce(into: Set<TMDBCatalog.Feed>()) { $0.formUnion($1.feeds) }
+        let pending = Self.feeds.filter { wanted.contains($0) && (refresh || carousel.contains($0) || pages[$0] == nil || expired.contains($0)) }
+        let needsMetadata = !sections.isDisjoint(with: [.people, .networks, .companies])
+        let needsAnime = sections.contains(.airingAnime), needsSeries = sections.contains(.airingSeries)
+        guard !pending.isEmpty || needsMetadata || needsAnime || needsSeries else { return }
         loadTask?.cancel()
         let generation = UUID()
         loadGeneration = generation
@@ -61,16 +64,19 @@ import TVCore
             defer { if loadGeneration == generation { loading = false; carouselLoading = false } }
             var received: [TMDBCatalog.Feed: TMDBCatalog.Page] = [:]
             var answered = Set<TMDBCatalog.Feed>()
-            async let metadata = try? TMDBCatalog.collections()
-            async let anime = try? TMDBCalendar.week(.anime)
-            async let series = try? TMDBCalendar.week(.tv)
+            async let metadata = needsMetadata ? (try? TMDBCatalog.collections()) : nil
+            async let anime = needsAnime ? (try? TMDBCalendar.week(.anime)) : nil
+            async let series = needsSeries ? (try? TMDBCalendar.week(.tv)) : nil
             await withTaskGroup(of: (TMDBCatalog.Feed, TMDBCatalog.Page?).self) { group in
-                for feed in pending {
+                var remaining = pending.makeIterator()
+                func enqueue(_ feed: TMDBCatalog.Feed) {
                     let reload = refresh || carousel.contains(feed) || (refreshedAt[feed] != nil && expired.contains(feed))
                     group.addTask { (feed, try? await TMDBCatalog.page(feed, refresh: reload)) }
                 }
+                for _ in 0..<3 { if let feed = remaining.next() { enqueue(feed) } }
                 for await (feed, page) in group {
                     guard !Task.isCancelled, loadGeneration == generation else { group.cancelAll(); continue }
+                    if let next = remaining.next() { enqueue(next) }
                     answered.insert(feed)
                     if carousel.isSubset(of: answered) { carouselLoading = false }
                     if let page {
@@ -112,7 +118,7 @@ import TVCore
             }
             if !Task.isCancelled, loadGeneration == generation {
                 if let fresh { collections = fresh; collectionsFailed = false }
-                else { collectionsFailed = true }
+                else { collectionsFailed = needsMetadata }
             }
         }
         loadTask = task
@@ -207,7 +213,7 @@ struct DiscoverView: View {
                                         if !heroShown { LocalContinueWatching() }
                                         #endif
                                         if !model.failures.isEmpty || model.collectionsFailed {
-                                            Button { Task { await model.load() } } label: {
+                                            Button { Task { await model.load(sections: visibleSections) } } label: {
                                                 Label(L10n.text("Some lists couldn't load. Try again."), systemImage: "arrow.clockwise")
                                                     #if !os(tvOS)
                                                     .font(.subheadline).frame(maxWidth: .infinity).padding()
@@ -223,7 +229,7 @@ struct DiscoverView: View {
                                         if !model.loading, model.pages.values.allSatisfy({ $0.items.isEmpty }) {
                                             EmptyResults(symbol: "film", title: L10n.text("No Titles Available"), message: L10n.text("Please try again later."),
                                                          // The failure row above already offers a retry.
-                                                         action: model.failures.isEmpty && !model.collectionsFailed ? L10n.text("Try Again") : nil) { Task { await model.load() } }
+                                                         action: model.failures.isEmpty && !model.collectionsFailed ? L10n.text("Try Again") : nil) { Task { await model.load(sections: visibleSections) } }
                                         }
                                         Button { editing = true } label: {
                                             Label(L10n.text("Edit Layout"), systemImage: "slider.horizontal.3")
@@ -267,9 +273,9 @@ struct DiscoverView: View {
                         .refreshable {
                             if doubanShown {
                                 async let douban: Void = model.loadDouban(refresh: true)
-                                await model.load(refresh: true)
+                                await model.load(sections: visibleSections, refresh: true)
                                 await douban
-                            } else { await model.load(refresh: true) }
+                            } else { await model.load(sections: visibleSections, refresh: true) }
                         }
                     }
                 }
@@ -341,11 +347,11 @@ struct DiscoverView: View {
             #endif
             .onAppear { onScreen = true }
             .onReceive(NotificationCenter.default.publisher(for: TMDBServiceSettings.changed)) { _ in
-                Task { await model.load(refresh: true) }
+                Task { await model.load(sections: visibleSections, refresh: true) }
             }
             .onDisappear { onScreen = false }
             .task(id: model.featured) { _ = heroState.prepare(model.featured) }
-            .task(id: catalogActive) { if catalogActive { await model.load() } }
+            .task(id: String(catalogActive) + visibleSections.map(\.rawValue).sorted().joined(separator: "|")) { if catalogActive { await model.load(sections: visibleSections) } }
             .task(id: doubanShown) { if doubanShown { await model.loadDouban() } }
             .sheet(isPresented: $editing) {
                 WithPerceptionTracking {
@@ -378,6 +384,7 @@ struct DiscoverView: View {
         #endif
     }
 
+    private var visibleSections: Set<DiscoverSection> { Set(DiscoverSection.allCases.filter(visible)) }
     private var catalogActive: Bool {
         #if os(iOS)
         onScreen && localPageActive && scenePhase == .active
@@ -1921,6 +1928,22 @@ private extension TMDBCatalog.Feed {
 
 
 private enum DiscoverSection: String, CaseIterable, Identifiable {
+    var feeds: [TMDBCatalog.Feed] {
+        switch self {
+        case .hero: [.featured, .trending]
+        case .nowPlaying: [.nowPlaying]
+        case .onTheAir: [.onTheAir]
+        case .trending: [.trending]
+        case .collections: [.variety, .chinese]
+        case .animation: [.animation]
+        case .genres: [.family, .animation, .kids]
+        case .rankings: [.topTelevision, .topMovies]
+        case .networks: [.netflix, .disney, .appleTV, .hbo]
+        case .companies: [.warner, .universal, .paramount, .sony]
+        case .airingAnime, .airingSeries, .douban, .people: []
+        }
+    }
+
     case hero, airingAnime, airingSeries, douban, nowPlaying, onTheAir, trending, collections, animation, people, networks, genres, rankings, companies
     var id: String { rawValue }
     var title: String {

@@ -69,6 +69,11 @@ private func cancelled<T>(_ result: Result<T, Error>) -> Bool {
             startup.observe(ready: true, now: 200)
             try require(!startup.allows(.danmaku, now: 203) && startup.allows(.danmaku, now: 204),
                         "Newly recovered picture did not get a fresh stable interval")
+            startup.endRequest(.subtitles)
+            startup.observeProgress(ready: true, mediaTime: 1, now: 205, stallTolerance: 1)
+            startup.observeProgress(ready: true, mediaTime: 1.1, now: 205.1, stallTolerance: 1)
+            startup.observeProgress(ready: true, mediaTime: 1.1, now: 207, stallTolerance: 1)
+            try require(!startup.allows(.subtitles, now: 207), "A frozen picture retained its priority")
             startup = PlaybackStartupWork()
             try require(kinds.allSatisfy { !startup.allows($0, now: 300) }, "New episode inherited user priority")
             record("automatic subtitles, intro matching and comments yield to startup and buffering")

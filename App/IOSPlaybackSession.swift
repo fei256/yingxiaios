@@ -433,12 +433,16 @@ private final class AudioServiceObservation: @unchecked Sendable {
     }
     func prioritizeStartupWork(_ kind: PlaybackStartupWork.Kind) { startupWork.request(kind) }
 
+    func endStartupPriority(_ kind: PlaybackStartupWork.Kind) { startupWork.endRequest(kind) }
+
     private func waitForStartupWork(_ kind: PlaybackStartupWork.Kind) async throws {
         let episode = sourceDanmakuGeneration
         while true {
             try Task.checkCancellation()
             guard sourceDanmakuGeneration == episode else { throw CancellationError() }
-            if isLive || startupWork.allows(kind, now: ProcessInfo.processInfo.systemUptime) { return }
+            if isLive || startupWork.isRequested(kind) { return }
+            let competing = kind == .danmaku && (externalSubtitles.fetchingOffered || remoteSkip.matching)
+            if !competing && startupWork.allows(kind, now: ProcessInfo.processInfo.systemUptime) { return }
             try await Task.sleep(for: .milliseconds(250))
         }
     }
@@ -446,7 +450,14 @@ private final class AudioServiceObservation: @unchecked Sendable {
     private func updatePictureState() {
         let ready = recovery == nil && error == nil && engine.isReady && engine.hasPicture &&
             !engine.buffering && !engine.seeking && !restoringPosition && pendingResume == nil
-        startupWork.observe(ready: ready, now: ProcessInfo.processInfo.systemUptime)
+        let speed = max(0.1, Double(engine.speed))
+        let remaining = duration > 0 ? max(0, duration - position) : 2 * speed
+        let headroom = engine.bufferedPosition - position
+        let local = currentPrepared?.url.isFileURL == true
+        let fps = engine.playbackInfo.frameRate ?? 24
+        startupWork.observeProgress(ready: ready && !paused && (local || headroom >= min(remaining, 1.5 * speed)),
+            mediaTime: engine.startupMediaTime, now: ProcessInfo.processInfo.systemUptime,
+            stallTolerance: max(0.75, 2 / max(0.1, fps * speed)))
         guard recovery == nil else { return }
         buffering = engine.buffering
         guard engine.isReady, !restoringPosition, pendingResume == nil else { return }
@@ -513,7 +524,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
                 }
                 self.remoteSkip.tick(settings: self.skipSettings, duration: self.duration, chapters: self.engine.chapters,
                                      sessionID: self.mediaEnhancements.sessionID, ready: self.mediaEnhancements.serviceReady,
-                                     allowAutomatic: self.startupWork.allows(.remoteSkip, now: ProcessInfo.processInfo.systemUptime))
+                                     allowAutomatic: !self.externalSubtitles.fetchingOffered && self.startupWork.allows(.remoteSkip, now: ProcessInfo.processInfo.systemUptime))
                 self.updateSkipping()
                 self.queueUpcomingIfDue()
                 self.sampleWatchActivity()
@@ -955,6 +966,8 @@ private final class AudioServiceObservation: @unchecked Sendable {
         stop(); begin(channel); sourceChannel = channel
         onAdvance = advance; onPlaybackEnded = end; upcomingEpisode = resolve; playsOn = shouldPlay
         playing = channel; currentPrepared = prepared; automatic = prepared.url; activeChannelID = channel.id
+        qualities = PlaybackQualityRegistry.qualities(for: channel.url)
+        quality = PlaybackQualityRegistry.selected(for: channel.url)
         open(prepared, channel: channel)
         externalSubtitles.begin(channel, playing: prepared.url)
         mediaEnhancements.begin(channel: channel, sessionID: generation.uuidString.lowercased(), engine: engine)

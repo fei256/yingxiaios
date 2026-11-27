@@ -565,22 +565,24 @@ export class MediaCache {
   }
   async *resumableBody(resource, upstream, meta, signal) {
     let position = meta.start, current = upstream, description = meta, retries = 0;
-    const deadline = Date.now() + this.idleTimeoutMs;
     try {
-      while (true) {
+      while (position <= meta.end) {
         try {
           for await (const chunk of this.body(resource, current, description, signal)) {
             position += chunk.length; yield chunk;
           }
-          return;
+          if (position > meta.end) return;
         } catch (error) {
           signal.throwIfAborted();
-          if (!meta.validator || position <= meta.start || position > meta.end || retries++ >= 2 || Date.now() >= deadline) throw error;
-          current = await this.open(resource, 'GET', `bytes=${position}-${meta.end}`, meta.validator, signal);
-          description = this.accept(resource, current.response);
-          if (current.response.status !== 206 || !description || description.start !== position || description.end !== meta.end)
-            throw new Error('HLS media changed or rejected resumed range');
+          if (!meta.validator || position <= meta.start || position > meta.end || ++retries > 2
+            || error.message === 'invalid media length') throw error;
         }
+        if (!meta.validator) throw new Error('cannot resume unvalidated media');
+        current = await this.open(resource, 'GET', `bytes=${position}-${meta.end}`, meta.validator, signal);
+        description = this.accept(resource, current.response);
+        if (current.response.status !== 206 || !description || description.start !== position
+          || description.end < position || description.end > meta.end || description.total !== meta.total
+          || description.validator !== meta.validator) throw new Error('HLS media changed or rejected resumed range');
       }
     } finally {
       // `accept` can throw before body() installs its own cleanup. The resumed

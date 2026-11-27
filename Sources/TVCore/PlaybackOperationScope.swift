@@ -17,12 +17,30 @@ public struct PlaybackStartupWork: Sendable {
         case danmaku = 4
     }
     private var stableSince: TimeInterval?
+    private var lastMediaTime: Double?
+    private var advancedAt: TimeInterval?
     private var requested = Set<Kind>()
     public init() {}
     public mutating func observe(ready: Bool, now: TimeInterval) {
         if !ready { stableSince = nil }
         else if stableSince == nil { stableSince = now }
     }
+    public mutating func observeProgress(ready: Bool, mediaTime: Double?, now: TimeInterval, stallTolerance: Double) {
+        guard ready, let mediaTime else {
+            lastMediaTime = nil; advancedAt = nil; stableSince = nil
+            return
+        }
+        if let last = lastMediaTime {
+            if mediaTime < last || (advancedAt.map { now - $0 > stallTolerance } ?? false) {
+                advancedAt = nil; stableSince = nil
+            }
+            if mediaTime > last { advancedAt = now }
+        }
+        lastMediaTime = mediaTime
+        observe(ready: advancedAt != nil, now: now)
+    }
+    public func isRequested(_ kind: Kind) -> Bool { requested.contains(kind) }
+    public mutating func endRequest(_ kind: Kind) { requested.remove(kind) }
     public mutating func request(_ kind: Kind) { requested.insert(kind) }
     public func allows(_ kind: Kind, now: TimeInterval) -> Bool {
         if requested.contains(kind) { return true }

@@ -64,7 +64,7 @@ struct LocalPushView: View {
                 Section {
                     if model.busy { HStack { ProgressView(); Text(model.phase); Spacer(); Button("取消") { cancel() } } }
                     Button(mode == "push" ? "解析资源详情" : "打开视频") { open() }
-                        .disabled(model.busy || readingFile || (mode == "push" && sources.isEmpty))
+                        .disabled(model.busy || readingFile || (mode == "push" && sources.isEmpty) || (mode == "file" ? localFile == nil : input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
                     if let error = localError ?? model.error { Text(error).foregroundStyle(.red) }
                 }
             }
@@ -132,7 +132,8 @@ struct LocalPushView: View {
     private func open() {
         cancel()
         do {
-            let headerValues: [String: String] = headers.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [:] : try JSONDecoder().decode([String: String].self, from: Data(headers.utf8))
+            let acceptsHeaders = mode == "direct" || mode == "sniff"
+            let headerValues: [String: String] = !acceptsHeaders || headers.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [:] : try JSONDecoder().decode([String: String].self, from: Data(headers.utf8))
             let value = MediaPushRequest(input: mode == "file" ? localFile?.absoluteString ?? "" : input, title: title, headers: headerValues,
                                          metadataHint: input == initialInput && title == initialTitle ? initialHint : nil)
             if mode == "push" {

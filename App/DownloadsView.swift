@@ -95,7 +95,7 @@ struct DownloadsView: View {
                             VStack(spacing: Layout.cardSpacing) {
                                 ForEach(shows) { show in
                                     WithPerceptionTracking {
-                                        ShowPanel(show: show) { store.playing = library.channel(for: $0) } delete: { deleting = show }
+                                        ShowPanel(show: show) { store.playDownload($0) } delete: { deleting = show }
                                     }
                                 }
                             }
@@ -273,7 +273,7 @@ struct DownloadShow: Identifiable {
     var size: Int64 { items.reduce(0) { $0 + $1.size } }
     /// Most recently finished first; episodes in the order the source lists them.
     static func group(_ items: [DownloadItem]) -> [DownloadShow] {
-        let groups = Dictionary(grouping: items) { $0.source.siteKey + "\u{1F}" + $0.source.videoID }
+        let groups = Dictionary(grouping: items) { $0.source.showKey }
         return groups.map { key, items in
             let first = items[0]
             return DownloadShow(id: key, title: first.title, poster: first.poster, posterHeaders: first.posterHeaders,
@@ -714,13 +714,15 @@ struct DownloadState: View {
 struct DownloadPicker: View {
     let video: Video
     let site: Site
+    let origin: URL
+    let historyScope: String?
     let flag: String
     let episodes: [Episode]
     var added: (Int) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     @State private var selection: Set<String> = []
     private var library: DownloadLibrary { .shared }
-    private func source(_ episode: Episode) -> DownloadSource { DownloadSource(site: site, videoID: video.id, episode: episode) }
+    private func source(_ episode: Episode) -> DownloadSource { DownloadSource(site: site, videoID: video.id, episode: episode, origin: origin, historyScope: historyScope) }
     private var available: [Episode] { episodes.filter { library.item(for: source($0)).map { $0.status == .failed } ?? true } }
     #if os(macOS)
     /// The checklist's natural height, so the sheet fits a few episodes instead of a fixed, mostly empty box.
@@ -794,7 +796,7 @@ struct DownloadPicker: View {
     private var downloadButton: some View {
         Button {
             let chosen = episodes.filter { selection.contains($0.id) }
-            for episode in chosen { library.download(source(episode), title: video.name, poster: video.poster, posterHeaders: video.posterHeaders) }
+            library.download(chosen.map(source), title: video.name, poster: video.poster, posterHeaders: video.posterHeaders)
             added(chosen.count)
             dismiss()
         } label: {

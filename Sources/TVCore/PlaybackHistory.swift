@@ -248,7 +248,7 @@ extension PlaybackHistoryEntry {
         if context.poster != nil, PosterPresentation.imageURL(context.poster, excluding: [context.videoID, context.episodeID]) == nil {
             context = context.replacingPoster(nil, confirmedAt: context.posterConfirmedAt)
         }
-        if let recordingScope { context.historyScope = recordingScope }
+        if context.historyScope == nil, let recordingScope { context.historyScope = recordingScope }
         refreshPendingEntries()
         if let known = confirmedArtwork.last(where: { $0.context.id == context.id && $0.context.libraryScope == context.libraryScope }),
            context.artworkDecisionDate == nil || known.confirmedAt > (context.artworkDecisionDate ?? .distantPast) {
@@ -280,7 +280,7 @@ extension PlaybackHistoryEntry {
 
     public func recordingIdentity(for originalContext: PlaybackHistoryContext) -> String {
         var context = originalContext
-        if let recordingScope { context.historyScope = recordingScope }
+        if context.historyScope == nil, let recordingScope { context.historyScope = recordingScope }
         return context.historyIdentity
     }
 

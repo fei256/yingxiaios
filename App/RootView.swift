@@ -211,8 +211,7 @@ struct RootView: View {
                         Button("重试恢复") {
                             Task {
                                 guard await LocalBackupCoordinator.recover(store) else { return }
-                                await store.restoreSubscription()
-                                store.cloudSync?.start()
+                                await store.finishStartup(foreground: UIApplication.shared.applicationState == .active)
                             }
                         }.buttonStyle(.borderedProminent)
                     }

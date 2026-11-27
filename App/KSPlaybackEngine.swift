@@ -187,6 +187,12 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         }
         return snapshot
     }
+    var startupMediaTime: Double? {
+        guard let core else { return nil }
+        let audioOnly = videoSelection == "no" || core.tracks(mediaType: .video).isEmpty
+        let time = audioOnly ? position : core.displayedVideoTime
+        return time.isFinite && time >= 0 ? time : nil
+    }
     var seekable: Bool { core?.seekable == true }
     /// Direct picture time avoids a prefilling audio queue advancing danmaku ahead of the frame.
     var displayPosition: Double {

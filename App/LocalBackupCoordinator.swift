@@ -12,7 +12,7 @@ import TVCore
     static func snapshot(_ store: Store, portable: Bool) async throws -> LocalBackupPayload {
         let history = store.playbackHistory.entries, favorites = store.favorites.items
         let subscriptions = store.subscriptions, sourceGroups = store.localSourceGroups
-        let documents = portable ? [:] : store.documents
+        let documents = try await (portable ? [:] : store.backupDocuments())
         var settings: [String: Data] = [:]
         for (key, item) in store.backupDefaults.dictionaryRepresentation() where LocalBackupArchive.isAllowedSetting(key) {
             settings[key] = try PropertyListSerialization.data(fromPropertyList: ["value": item], format: .binary, options: 0)
@@ -226,6 +226,11 @@ import TVCore
                 let item = try PropertyListSerialization.propertyList(from: data, options: [], format: nil) as! [String: Any]
                 store.backupDefaults.set(item["value"], forKey: key)
             }
+            store.subscriptionAutoUpdateEnabled = store.backupDefaults.bool(forKey: SubscriptionUpdateFrequency.enabledKey)
+            store.subscriptionUpdateFrequency = store.backupDefaults.string(forKey: SubscriptionUpdateFrequency.frequencyKey)
+                .flatMap(SubscriptionUpdateFrequency.init(rawValue:)) ?? .automatic
+            let concurrent = store.backupDefaults.integer(forKey: "downloadsSimultaneous")
+            DownloadLibrary.shared.simultaneous = concurrent > 0 ? min(4, concurrent) : 2
             store.autoPlayNext = store.backupDefaults.object(forKey: "autoPlayNextEpisode") as? Bool ?? true
             store.backupDefaults.removeObject(forKey: "local.hiddenFeatures")
         }

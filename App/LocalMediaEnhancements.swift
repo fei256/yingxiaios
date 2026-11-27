@@ -150,6 +150,15 @@ import TVCore
             } catch { if !Task.isCancelled { self.setStatus("弹幕加载失败，可在弹幕面板重试", kind: .warning) } }
         }
     }
+    nonisolated private static func encodeComments(_ comments: [CatalogDanmakuComment]) async throws -> String {
+        let values: [JSONValue] = try comments.map { comment in
+            try Task.checkCancellation()
+            return .object(["time": .number(comment.time), "mode": .number(Double(comment.mode.rawValue)),
+                            "color": .number(Double(comment.color)), "text": .string(comment.text)])
+        }
+        return String(decoding: try JSONEncoder().encode(JSONValue.array(values)), as: UTF8.self)
+    }
+
     private func matchCatalogAutomatically() async {
         guard catalog.enabled, !catalog.selection.hasExplicitChoice else { return }
         guard catalog.automatic else { setStatus("自动匹配弹幕已关闭"); return }
@@ -159,12 +168,10 @@ import TVCore
         var failed = false
         if LocalDanmakuPreferences.builtinEnabled(), let pushed = await CatPawDanmaku.comments(for: context), !pushed.comments.isEmpty {
             guard active == generation, !Task.isCancelled, catalog.enabled, !catalog.selection.hasExplicitChoice else { return }
-            let normalized: JSONValue = .array(pushed.comments.map { comment in
-                .object(["time": .number(comment.time), "mode": .number(Double(comment.mode.rawValue)),
-                         "color": .number(Double(comment.color)), "text": .string(comment.text)])
-            })
             do {
-                let text = String(data: try JSONEncoder().encode(normalized), encoding: .utf8)!
+                let text = try await Self.encodeComments(pushed.comments)
+                try Task.checkCancellation()
+                guard active == generation, catalog.enabled, !catalog.selection.hasExplicitChoice else { return }
                 catalog.sourceSelected(); usesBuiltinSource = true
                 let count = try await prepare(["text": .string(text)], manual: false)
                 guard active == generation, !Task.isCancelled, catalog.enabled, !catalog.selection.hasExplicitChoice else { return }

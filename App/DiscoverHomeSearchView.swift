@@ -120,7 +120,7 @@ struct DiscoverHomeSearchView: View {
             if model.loading { ProgressView("正在搜索…").frame(maxWidth: .infinity).padding(30) }
             if let error = model.error {
                 Text(error).font(.subheadline).foregroundStyle(.secondary)
-                Button("重试") { submit(model.submittedQuery) }.frame(minHeight: 44)
+                Button("重试") { submit(model.submittedQuery) }.disabled(model.loading).frame(minHeight: 44)
             } else if !model.loading && model.items.isEmpty {
                 EmptyResults(symbol: "magnifyingglass", title: "暂无搜索结果", message: "试试其他电影或剧集名称。")
             }

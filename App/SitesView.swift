@@ -2488,7 +2488,7 @@ struct VideoDetailView: View {
             }
             #endif
             .downloadPicker(isPresented: $choosingDownloads) {
-                DownloadPicker(video: video, site: client.site, flag: activeFlag,
+                DownloadPicker(video: video, site: client.site, origin: client.origin, historyScope: store.historyScope, flag: activeFlag,
                                episodes: activeEpisodes) { count in
                     guard count > 0 else { return }
                     withAnimation(.appSmooth(duration: 0.2)) { queuedNotice = count }
@@ -3352,7 +3352,7 @@ struct VideoDetailView: View {
                 FavoriteMenuButton(item: episodeFavorite(episode), name: episode.name)
                 if saved == nil || saved?.status == .failed {
                     Button(L10n.text("Download"), systemImage: "arrow.down.circle") {
-                        DownloadLibrary.shared.download(DownloadSource(site: client.site, videoID: video.id, episode: episode),
+                        DownloadLibrary.shared.download(DownloadSource(site: client.site, videoID: video.id, episode: episode, origin: client.origin, historyScope: store.historyScope),
                                                         title: video.name, poster: video.poster, posterHeaders: video.posterHeaders)
                     }
                 } else if let saved {
@@ -3516,7 +3516,7 @@ struct VideoDetailView: View {
                                 FavoriteMenuButton(item: episodeFavorite(episode), name: episode.name)
                                 if saved == nil || saved?.status == .failed {
                                     Button(L10n.text("Download"), systemImage: "arrow.down.circle") {
-                                        DownloadLibrary.shared.download(DownloadSource(site: client.site, videoID: video.id, episode: episode),
+                                        DownloadLibrary.shared.download(DownloadSource(site: client.site, videoID: video.id, episode: episode, origin: client.origin, historyScope: store.historyScope),
                                                                         title: video.name, poster: video.poster, posterHeaders: video.posterHeaders)
                                     }
                                 } else if let saved {
@@ -3554,7 +3554,7 @@ struct VideoDetailView: View {
         #endif
     }
     private func download(_ episode: Episode) -> DownloadItem? {
-        DownloadLibrary.shared.item(for: DownloadSource(site: client.site, videoID: video.id, episode: episode))
+        DownloadLibrary.shared.item(for: DownloadSource(site: client.site, videoID: video.id, episode: episode, origin: client.origin, historyScope: store.historyScope))
     }
     private func play(_ episode: Episode, mode: PlaybackResumeMode = .resume) async {
         guard !busy else { return }

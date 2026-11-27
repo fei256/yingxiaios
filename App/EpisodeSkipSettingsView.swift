@@ -109,7 +109,12 @@ struct EpisodeSkipSettingsView: View {
                 intro = value.introEnd > 0 ? EpisodeSkipSettings.formatTime(value.introEnd) : ""
                 outro = value.outroLength > 0 ? EpisodeSkipSettings.formatTime(max(0, session.duration - value.outroLength)) : ""
             }
-            .onDisappear { session.endEditingSkip() }
+            .onDisappear {
+                #if os(iOS)
+                session.remoteSkip.requestMatch(false)
+                #endif
+                session.endEditingSkip()
+            }
             #if os(macOS)
             .frame(width: 500, height: 570)
             #else

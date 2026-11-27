@@ -63,10 +63,10 @@ struct LivePlatformView: View {
         } else if areas.isEmpty && loader != nil { ChipSkeletonRow() }
         if let error {
             ErrorStateCard(title: L10n.text("Unable to Load Channels"), message: L10n.text("Try again, or choose another source to keep watching."),
-                           details: error, retry: { reload() }, goBack: { dismiss() }, busy: loader != nil)
+                           details: error, retry: { if area != nil && !rooms.isEmpty { self.error = nil; more() } else { reload() } }, goBack: { dismiss() }, busy: loader != nil)
                 .padding(.vertical, 24).tvFocusSection()
         }
-        LiveRoomGrid(rooms: rooms) { room in if room.id == rooms.last?.id { more() } }
+        LiveRoomGrid(rooms: rooms) { room in if error == nil && room.id == rooms.last?.id { more() } }
         if loader != nil && rooms.isEmpty { ProgressView().frame(maxWidth: .infinity).padding(.vertical, 60) }
         if loader == nil && error == nil && page > 0 && rooms.isEmpty {
             AppContentUnavailableView(L10n.text("No Live Rooms"), systemImage: "dot.radiowaves.left.and.right")
@@ -117,7 +117,7 @@ struct LivePlatformView: View {
             } catch {
                 guard !Task.isCancelled else { return }
                 Diagnostics.shared.failure("live", "\(platform.id) rooms page=\(next)", error)
-                if rooms.isEmpty { self.error = error.localizedDescription } else { exhausted = true }
+                self.error = error.localizedDescription
             }
             loader = nil
         }

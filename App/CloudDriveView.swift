@@ -420,11 +420,12 @@ struct CloudDriveView: View {
         do { accounts = try CloudDriveAccounts.load(); error = nil } catch { self.error = error.localizedDescription }
     }
     private func signOut(_ provider: CloudProvider) {
-        var updated = accounts
-        provider.clear(&updated)
         // The plugin keeps its own copy of a Baidu or Aliyun sign-in; it goes too.
-        EmbeddedJarHost.forgetPluginSignIns(provider.pluginFiles)
-        do { try updated.save(); accounts = updated; error = nil } catch { self.error = error.localizedDescription }
+        do {
+            try CloudDriveAccounts.update { accounts in provider.clear(&accounts); return true }
+            EmbeddedJarHost.forgetPluginSignIns(provider.pluginFiles)
+            reload()
+        } catch { self.error = error.localizedDescription }
     }
 }
 #endif

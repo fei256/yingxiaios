@@ -147,12 +147,19 @@ struct LocalAboutView: View {
 private struct LocalDataSettingsView: View {
     @Environment(Store.self) private var store
     @AppStorage(CloudSync.enabledKey) private var sync = true
+    @AppStorage(CloudSync.availabilityKey) private var available = false
+    @AppStorage(CloudSync.lastIncomingKey) private var lastIncoming = 0.0
     var body: some View {
         SettingsPage(title: "数据与隐私", symbol: "hand.raised") {
             SettingsGroup {
                 Toggle("iCloud 同步", isOn: $sync)
                     .appOnChange(of: sync) { _, enabled in store.cloudSync?.setEnabled(enabled) }
-                Text("同步订阅、收藏与观看记录。内置 TMDB 保持可用，自定义服务在 TMDB 页面设置。")
+                if sync {
+                    Text(available ? "iCloud 已接受同步请求。" : "同步服务尚未就绪。请检查重签名的 iCloud 权限与设备账号。")
+                    if lastIncoming > 0 { Text("最近收到云端更新 " + Date(timeIntervalSince1970: lastIncoming).formatted()) }
+                    else { Text("尚未收到云端更新。") }
+                }
+                Text("同步订阅、收藏与观看记录。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

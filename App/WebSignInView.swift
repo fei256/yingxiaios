@@ -388,13 +388,21 @@ struct ConfigCenterView: View {
             }
             .toolbar(embedded ? .hidden : .automatic, for: .navigationBar)
             .task { await open(reload: true) }
+            .onDisappear { openID = UUID() }
             // Back from another app (copying a password, say): the page moves to the bundle's new port, if it has one.
             .appOnChange(of: scenePhase) { _, phase in if phase == .active { Task { await open(reload: false) } } }
         }
     }
 
+    @State private var openID = UUID()
+
     private func open(reload: Bool) async {
-        guard let fresh = await address() else {
+        let request = UUID()
+        openID = request
+        let resolved = await address()
+        guard !Task.isCancelled, openID == request else { return }
+        error = nil
+        guard let fresh = resolved else {
             loading = false
             error = L10n.text("The plugin returned no content. Try another source.")
             return

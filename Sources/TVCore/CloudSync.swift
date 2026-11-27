@@ -224,7 +224,7 @@ public struct CloudSyncLedger<Value: Codable & Equatable & Sendable>: Codable, E
         }
         started = true
         guard isEnabled else { return }
-        cloud.synchronize()
+        requestSync()
         flush()
     }
 
@@ -233,9 +233,14 @@ public struct CloudSyncLedger<Value: Codable & Equatable & Sendable>: Codable, E
     /// an Apple TV, whose sessions run for days (#584) — so nothing is merged here, and coming back costs no
     /// merge of every kind on the main thread. Before `start()` it does nothing: the first merge waits for the
     /// saved subscriptions to load.
+    nonisolated public static let availabilityKey = "iCloudSync.serviceAvailable"
+    nonisolated public static let lastIncomingKey = "iCloudSync.lastIncoming"
+    private func requestSync() {
+        defaults.set(cloud.synchronize(), forKey: Self.availabilityKey)
+    }
     public func refresh() {
         guard started, isEnabled else { return }
-        cloud.synchronize()
+        requestSync()
     }
 
     /// Something changed on this device; it goes up after its kind's pause.
@@ -278,12 +283,14 @@ public struct CloudSyncLedger<Value: Codable & Equatable & Sendable>: Codable, E
         guard !backupSuspended else { return }
         switch reason {
         case NSUbiquitousKeyValueStoreAccountChange:
+            defaults.removeObject(forKey: Self.lastIncomingKey)
             // Another iCloud account: its copy is the one to show, and nothing here counts as its past.
             for channel in channels.values { channel.adoptAccount() }
             flush()
         case NSUbiquitousKeyValueStoreQuotaViolationChange:
             Diagnostics.shared.record(.warning, "icloud", "iCloud key-value storage is over its quota")
         default:
+            if isEnabled { defaults.set(Date().timeIntervalSince1970, forKey: Self.lastIncomingKey) }
             // The initial sync brings a whole account's store, so it is not limited to the keys it named.
             flush(reason == NSUbiquitousKeyValueStoreInitialSyncChange ? nil : keys.map(Set.init))
         }

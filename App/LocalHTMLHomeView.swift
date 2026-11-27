@@ -15,6 +15,8 @@ struct LocalHTMLHomeContent<Content: View>: View {
     @ViewBuilder var content: Content
     @State private var failure = ""
     @State private var atRoot = false
+    @State private var loadingPage = true
+    @State private var showProgress = false
     private var store: LocalHTMLHomeStore { _ = saved; return .load() }
     var body: some View {
         let current = store
@@ -29,10 +31,17 @@ struct LocalHTMLHomeContent<Content: View>: View {
                                 Button("返回默认首页") { choose("builtin") }
                             }.padding().frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
-                            LocalHTMLHomeWebView(source: source, active: isActive, failure: $failure, atRoot: $atRoot) { method, payload in
+                            LocalHTMLHomeWebView(source: source, active: isActive, failure: $failure, atRoot: $atRoot, loadingPage: $loadingPage) { method, payload in
                                 try await LocalHTMLHomeActions.invoke(method, payload: payload, store: appStore, openRoute: openRoute)
                             }
                                 .id(source.id).accessibilityIdentifier("home.html.webview")
+                                    .overlay { if showProgress { ProgressView("正在打开首页…").padding().background(.regularMaterial, in: Capsule()).allowsHitTesting(false) } }
+                                    .task(id: loadingPage && isActive) {
+                                        showProgress = false
+                                        guard loadingPage, isActive else { return }
+                                        do { try await Task.sleep(for: .milliseconds(400)) } catch { return }
+                                        showProgress = true
+                                    }
                         }
                     }
                     .localDockAccessory {
@@ -73,8 +82,9 @@ private struct LocalHTMLHomeWebView: UIViewRepresentable {
     let active: Bool
     @Binding var failure: String
     @Binding var atRoot: Bool
+    @Binding var loadingPage: Bool
     let nativeAction: @MainActor (String, [String: Any]) async throws -> Any
-    func makeCoordinator() -> Coordinator { Coordinator(failure: $failure, atRoot: $atRoot) }
+    func makeCoordinator() -> Coordinator { Coordinator(failure: $failure, atRoot: $atRoot, loadingPage: $loadingPage) }
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         let bridge = LocalHTMLHomeBridge(source: source, nativeAction: nativeAction)
@@ -140,6 +150,7 @@ private struct LocalHTMLHomeWebView: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler {
         var failure: Binding<String>
         var atRoot: Binding<Bool>
+        var loadingPage: Binding<Bool>
         var active = true
         var bridge: LocalHTMLHomeBridge?
         var observation: NSKeyValueObservation?
@@ -156,7 +167,7 @@ private struct LocalHTMLHomeWebView: UIViewRepresentable {
         private weak var previousItem: WKBackForwardListItem?
         private var navigating = true
         private var activeNavigation: WKNavigation?
-        init(failure: Binding<String>, atRoot: Binding<Bool>) { self.failure = failure; self.atRoot = atRoot }
+        init(failure: Binding<String>, atRoot: Binding<Bool>, loadingPage: Binding<Bool>) { self.failure = failure; self.atRoot = atRoot; self.loadingPage = loadingPage }
         func observe(_ web: WKWebView) {
             self.web = web
             observation = web.observe(\.url, options: [.new]) { [weak self] _, _ in
@@ -192,11 +203,13 @@ private struct LocalHTMLHomeWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             bridge?.documentWillNavigate()
             activeNavigation = navigation
+            loadingPage.wrappedValue = true
             navigating = true
             atRoot.wrappedValue = false
         }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             guard activeNavigation == nil || activeNavigation === navigation else { return }
+            loadingPage.wrappedValue = false
             let finishedDocument = navigating
             activeNavigation = nil
             navigating = false
@@ -246,6 +259,7 @@ private struct LocalHTMLHomeWebView: UIViewRepresentable {
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { show(error, navigation: navigation) }
         private func show(_ error: Error, navigation: WKNavigation?) {
             guard activeNavigation == nil || activeNavigation === navigation else { return }
+            loadingPage.wrappedValue = false
             navigating = false; activeNavigation = nil
             if (error as NSError).code == NSURLErrorCancelled { updateRoot(); return }
             failure.wrappedValue = "首页加载失败：" + error.localizedDescription

@@ -140,6 +140,14 @@ struct CloudFolderView: View {
                 }
             }
             .screenBackdrop()
+            .safeAreaInset(edge: .bottom) {
+                if files != nil, let failure {
+                    VStack {
+                        Text(failure.localizedDescription).font(.footnote)
+                        Button(L10n.text("Retry")) { Task { await load() } }
+                    }.padding(8)
+                }
+            }
             .screenTitle(name)
             #if os(tvOS)
             .onExitCommand { dismiss() }
@@ -216,6 +224,7 @@ struct AListServerForm: View {
     @State private var server: AListServer
     @State private var address: String
     @State private var checking = false
+    @State private var saveTask: Task<Void, Never>?
     @State private var error: String?
     private let isNew: Bool
     private let saved: () -> Void
@@ -259,13 +268,14 @@ struct AListServerForm: View {
                         if let error { Section { Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(Brand.amber) } }
                     }
                     .formStyle(.grouped)
+                    .onDisappear { saveTask?.cancel() }
                     .navigationTitle(title)
                     #if os(iOS)
                     .navigationBarTitleDisplayMode(.inline)
                     #endif
                     .toolbar { WithPerceptionTracking {
 
-                            ToolbarItem(placement: .cancellationAction) { Button(L10n.text("Cancel")) { dismiss() } }
+                            ToolbarItem(placement: .cancellationAction) { Button(L10n.text("Cancel")) { saveTask?.cancel(); dismiss() } }
                             ToolbarItem(placement: .confirmationAction) {
                                 if checking { ProgressView() } else { Button(L10n.text("Save")) { save() }.disabled(!canSave) }
                             }
@@ -300,8 +310,9 @@ struct AListServerForm: View {
     }
 
     private func save() {
+        guard !checking else { return }
         checking = true; error = nil
-        Task {
+        saveTask = Task { [server, address] in
             defer { checking = false }
             do {
                 let url = try WebAddress.resolve(address)
@@ -322,13 +333,14 @@ struct AListServerForm: View {
                 if found.isWebDAV { try await WebDAV.shared.check(found) }
                 else if found.isEmby { try await Emby.shared.check(found) }
                 else { try await AList.shared.check(found) }
+                try Task.checkCancellation()
                 if isNew { try AListServers.add([found]) } else { try AListServers.update(found) }
                 saved()
                 dismiss()
             } catch CloudFilesError.signInRequired(_) where server.username.isEmpty {
                 error = L10n.text("This server doesn't let guests browse. Enter a user name and password.")
             } catch {
-                self.error = error.localizedDescription
+                if !Task.isCancelled { self.error = error.localizedDescription }
             }
         }
     }

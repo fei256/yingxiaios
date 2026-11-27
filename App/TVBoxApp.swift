@@ -48,11 +48,7 @@ import TVCore
                             #if os(iOS)
                             guard await LocalBackupCoordinator.recover(store) else { return }
                             #endif
-                            await store.restoreSubscription()
-                            store.subscriptionUpdateForegroundChanged(scenePhase == .active)
-                            store.startSubscriptionUpdates()
-                            // After the saved subscriptions load, so the ones another device added load beside them.
-                            store.cloudSync?.start()
+                            await store.finishStartup(foreground: scenePhase == .active)
                         }
                         .task {
                             // Builds before 1.1 recorded no version, so earlier use shows as a saved subscription.

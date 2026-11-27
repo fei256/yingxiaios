@@ -130,23 +130,25 @@ extension WebSignIn {
             _ = await account.refresh()
             try account.save()
         case .cookie(let cookie):
-            var accounts = (try? CloudDriveAccounts.load()) ?? CloudDriveAccounts()
-            switch self {
-            case .quark:
-                accounts.quarkCookie = cookie
-                // FTY's player also needs the mobile ticket; other plugins take the cookie alone.
-                accounts.quarkServiceTicket = nil
-                if let ticket { accounts.quarkServiceTicket = try? await CloudDriveQRLogin.quarkMobileTicket(ticket, cookie: cookie) }
-                detail = " mobileTicket=\(accounts.quarkServiceTicket != nil)"
-            case .uc: accounts.ucCookie = cookie
-            case .baidu: accounts.baiduCookie = cookie
-            case .bilibili, .aliyun: break
+            var mobileTicket: String?
+            if self == .quark, let ticket {
+                mobileTicket = try? await CloudDriveQRLogin.quarkMobileTicket(ticket, cookie: cookie)
+                detail = " mobileTicket=\(mobileTicket != nil)"
             }
-            try accounts.save()
+            try Task.checkCancellation()
+            try CloudDriveAccounts.update { accounts in
+                switch self {
+                case .quark:
+                    accounts.quarkCookie = cookie
+                    accounts.quarkServiceTicket = mobileTicket
+                case .uc: accounts.ucCookie = cookie
+                case .baidu: accounts.baiduCookie = cookie
+                case .bilibili, .aliyun: return false
+                }
+                return true
+            }
         case .refreshToken(let token):
-            var accounts = (try? CloudDriveAccounts.load()) ?? CloudDriveAccounts()
-            accounts.token = token
-            try accounts.save()
+            try CloudDriveAccounts.update { $0.token = token; return true }
         }
         Diagnostics.shared.record(.info, "cloud.signin", "signed in on the \(rawValue) page\(detail)")
     }

@@ -26,8 +26,7 @@ public struct CloudDriveAccounts: Codable, Sendable {
     /// use it. True when something changed.
     @discardableResult
     public static func adopt(_ offered: [String: Any]) -> Bool {
-        var accounts = (try? load()) ?? Self()
-        guard accounts.take(offered), (try? accounts.save()) != nil else { return false }
+        guard (try? update { $0.take(offered) }) == true else { return false }
         Diagnostics.shared.record(.info, "cloud.signin", "saved a plugin sign-in for \(offered.keys.sorted().joined(separator: ","))")
         return true
     }
@@ -71,13 +70,29 @@ public struct CloudDriveAccounts: Codable, Sendable {
         }
         #if os(tvOS)
         if let data = UserDefaults.standard.data(forKey: defaultsKey), let accounts = try? JSONDecoder().decode(Self.self, from: data) {
-            try accounts.save()
+            try accounts.write()
             return accounts
         }
         #endif
         return Self()
     }
+    private static let writeLock = NSLock()
+
+    @discardableResult public static func update(_ change: (inout Self) -> Bool) throws -> Bool {
+        let changed = try writeLock.withLock {
+            var latest = try load()
+            guard change(&latest) else { return false }
+            try latest.write()
+            return true
+        }
+        if changed { NotificationCenter.default.post(name: CloudFiles.drivesChanged, object: nil) }
+        return changed
+    }
     public func save() throws {
+        try Self.writeLock.withLock { try write() }
+        NotificationCenter.default.post(name: CloudFiles.drivesChanged, object: nil)
+    }
+    private func write() throws {
         let folder = Self.fileURL.deletingLastPathComponent()
         let data = try JSONEncoder().encode(self)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -86,7 +101,6 @@ public struct CloudDriveAccounts: Codable, Sendable {
         #if os(tvOS)
         UserDefaults.standard.set(data, forKey: Self.defaultsKey)
         #endif
-        NotificationCenter.default.post(name: CloudFiles.drivesChanged, object: nil)
     }
     /// Changes whenever the saved accounts do; empty when nothing is saved.
     public static var revision: String {

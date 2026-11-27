@@ -22,8 +22,16 @@ struct WatchingJournalView: View {
     private var entries: [PlaybackHistoryEntry] { store.visibleHistory }
     private var works: [JournalTrackedWork] { JournalTrackedWork.history(entries) }
     private var favorites: [JournalTrackedWork] {
-        store.favorites.titleVideos.map { JournalTrackedWork.favorite($0, history: works, scope: store.historyScope) }
+        let indexed = Dictionary(uniqueKeysWithValues: works.map { ($0.catalogKey, $0) })
+        return store.favorites.titleVideos.map { JournalTrackedWork.favorite($0, indexed: indexed, scope: store.historyScope) }
             .filter { $0.latest != nil || store.historyClient($0.routeEntry) != nil }
+    }
+    private var watching: [JournalTrackedWork] {
+        works.filter { work in
+            guard let entry = work.latest else { return false }
+            if !entry.completed { return true }
+            return schedule.details[work.id]?.mediaType == .tv && schedule.progress(work).fraction < 1
+        }
     }
     private var later: [JournalTrackedWork] { favorites.filter { $0.latest == nil } }
     private var tracked: [JournalTrackedWork] {
@@ -32,7 +40,8 @@ struct WatchingJournalView: View {
     }
     private var libraryWorks: [JournalTrackedWork] {
         switch section {
-        case .history, .watching: works
+        case .history: works
+        case .watching: watching
         case .favorites: favorites
         case .later: later
         }
@@ -53,10 +62,11 @@ struct WatchingJournalView: View {
     }
     private var statisticDays: [(date: Date, seconds: Double)] {
         let interval = statisticsInterval
+        let secondsByDay = activity
         var result: [(date: Date, seconds: Double)] = []
         var day = interval.start
         while day < interval.end, result.count < 32 {
-            result.append((day, activity[JournalCalendarDates.key(day), default: 0]))
+            result.append((day, secondsByDay[JournalCalendarDates.key(day), default: 0]))
             guard let next = JournalCalendarDates.calendar.date(byAdding: .day, value: 1, to: day), next > day else { break }
             day = next
         }
@@ -80,7 +90,7 @@ struct WatchingJournalView: View {
                         }
                         JournalOverviewCard(seconds: activity.values.reduce(0, +), days: activity.count,
                                             counts: [.history: works.count, .favorites: favorites.count,
-                                                     .later: later.count, .watching: works.count], section: $section)
+                                                     .later: later.count, .watching: watching.count], section: $section)
                         calendarPanel
                         JournalStatisticsCard(seconds: statisticDays.reduce(0) { $0 + $1.seconds },
                                               range: JournalCalendarDates.range(statisticsInterval), bars: statisticDays,
@@ -194,7 +204,8 @@ struct WatchingJournalView: View {
     }
 
     private var libraryPanel: some View {
-        JournalPanel {
+        let libraryWorks = self.libraryWorks
+        return JournalPanel {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text(section == .history ? "最近观看" : section.title).font(.headline)

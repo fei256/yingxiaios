@@ -310,6 +310,21 @@ test('an interrupted forward read resumes its validated bytes before the decoder
   assert.deepEqual(await consume(iterator, first), media);
 });
 
+for (const hls of [false, true]) {
+  test(`validated ${hls ? 'HLS' : 'file'} recovery chains short ranges after sustained progress`, { timeout: 10000 }, async t => {
+    const { cache, resource, media, requests, open } = await fixture(t, {
+      length: 24 * blockBytes,
+      request: (call, index) => index === 1 ? { cutAt: 12 * blockBytes, delayMs: 25, error: true }
+        : { rangeEnd: Math.min(call.end, call.start + 2 * blockBytes - 1) },
+    });
+    cache.idleTimeoutMs = 200;
+    resource.resumeOnTruncation = hls;
+    assert.deepEqual(await consume(await open()), media);
+    assert.ok(requests.length >= 6);
+    assert.ok(requests.slice(1).every(call => call.ifRange === '"video-v1"'));
+  });
+}
+
 test('unvalidated interrupted responses are never spliced to a new entity', { timeout: 5000 }, async t => {
   const { requests, open } = await fixture(t, {
     request: () => ({ cutAt: 2 * blockBytes, validator: false }),

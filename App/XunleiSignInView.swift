@@ -156,9 +156,8 @@ struct XunleiSignInView: View {
         defer { busy = false }
         do {
             let account = try await XunleiSignIn.signIn(challenge, code: code)
-            var accounts = (try? CloudDriveAccounts.load()) ?? CloudDriveAccounts()
-            accounts.xunlei = account
-            try accounts.save()
+            try Task.checkCancellation()
+            try CloudDriveAccounts.update { $0.xunlei = account; return true }
             Diagnostics.shared.record(.info, "cloud.signin", "xunlei signed in")
             signedIn()
             dismiss()

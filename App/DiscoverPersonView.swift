@@ -446,7 +446,12 @@ private struct DiscoverPosterWall: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @State private var visible = false
-    private var animates: Bool { visible && scenePhase == .active && !reduceMotion && !urls.isEmpty }
+    #if os(iOS)
+    @Environment(\.isLocalPageActive) private var pageActive
+    #else
+    private var pageActive: Bool { true }
+    #endif
+    private var animates: Bool { visible && pageActive && scenePhase == .active && !reduceMotion && !urls.isEmpty }
     var body: some View {
         WithPerceptionTracking {
             DiscoverNativePosterWall(urls: urls, active: animates).clipped()

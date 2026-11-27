@@ -4,7 +4,11 @@ import Foundation
 /// `yingxia://import?url=<percent-encoded address>&name=<optional>`. The app confirms it before fetching
 /// anything, so a page can point at a subscription but never add one on its own (#167).
 public struct SubscriptionImportLink: Sendable, Equatable, Identifiable {
-    public static let scheme = "yingxia"
+    public static var scheme: String {
+        let types = Bundle.main.infoDictionary?["CFBundleURLTypes"] as? [[String: Any]] ?? []
+        let comparison = types.contains { ($0["CFBundleURLSchemes"] as? [String])?.contains("yingxia-compare") == true }
+        return comparison ? "yingxia-compare" : "yingxia"
+    }
     public static let action = "import"
 
     /// The subscription's address, as it will be fetched.

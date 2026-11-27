@@ -226,7 +226,8 @@ import TVCore
         autoPlayNext = defaults.object(forKey: "autoPlayNextEpisode") == nil || defaults.bool(forKey: "autoPlayNextEpisode")
         let saved = defaults.data(forKey: "subscriptions").flatMap { try? JSONDecoder().decode([SubscriptionEntry].self, from: $0) }
         var entries = saved ?? [], copies: [String: Subscription] = [:]
-        for entry in entries {
+        let savedGroups = defaults.data(forKey: "localSourceGroups").flatMap { try? JSONDecoder().decode([String: LocalSourceGroup].self, from: $0) } ?? [:]
+        for entry in entries where entry.enabled || savedGroups[entry.address] == nil {
             if let data = try? Data(contentsOf: Self.file(for: entry)),
                let value = try? JSONDecoder().decode(Subscription.self, from: data) { copies[entry.address] = value }
         }
@@ -238,7 +239,7 @@ import TVCore
             copies[legacyAddress] = legacy.flatMap { try? JSONDecoder().decode(Subscription.self, from: $0) }
         }
         documents = copies
-        var restoredGroups = defaults.data(forKey: "localSourceGroups").flatMap { try? JSONDecoder().decode([String: LocalSourceGroup].self, from: $0) } ?? [:]
+        var restoredGroups = savedGroups
         for entry in entries where restoredGroups[entry.address] == nil {
             let sites = copies[entry.address]?.sites ?? []
             restoredGroups[entry.address] = (!sites.isEmpty && sites.allSatisfy { $0.runtime == .python }) || URL(string: entry.address)?.pathExtension.lowercased() == "py" ? .python : .subscription
@@ -338,14 +339,40 @@ import TVCore
     }
 
     /// The current media address of a downloading episode, from its source; the queue asks again when a link expires.
+    func playDownload(_ item: DownloadItem) {
+        let source = item.source, file = DownloadLibrary.shared.channel(for: item)
+        var context = PlaybackHistoryContext(origin: source.origin ?? file.url, sourceKey: source.originalSiteKey ?? source.siteKey,
+            sourceName: source.siteName, videoID: source.videoID, videoName: item.title, poster: item.poster,
+            episodeID: source.episodeID, episodeName: source.episodeName, episodeFlag: source.flag)
+        context.historyScope = source.historyScope ?? historyScope ?? ""
+        context.posterHeaders = item.posterHeaders
+        let position = playbackHistory.entries.first { $0.context.historyIdentity == context.historyIdentity }?.resumePosition
+        playing = Channel(name: file.name, group: file.group, url: file.url, skipScope: context.id,
+                          historyContext: context, resumePosition: position)
+    }
+
     private func resolveDownload(_ item: DownloadItem) async throws -> Channel {
         let config = subscription
-        guard let site = config?.sites.first(where: { $0.key == item.source.siteKey })
-                ?? cloudDocument?.sites.first(where: { $0.key == item.source.siteKey }) else {
+        let source = item.source
+        let sites = (config?.sites ?? []) + (cloudDocument?.sites ?? [])
+        let site = sites.first { candidate in
+            if let origin = source.origin, let key = source.originalSiteKey {
+                guard let candidateOrigin = candidate.provenance?.origin ?? config?.origin else { return false }
+                return candidate.sourceKey == key && PlaybackHistoryContext.sourceIdentity(candidateOrigin) == PlaybackHistoryContext.sourceIdentity(origin)
+            }
+            return candidate.key == source.siteKey && candidate.name == source.siteName
+        }
+        guard let site else {
             throw TVError.unsupported(L10n.text("%@ is no longer in your subscription, so this download can't continue.", item.source.siteName))
         }
         let base = CatalogClient(site: site, origin: config?.origin ?? URL(string: "https://example.invalid/")!, jarURL: config?.spiderURL)
         let client = config.map { base.applying($0) } ?? base
+        if source.origin == nil {
+            let video = try await client.detail(source.videoID)
+            guard video.name == item.title, video.episodes.contains(source.episode) else {
+                throw TVError.unsupported("旧下载的来源无法确认，请从对应剧集详情重新添加。")
+            }
+        }
         let plan = try await client.preparePlayback(item.source.episode, forDownload: true)
         let channel = try await client.resolvePlayback(plan, choice: plan.choices[0])
         // A cloud-drive file downloads straight from its CDN, as it plays: through the plugin's
@@ -382,6 +409,17 @@ import TVCore
     private static func file(for entry: SubscriptionEntry) -> URL {
         subscriptionDirectory.appending(path: "subscriptions").appending(path: entry.cacheName)
     }
+    func backupDocuments() async throws -> [String: Subscription] {
+        let files = subscriptions.filter { documents[$0.address] == nil }.map { ($0.address, Self.file(for: $0)) }
+        let cached = documents
+        return try await Task.detached(priority: .utility) {
+            var result = cached
+            for (key, url) in files where FileManager.default.fileExists(atPath: url.path) {
+                result[key] = try JSONDecoder().decode(Subscription.self, from: Data(contentsOf: url))
+            }
+            return result
+        }.value
+    }
     private static func save(_ data: Data, to file: URL) throws {
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: file, options: .atomic)
@@ -414,6 +452,12 @@ import TVCore
     }
     /// The app marks readiness only after backup recovery and local adapter restoration.
     /// Scene callbacks before that point remember foreground state without starting I/O.
+    func finishStartup(foreground: Bool) async {
+        await restoreSubscription()
+        subscriptionUpdateForegroundChanged(foreground)
+        startSubscriptionUpdates()
+        cloudSync?.start()
+    }
     func startSubscriptionUpdates() {
         subscriptionUpdatesReady = true
         requestAutomaticSubscriptionUpdate()
@@ -670,7 +714,12 @@ import TVCore
             defer { importing = false }
             do {
                 let value: Subscription
-                if URL(string: entry.address)?.host()?.lowercased() == "sources.yingxia.invalid" {
+                let file = Self.file(for: entry)
+                let cached = await Task.detached(priority: .userInitiated) {
+                    (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Subscription.self, from: $0) }
+                }.value
+                if let cached { value = cached }
+                else if URL(string: entry.address)?.host()?.lowercased() == "sources.yingxia.invalid" {
                     value = try await LocalSourceLibrary.shared.storedSubscription(address: entry.address, http: http)
                 } else {
                     guard case .subscription(let loaded) = try await http.subscriptionImport(WebAddress.resolve(entry.address)) else {
@@ -980,7 +1029,7 @@ import TVCore
             return subscription.map { client.applying($0) } ?? client
         }
         guard let config = subscription,
-              let site = config.sites.first(where: { $0.origin(or: config.origin) == video.origin && $0.sourceKey == video.sourceKey }) else { return nil }
+              let site = config.sites.first(where: { PlaybackHistoryContext.sourceIdentity($0.origin(or: config.origin)) == PlaybackHistoryContext.sourceIdentity(video.origin) && $0.sourceKey == video.sourceKey }) else { return nil }
         let client = CatalogClient(site: site, origin: config.origin, jarURL: config.spiderURL).applying(config)
         if let push = PushMediaLibrary.shared.record(origin: video.origin, sourceKey: video.sourceKey, videoID: video.videoID) {
             return client.withPushInput(push.input, flags: push.flags)

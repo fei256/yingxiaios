@@ -306,6 +306,8 @@ struct MangaJumpView: View {
 struct MangaCategoriesView: View {
     let source: String
     @State private var info: MangaSourceInfo?
+    @State private var infoError: String?
+    @State private var attempt = 0
     var body: some View {
         WithPerceptionTracking {
             ScrollView {
@@ -319,6 +321,9 @@ struct MangaCategoriesView: View {
                             ForEach(Array(info.categoryParts.enumerated()), id: \.offset) { _, part in
                                 WithPerceptionTracking { categoryPart(part, info: info) }
                             }
+                        } else if let infoError {
+                            Text(infoError).foregroundStyle(.secondary)
+                            Button(L10n.text("Retry")) { attempt += 1 }
                         } else { ProgressView().frame(maxWidth: .infinity).padding(40) }
                     }
                     .padding(.vertical, Layout.gutter)
@@ -327,7 +332,11 @@ struct MangaCategoriesView: View {
             }
             .background { WithPerceptionTracking { Backdrop() } }
             .screenTitle(title)
-            .task { info = try? await MangaRuntime.shared.info(source) }
+            .task(id: attempt) {
+                infoError = nil
+                do { info = try await MangaRuntime.shared.info(source) }
+                catch { if !Task.isCancelled { infoError = error.localizedDescription } }
+            }
         }
     }
 
@@ -573,6 +582,8 @@ struct MangaSourceResults: View {
     let source: String
     let keyword: String
     @State private var info: MangaSourceInfo?
+    @State private var infoError: String?
+    @State private var attempt = 0
     @State private var values: [String] = []
     var body: some View {
         WithPerceptionTracking {
@@ -584,7 +595,10 @@ struct MangaSourceResults: View {
                             MangaComicGrid(load: { cursor in
                                 try await MangaRuntime.shared.search(source, keyword: keyword, options: values.map(Optional.some), cursor: cursor)
                             }, id: keyword + values.joined(separator: "|"))
-                        }
+                        } else if let infoError {
+                            Text(infoError).foregroundStyle(.secondary)
+                            Button(L10n.text("Retry")) { attempt += 1 }
+                        } else { ProgressView().frame(maxWidth: .infinity).padding(40) }
                     }
                     .padding(.vertical, Layout.gutter)
                     .frame(maxWidth: Layout.maxWidth).frame(maxWidth: .infinity)
@@ -592,8 +606,10 @@ struct MangaSourceResults: View {
             }
             .background { WithPerceptionTracking { Backdrop() } }
             .screenTitle(keyword)
-            .task {
-                info = try? await MangaRuntime.shared.info(source)
+            .task(id: attempt) {
+                infoError = nil
+                do { info = try await MangaRuntime.shared.info(source) }
+                catch { if !Task.isCancelled { infoError = error.localizedDescription } }
                 if values.isEmpty, let info { values = MangaOptionRows.defaults(info.searchOptions) }
             }
         }

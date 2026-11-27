@@ -62,7 +62,7 @@ struct LocalBackupSettingsView: View {
                     Button("重试上次未完成的恢复") {
                         run {
                             if await LocalBackupCoordinator.recover(store) {
-                                status = "已恢复上次操作前的数据"; await store.restoreSubscription(); store.cloudSync?.start()
+                                status = "已恢复上次操作前的数据"; await store.finishStartup(foreground: UIApplication.shared.applicationState == .active)
                             } else { status = store.error ?? "恢复未完成，日志已保留" }
                         }
                     }.disabled(busy)
