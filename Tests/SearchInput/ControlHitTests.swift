@@ -32,6 +32,23 @@ final class ControlHitTests: XCTestCase {
         app.coordinate(withNormalizedOffset: point).tap()
         _ = requireAction(app.staticTexts["control.last"], id: "picture", events: 1, point: point)
     }
+    @MainActor func testDoubleTapAcrossPictureFiresOnceWithoutTogglingControls() {
+        let app = XCUIApplication()
+        app.launchArguments = ["controls"]
+        app.launch()
+        XCUIDevice.shared.orientation = .portrait
+        let bottom = app.buttons["bottom.0"]
+        XCTAssertTrue(bottom.waitForExistence(timeout: 5))
+        let pictureY = (app.buttons["plain"].frame.maxY + bottom.frame.minY) / 2
+        let y = (pictureY - app.frame.minY) / app.frame.height
+        let result = app.staticTexts["control.last"]
+        for (index, x) in [CGFloat(0.1), 0.5, 0.9].enumerated() {
+            let point = CGVector(dx: x, dy: y)
+            app.coordinate(withNormalizedOffset: point).doubleTap()
+            guard requireAction(result, id: "playback", events: index + 1, point: point) else { return }
+        }
+    }
+
     @MainActor func testReferenceControlCorners() {
         checkReferences(arguments: ["controls"], ids: ["reference", "plain", "styled.rectangle"])
     }

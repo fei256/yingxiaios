@@ -26,10 +26,14 @@ export function chapterSegments(chapters, duration) {
   });
 }
 
+function referenceDuration(data) {
+  return finite(data.duration_ms) ? data.duration_ms / 1000 : finite(data.runtime_ms) ? data.runtime_ms / 1000
+    : finite(data.duration_sec) ? data.duration_sec : finite(data.runtime_sec) ? data.runtime_sec : 0;
+}
+
 export function providerSegments(data, duration, provider) {
   if (!data || typeof data !== 'object') return [];
-  const reference = finite(data.duration_ms) ? data.duration_ms / 1000 : finite(data.runtime_ms) ? data.runtime_ms / 1000
-    : finite(data.duration_sec) ? data.duration_sec : finite(data.runtime_sec) ? data.runtime_sec : 0;
+  const reference = referenceDuration(data);
   if (reference > 0 && Math.abs(reference - duration) > Math.max(30, duration * .1)) return [];
   const result = [];
   for (const [field, kind] of [['intro', 'opening'], [provider === 'theintrodb' ? 'credits' : 'outro', 'ending']]) {
@@ -56,6 +60,20 @@ export function providerSegments(data, duration, provider) {
   return result;
 }
 
+function verifiedSegments(data, duration, provider, identity, metadata) {
+  const tv = identity?.mediaType === 'tv';
+  const imdb = metadata?.imdbId || metadata?.externalIds?.imdb_id;
+  // An incorrect provider/cache episode is never a usable match. Older responses omit these keys.
+  if (data && ((data.tmdb_id !== undefined && Number(data.tmdb_id) !== identity.tmdbId) ||
+    (data.imdb_id !== undefined && data.imdb_id !== imdb) ||
+    (data.type !== undefined && data.type !== identity.mediaType) ||
+    (data.media_type !== undefined && data.media_type !== identity.mediaType) ||
+    (data.is_movie !== undefined && data.is_movie !== (identity.mediaType === 'movie')) ||
+    (tv && ((data.season !== undefined && Number(data.season) !== identity.season) ||
+      (data.episode !== undefined && Number(data.episode) !== identity.episode))))) return [];
+  return providerSegments(data, duration, provider);
+}
+
 // Ported from the maintained MacCat reference; native identity resolution stays on Swift.
 export class IntroSkip {
   constructor({ fetchJson = (url, signal) => providerJson(url, {
@@ -74,7 +92,38 @@ export class IntroSkip {
     while (this.cache.size > 128) this.cache.delete(this.cache.keys().next().value);
     return value;
   }
-  async plan(session, { duration, chapters = [] }, signal, resolveIdentity) {
+  requests(identity, metadata) {
+    const tv = identity?.mediaType === 'tv';
+    const known = identity && ['movie', 'tv'].includes(identity.mediaType) && Number.isSafeInteger(identity.tmdbId) && identity.tmdbId > 0 && (!tv || Number.isSafeInteger(identity.season) && identity.season > 0 && Number.isSafeInteger(identity.episode) && identity.episode > 0);
+    if (!known) return [];
+    const url = new URL('https://api.theintrodb.org/v3/media');
+    url.searchParams.set('tmdb_id', identity.tmdbId);
+    if (tv) { url.searchParams.set('season', identity.season); url.searchParams.set('episode', identity.episode); }
+    const requests = [{ url, provider: 'theintrodb' }];
+    const imdb = metadata?.imdbId || metadata?.externalIds?.imdb_id;
+    if (tv && /^tt\d+$/.test(imdb || '')) {
+      const url = new URL('https://api.introdb.app/segments');
+      url.searchParams.set('imdb_id', imdb); url.searchParams.set('season', identity.season); url.searchParams.set('episode', identity.episode);
+      requests.push({ url, provider: 'introdb' });
+    }
+    return requests;
+  }
+  async prefetch(identity, metadata, signal) {
+    const results = await Promise.allSettled(this.requests(identity, metadata).map(async request => {
+      const data = await this.lookup(request.url, signal);
+      if (!data) return null;
+      const duration = referenceDuration(data);
+      const idMatches = request.provider === 'theintrodb' ? Number(data.tmdb_id) === identity.tmdbId
+        : data.imdb_id === metadata?.imdbId;
+      if (!idMatches || duration <= 0 || (identity.mediaType === 'tv' &&
+          (Number(data.season) !== identity.season || Number(data.episode) !== identity.episode))) return null;
+      const segments = verifiedSegments(data, duration, request.provider, identity, metadata);
+      return segments.length ? { duration, segments } : null;
+    }));
+    signal?.throwIfAborted();
+    return { plans: results.flatMap(result => result.status === 'fulfilled' && result.value ? [result.value] : []) };
+  }
+  async plan(session, { duration, chapters = [], provider }, signal, resolveIdentity) {
     const preferences = skipPreferences(session.preferences);
     if (session.isLive || session.request?.isLive || session.request?.music || !finite(duration) || duration <= 0) return { segments: [], message: '需要时长已知的点播媒体' };
     const opening = preferences.openingOverride || 0, ending = preferences.endingOverride || 0;
@@ -85,33 +134,11 @@ export class IntroSkip {
     segments.sort((a,b)=>a.start-b.start);
     if (segments.some(item => item.kind === 'opening') && segments.some(item => item.kind === 'ending')) return { segments };
     const { identity, metadata } = resolveIdentity ? await resolveIdentity(segments) : session;
-    const tv = identity?.mediaType === 'tv';
-    const known = identity && ['movie', 'tv'].includes(identity.mediaType) && Number.isSafeInteger(identity.tmdbId) && identity.tmdbId > 0 && (!tv || Number.isSafeInteger(identity.season) && identity.season > 0 && Number.isSafeInteger(identity.episode) && identity.episode > 0);
-    if (!known) return { segments, message: segments.length ? '' : '未识别到片头片尾，可切换手动时长' };
-    const requests = [];
-    if (Number.isSafeInteger(identity.tmdbId) && identity.tmdbId > 0) {
-      const url = new URL('https://api.theintrodb.org/v3/media');
-      url.searchParams.set('tmdb_id', identity.tmdbId);
-      if (tv) { url.searchParams.set('season', identity.season); url.searchParams.set('episode', identity.episode); }
-      requests.push({ url, provider: 'theintrodb' });
-    }
-    const imdb = metadata?.imdbId || metadata?.externalIds?.imdb_id;
-    if (tv && /^tt\d+$/.test(imdb || '')) {
-      const url = new URL('https://api.introdb.app/segments');
-      url.searchParams.set('imdb_id', imdb); url.searchParams.set('season', identity.season); url.searchParams.set('episode', identity.episode);
-      requests.push({ url, provider: 'introdb' });
-    }
+    const requests = this.requests(identity, metadata).filter(item => !provider || item.provider === provider);
+    if (!requests.length) return { segments, message: segments.length ? '' : '未识别到片头片尾，可切换手动时长' };
     const results = await Promise.allSettled(requests.map(async request => {
       const data = await this.lookup(request.url, signal);
-      // An incorrect provider/cache episode is never a usable match. Older responses omit these keys.
-      if (data && ((data.tmdb_id !== undefined && Number(data.tmdb_id) !== identity.tmdbId) ||
-        (data.imdb_id !== undefined && data.imdb_id !== imdb) ||
-        (data.type !== undefined && data.type !== identity.mediaType) ||
-        (data.media_type !== undefined && data.media_type !== identity.mediaType) ||
-        (data.is_movie !== undefined && data.is_movie !== (identity.mediaType === 'movie')) ||
-        (tv && ((data.season !== undefined && Number(data.season) !== identity.season) ||
-          (data.episode !== undefined && Number(data.episode) !== identity.episode))))) return [];
-      return providerSegments(data, duration, request.provider);
+      return verifiedSegments(data, duration, request.provider, identity, metadata);
     }));
     if (signal?.aborted) throw signal.reason;
     for (const result of results) if (result.status === 'fulfilled') for (const row of result.value) {

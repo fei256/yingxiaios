@@ -1,11 +1,11 @@
 import Foundation
 import CryptoKit
 
-/// The switch selects the service independently from the retained custom configuration.
 public struct TMDBServiceSettings: Codable, Equatable, Sendable {
     public enum CredentialType: String, CaseIterable, Sendable { case apiKey, token }
-    public static let defaultAPIBase = "https://api.themoviedb.org/3"
+    public static let defaultAPIBase = "https://api.tmdb.org/3"
     public static let defaultImageBase = "https://image.tmdb.org/t/p"
+    public static let titleLogoKey = "local.tmdb.showTitleLogo"
     public var enabled: Bool
     public var ultraHD: Bool
     public var apiBase: String
@@ -17,6 +17,8 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
     public var proxyUrl: String
     public var proxyUsername: String
     public var proxyPassword: String
+    // Omit the marker on custom services to retain existing match and cache fingerprints.
+    private var builtinMetadata: Bool?
     private static let key = "local.tmdb.custom.v1"
     public static let changed = Notification.Name("LocalTMDBConfigurationChanged")
     public static var identity: String { load().serviceIdentity }
@@ -30,7 +32,7 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
     /// In-flight artwork requests must not join a request started with an old
     /// proxy or credential after the viewer repairs the configuration.
     public var transportIdentity: String {
-        custom.map(Self.fingerprint) ?? "builtin"
+        enabled ? Self.fingerprint(cleaned) : "builtin"
     }
     private static func fingerprint(_ service: Self) -> String {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
@@ -45,7 +47,7 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
         self.apiBase = apiBase; self.apiKey = apiKey; self.token = token; self.imageBase = imageBase; self.language = language
         self.proxyEnabled = proxyEnabled; self.proxyUrl = proxyUrl; self.proxyUsername = proxyUsername; self.proxyPassword = proxyPassword
     }
-    private enum CodingKeys: String, CodingKey { case enabled, ultraHD, apiBase, apiKey, token, imageBase, language, proxyEnabled, proxyUrl, proxyUsername, proxyPassword }
+    private enum CodingKeys: String, CodingKey { case enabled, ultraHD, apiBase, apiKey, token, imageBase, language, proxyEnabled, proxyUrl, proxyUsername, proxyPassword, builtinMetadata }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         self.init(apiBase: try values.decodeIfPresent(String.self, forKey: .apiBase) ?? "",
@@ -59,6 +61,7 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
                   proxyUrl: try values.decodeIfPresent(String.self, forKey: .proxyUrl) ?? "",
                   proxyUsername: try values.decodeIfPresent(String.self, forKey: .proxyUsername) ?? "",
                   proxyPassword: try values.decodeIfPresent(String.self, forKey: .proxyPassword) ?? "")
+        builtinMetadata = try values.decodeIfPresent(Bool.self, forKey: .builtinMetadata)
     }
     public var credential: String {
         get { token.isEmpty ? apiKey : token }
@@ -71,7 +74,26 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
             } else { apiKey = secret; token = "" }
         }
     }
-    public var custom: Self? { enabled ? cleaned : nil }
+    public var custom: Self? { enabled && builtinMetadata != true ? cleaned : nil }
+
+    public mutating func useDirectConnection() {
+        apiBase = Self.defaultAPIBase
+        imageBase = Self.defaultImageBase
+        proxyEnabled = false
+    }
+
+    public func editorConfiguration(credential input: String) -> Self {
+        var value = self
+        if input != credential { value.credential = input }
+        value.enabled = true
+        value = value.cleaned
+        let base = URLComponents(string: value.apiBase)
+        let standardAPI = ["api.tmdb.org", "api.themoviedb.org"].contains(base?.host?.lowercased() ?? "")
+            && base?.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == "3"
+            && base?.query == nil
+        value.builtinMetadata = standardAPI && value.credential.isEmpty ? true : nil
+        return value
+    }
     public func formConfiguration(credentialType: CredentialType) -> Self {
         var value = self
         switch credentialType {
@@ -83,7 +105,8 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
     private var cleaned: Self {
         func trim(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
         var api = trim(apiBase).isEmpty ? Self.defaultAPIBase : trim(apiBase)
-        if var components = URLComponents(string: api), components.host?.lowercased() == "api.themoviedb.org",
+        if var components = URLComponents(string: api), let host = components.host?.lowercased(),
+           ["api.tmdb.org", "api.themoviedb.org"].contains(host),
            components.path.isEmpty || components.path == "/" {
             components.path = "/3"; api = components.string ?? api
         }
@@ -93,15 +116,17 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
             secret = key.lowercased().hasPrefix("bearer ") ? trim(String(key.dropFirst(7))) : key
             key = ""
         }
-        return Self(apiBase: api, apiKey: secret.isEmpty ? key : "", token: secret,
+        var result = Self(apiBase: api, apiKey: secret.isEmpty ? key : "", token: secret,
                     imageBase: trim(imageBase).isEmpty ? Self.defaultImageBase : trim(imageBase), language: trim(language).isEmpty ? "zh-CN" : trim(language),
                     enabled: enabled, ultraHD: ultraHD, proxyEnabled: proxyEnabled, proxyUrl: trim(proxyUrl),
                     proxyUsername: trim(proxyUsername), proxyPassword: proxyPassword)
+        result.builtinMetadata = builtinMetadata
+        return result
     }
     public static func load(defaults: UserDefaults = .standard) -> Self {
         defaults.data(forKey: key).flatMap { try? JSONDecoder().decode(Self.self, from: $0) } ?? Self()
     }
-    public func save(defaults: UserDefaults = .standard) throws {
+    public func save(defaults: UserDefaults = .standard, showTitleLogo: Bool? = nil) throws {
         let value = cleaned
         if value.enabled {
             _ = try value.request(path: "configuration", parameters: [:])
@@ -110,10 +135,12 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
         }
         guard !value.apiKey.contains(where: { $0.isNewline }), !value.token.contains(where: { $0.isNewline }) else { throw URLError(.badURL) }
         defaults.set(try JSONEncoder().encode(value), forKey: Self.key)
+        if let showTitleLogo { defaults.set(showTitleLogo, forKey: Self.titleLogoKey) }
         NotificationCenter.default.post(name: Self.changed, object: nil)
     }
     public static func clear(defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: key)
+        defaults.removeObject(forKey: titleLogoKey)
         NotificationCenter.default.post(name: changed, object: nil)
     }
     static func webURL(_ value: String) throws -> URL {
@@ -136,7 +163,8 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
         return ["url": url.absoluteString, "username": proxyUsername, "password": proxyPassword]
     }
     public func isArtwork(_ url: URL) -> Bool {
-        [Self.defaultImageBase, cleaned.imageBase].contains { base in
+        let bases = [Self.defaultImageBase, "https://images.tmdb.org/t/p"] + (enabled ? [cleaned.imageBase] : [])
+        return bases.contains { base in
             guard let candidate = URL(string: base) else { return false }
             let prefix = "/" + candidate.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             return url.scheme?.lowercased() == candidate.scheme?.lowercased() && url.host?.lowercased() == candidate.host?.lowercased()
@@ -145,7 +173,7 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
     }
     public func request(path: String, parameters: [String: String]) throws -> URLRequest {
         let value = cleaned
-        let base = try Self.webURL(value.apiBase.isEmpty ? "https://api.themoviedb.org/3" : value.apiBase)
+        let base = try Self.webURL(value.apiBase)
         var parts = URLComponents(url: base.appending(path: path), resolvingAgainstBaseURL: false)!
         var values = parameters
         if values["language"] == nil, !value.language.isEmpty { values["language"] = value.language }
@@ -160,18 +188,21 @@ public struct TMDBServiceSettings: Codable, Equatable, Sendable {
     /// Apply the poster quality to both built-in service URLs and custom image mirrors.
     public static func artworkURL(_ url: URL, settings: Self? = nil) -> URL {
         let config = settings ?? load()
-        guard config.enabled && config.ultraHD else { return url }
-        let customBase = URL(string: config.cleaned.imageBase)
-        guard ["image.tmdb.org", "images.tmdb.org"].contains(url.host ?? "") ||
-                (config.enabled && url.host == customBase?.host && url.path.hasPrefix(customBase?.path ?? "/t/p")) else { return url }
-        guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        guard config.enabled, config.isArtwork(url) else { return url }
+        var address = url
+        if config.builtinMetadata == true, ["image.tmdb.org", "images.tmdb.org"].contains(url.host?.lowercased() ?? ""),
+           url.path.hasPrefix("/t/p/"), url.pathComponents.count == 5,
+           let mirrored = config.image(url.lastPathComponent, size: url.pathComponents[3]) {
+            address = mirrored
+        }
+        guard config.ultraHD, var parts = URLComponents(url: address, resolvingAgainstBaseURL: false) else { return address }
         parts.path = parts.path.replacingOccurrences(of: #"/(?:w[0-9]+|h[0-9]+)/"#, with: "/original/", options: .regularExpression)
-        return parts.url ?? url
+        return parts.url ?? address
     }
     func image(_ path: String?, size: String = "w500") -> URL? {
         guard let path, !path.isEmpty else { return nil }
         if let url = URL(string: path), ["https", "http"].contains(url.scheme ?? "") { return url }
-        let base = cleaned.imageBase
-        return URL(string: base.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/" + size + "/" + path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        guard let base = try? Self.webURL(cleaned.imageBase) else { return nil }
+        return base.appending(path: size).appending(path: path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
     }
 }

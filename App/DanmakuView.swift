@@ -57,7 +57,7 @@ import TVCore
     init(engine: KSPlaybackEngine) {
         observesTransport = true
         positionValue = { engine.displayPosition }; durationValue = { engine.duration }
-        seekValue = { engine.seek(to: $0) }; playValue = { engine.play() }
+        seekValue = { engine.seekFromUser(to: $0) }; playValue = { engine.play() }
         revisionValue = { engine.timelineRevision }
         stoppedPictureRevisionValue = { engine.stoppedPictureRevision }
         seekingValue = { engine.seeking }

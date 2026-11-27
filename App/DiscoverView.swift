@@ -913,6 +913,8 @@ private struct DiscoverHeroTheme: ViewModifier {
 }
 
 private struct DiscoverHeroBackground: View {
+    @AppStorage(TMDBServiceSettings.titleLogoKey) private var showTitleLogo = true
+    @AppStorage("local.tmdb.custom.v1") private var configuration = Data()
     let state: DiscoverHeroState
     let items: [TMDBCatalog.Item]
     let width: CGFloat
@@ -943,7 +945,8 @@ private struct DiscoverHeroBackground: View {
                     #endif
                 }
             }
-                .task(id: items) {
+                .task(id: TMDBHeroArtworkRequest(items: items, showTitleLogo: showTitleLogo, configuration: configuration)) {
+                    let preferTextless = showTitleLogo
                     let generation = state.generation
                     // A small bounded warm-up runs outside the main actor. Cache logos and processed
                     // covers before a swipe so the drag itself performs no image decode or network work.
@@ -956,7 +959,7 @@ private struct DiscoverHeroBackground: View {
                                 #if os(tvOS)
                                 let url = details?.backdrop ?? item.backdrop ?? item.poster
                                 #else
-                                let url = details?.heroPoster ?? item.poster
+                                let url = (preferTextless ? details?.heroPoster : details?.poster) ?? item.poster
                                 #endif
                                 let paint = if let url { await DiscoverPainter.shared.paint(url) } else { nil as DiscoverPaint? }
                                 return (item, details, paint)
@@ -1302,6 +1305,7 @@ struct DiscoverScrollObserver: ViewModifier {
 }
 
 private struct DiscoverHero: View {
+    @AppStorage(TMDBServiceSettings.titleLogoKey) private var showTitleLogo = true
     let item: TMDBCatalog.Item
     let details: TMDBMatch.Details?
     var body: some View {
@@ -1311,7 +1315,7 @@ private struct DiscoverHero: View {
                     VStack(spacing: 0) {
                         Spacer(minLength: 0)
                         Group {
-                            if let logo = details?.logo {
+                            if showTitleLogo, let logo = details?.logo {
                                 TMDBArtwork(url: logo, maxPixels: 1000, fill: false)
                                     .accessibilityLabel(item.name)
                             } else {

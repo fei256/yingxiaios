@@ -105,8 +105,9 @@ struct GlobalSearchView: View {
     #endif
     @State private var showFailures = false
     @State private var showsSearchSettings = false
-    /// The sources being searched right now, under the summary; folded away unless asked for.
+    #if !os(iOS)
     @AppStorage("searchShowsActivity") private var showsActivity = false
+    #endif
     /// Whether the end of the results is on screen, so finished pages can ask for the next.
     @State private var endVisible = false
     @State private var restoringSearchPosition = true
@@ -193,17 +194,12 @@ struct GlobalSearchView: View {
                 #if os(iOS)
                 .clipped()
                 .safeAreaInset(edge: .top, spacing: 0) {
-                    WithPerceptionTracking {
-                        VStack(spacing: 0) {
-                            globalSearchField
-                            if let config = store.subscription, showsHeader { searchHeader(config) }
-                        }
-                    }
+                    WithPerceptionTracking { globalSearchField }
                 }
                 #else
                 .topBar(hardEdge: true) {
                     WithPerceptionTracking {
-                        if let config = store.subscription, showsHeader { searchHeader(config) }
+                        if let config = store.subscription, !model.keyword.isEmpty { searchHeader(config) }
                     }
                 }
                 #endif
@@ -379,15 +375,6 @@ struct GlobalSearchView: View {
     }
 
 
-    /// Keep source filters and progress beneath the field after a search is submitted.
-    private var showsHeader: Bool {
-        #if os(iOS)
-        !model.keyword.isEmpty && !showsSuggestions
-        #else
-        !model.keyword.isEmpty
-        #endif
-    }
-
     /// Result-bearing sources form a vertical list on phones and iPad split views too.
     @ViewBuilder private var searchResultLayout: some View {
         #if os(iOS)
@@ -497,7 +484,11 @@ struct GlobalSearchView: View {
                         else {
                             #if os(iOS)
                             VStack(alignment: .leading, spacing: 16) {
-                                searchGroupTabs
+                                HStack(spacing: 6) {
+                                    searchGroupTabs.frame(maxWidth: .infinity, alignment: .leading)
+                                    searchResultActions
+                                }
+                                .overlay(alignment: .bottom) { Color.primary.opacity(0.08).frame(height: 1).allowsHitTesting(false) }
                                 if !usesSiteRail {
                                     SourceStrip(items: sourceItems.map { .init(id: $0.id, name: $0.name, count: $0.count, dot: $0.dot) },
                                                 selection: model.selectedSource ?? "") { id in
@@ -546,9 +537,45 @@ struct GlobalSearchView: View {
                 }
             }
         }
-        .overlay(alignment: .bottom) { Color.primary.opacity(0.08).frame(height: 1).allowsHitTesting(false) }
         .accessibilityLabel("搜索结果分组")
         .accessibilityIdentifier("search.groups")
+    }
+
+    private var searchResultActions: some View {
+        let unavailable = model.failures.count + model.paused.count
+        return HStack(spacing: 4) {
+            searchIcon(symbol: showsList ? "square.grid.2x2" : "list.bullet",
+                       title: L10n.text(showsList ? "Show as Grid" : "Show as List"), id: "search.layout") {
+                withAnimation(.appSmooth(duration: 0.35)) { showsList.toggle() }
+            }
+            if unavailable > 0 {
+                searchIcon(symbol: "exclamationmark.triangle.fill", title: L10n.text("%lld unavailable", unavailable),
+                           id: "search.unavailable", count: unavailable) { showFailures = true }
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func searchIcon(symbol: String, title: String, id: String, count: Int? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(count == nil ? Color.primary : Brand.amber)
+                .appSymbolReplaceTransition()
+                .frame(width: 44, height: 44)
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    if let count, count > 0 {
+                        Text(count > 99 ? "99+" : String(count))
+                            .font(.system(size: 9, weight: .bold)).monospacedDigit()
+                            .foregroundStyle(Color.white)
+                            .padding(.horizontal, 4).frame(height: 16)
+                            .background(Brand.rose, in: Capsule()).padding(2)
+                            .accessibilityHidden(true).allowsHitTesting(false)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).accessibilityLabel(title).help(title).accessibilityIdentifier(id)
     }
 
     private var searchResultCaption: some View {
@@ -723,30 +750,8 @@ struct GlobalSearchView: View {
     }
     #endif
 
+    #if !os(iOS)
     private func searchHeader(_ config: Subscription) -> some View {
-        #if os(iOS)
-        return VStack(alignment: .leading, spacing: 10) {
-            searchSummary
-            HStack(alignment: .center, spacing: 12) {
-                Text("“\(model.keyword)” 的搜索结果")
-                    .font(.headline).lineLimit(1).truncationMode(.tail)
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                    .accessibilityAddTraits(.isHeader)
-                searchActions(config)
-            }
-            if model.total > 0 {
-                ProgressView(value: Double(model.completed), total: Double(max(model.total, 1)))
-                    .progressViewStyle(.linear).tint(Brand.accent)
-            }
-            if model.busy && showsActivity {
-                SearchActivityList(origin: config.origin, completed: model.completed, total: model.total, runStart: model.runStart,
-                                   showsSources: true)
-            }
-        }
-        .frame(maxWidth: Layout.maxWidth - Layout.gutter * 2)
-        .padding(.horizontal, Layout.gutter).padding(.top, 6).padding(.bottom, 10)
-        .frame(maxWidth: .infinity)
-        #else
         @AppBindable var model = model
         return VStack(alignment: .leading, spacing: 14) {
             if !model.groups.isEmpty {
@@ -807,34 +812,17 @@ struct GlobalSearchView: View {
         }
         .frame(maxWidth: model.keyword.isEmpty ? 760 : Layout.maxWidth - Layout.gutter * 2)
         .frame(maxWidth: .infinity)
-        #if os(iOS)
-        // Right under the search bar, which has its own margin.
-        .padding(.horizontal, Layout.gutter).padding(.top, 6).padding(.bottom, 12)
-        #elseif os(macOS)
+        #if os(macOS)
         .padding(.horizontal, Layout.gutter).padding(.vertical, 10)
         #else
         .padding(.horizontal, Layout.gutter).padding(.vertical, 16)
         #endif
-        #endif
     }
 
     private var searchSummary: some View {
-        #if os(iOS)
-        return HStack(alignment: .center, spacing: 8) {
-            ProgressView().controlSize(.small).opacity(model.busy ? 1 : 0)
-                .accessibilityHidden(!model.busy)
-            Text("\(model.completed) / \(model.total)").font(.subheadline.weight(.semibold)).fixedSize()
-            Text(summaryDetail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            Spacer(minLength: 0)
-        }
-        .monospacedDigit().fixedSize(horizontal: false, vertical: true)
-        .accessibilityElement(children: .combine)
-        #else
         // A spinner has no text baseline, so it centers on the row; only the two labels share a baseline.
         HStack(alignment: .center, spacing: 12) {
-            #if !os(iOS)
             if model.busy { ProgressView().controlSize(.small) }
-            #endif
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(L10n.text("%lld results", model.videoCount)).font(.headline)
                 Text(summaryDetail)
@@ -843,79 +831,18 @@ struct GlobalSearchView: View {
         }
         .monospacedDigit()
         .fixedSize(horizontal: false, vertical: true)
-        #endif
     }
 
     /// Failed sources count as "completed", so once the search ends report how many actually answered.
     private var summaryDetail: String {
-        #if os(iOS)
-        if model.stopped { return "已暂停搜索" }
-        if model.busy { return "站点已完成" }
-        if !model.failures.isEmpty { return "站点已完成，部分来源不可用" }
-        return "站点搜索完成"
-        #else
         if model.stopped { return L10n.text("Search paused") }
         if model.busy || model.failures.isEmpty { return L10n.text("Searched %lld of %lld sources", model.completed, model.total) }
         return L10n.text("%lld of %lld sources responded", model.completed - model.failures.count, model.total)
-        #endif
     }
 
-    /// Four fixed iOS slots keep the keyword and header height stable as sources finish or fail.
     private func searchActions(_ config: Subscription) -> some View {
-        #if os(iOS)
-        let unavailable = model.failures.count + model.paused.count
-        return HStack(spacing: 4) {
-            searchIcon(symbol: showsList ? "square.grid.2x2" : "list.bullet",
-                       title: L10n.text(showsList ? "Show as Grid" : "Show as List"), id: "search.layout") {
-                withAnimation(.appSmooth(duration: 0.35)) { showsList.toggle() }
-            }
-            searchIcon(symbol: model.busy ? "stop.fill" : "arrow.clockwise",
-                       title: L10n.text(model.busy ? "Stop" : "Continue search"), id: "search.stop",
-                       visible: model.busy || model.completed < model.total) {
-                if model.busy { model.stop() } else { model.resume(config: config) }
-            }
-            searchIcon(symbol: showsActivity ? "chevron.up" : "chevron.down",
-                       title: L10n.text(showsActivity ? "Hide Details" : "Show Details"), id: "search.activity",
-                       visible: model.busy) {
-                withAnimation(.appSmooth(duration: 0.25)) { showsActivity.toggle() }
-            }
-            searchIcon(symbol: "exclamationmark.triangle.fill", title: L10n.text("%lld unavailable", unavailable),
-                       id: "search.unavailable", visible: unavailable > 0, count: unavailable) { showFailures = true }
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        #else
         HStack(spacing: 8) { searchActionButtons(config) }.fixedSize()
-        #endif
     }
-
-    #if os(iOS)
-    @ViewBuilder private func searchIcon(symbol: String, title: String, id: String,
-                                        visible: Bool = true, count: Int? = nil, action: @escaping () -> Void) -> some View {
-        if visible {
-            Button(action: action) {
-                Image(systemName: symbol).font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(count == nil ? Color.primary : Brand.amber)
-                    .appSymbolReplaceTransition()
-                    .frame(width: 44, height: 44)
-                    .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .overlay(alignment: .topTrailing) {
-                        if let count, count > 0 {
-                            Text(count > 99 ? "99+" : String(count))
-                                .font(.system(size: 9, weight: .bold)).monospacedDigit()
-                                .foregroundStyle(Color.white)
-                                .padding(.horizontal, 4).frame(height: 16)
-                                .background(Brand.rose, in: Capsule()).padding(2)
-                                .accessibilityHidden(true).allowsHitTesting(false)
-                        }
-                    }
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain).accessibilityLabel(title).help(title).accessibilityIdentifier(id)
-        } else {
-            Color.clear.frame(width: 44, height: 44).allowsHitTesting(false).accessibilityHidden(true)
-        }
-    }
-    #endif
 
     /// tvOS pills lead with a symbol, as the search pill does; elsewhere the title stands alone.
     @ViewBuilder private func searchActionLabel(_ title: String, symbol: String) -> some View {
@@ -962,6 +889,8 @@ struct GlobalSearchView: View {
             }.searchAction()
         }
     }
+
+    #endif
 
     @ViewBuilder private func resultLinks(_ config: Subscription) -> some View {
         ForEach(posters) { item in

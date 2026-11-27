@@ -54,6 +54,11 @@ public enum RemoteEpisodeSkipPlan {
         }
         return result.sorted { $0.start < $1.start }
     }
+    public static func remainingPlayback(time: Double, duration: Double, segments: [RemoteEpisodeSkipSegment]) -> Double {
+        let skipped = segments.filter { $0.kind == "ending" && $0.isValid(duration: duration) }
+            .reduce(0.0) { $0 + max(0, min(duration, $1.end) - max(time, $1.start)) }
+        return max(0, duration - time - skipped)
+    }
     private static func append(_ segment: RemoteEpisodeSkipSegment, to result: inout [RemoteEpisodeSkipSegment], duration: Double) {
         guard segment.isValid(duration: duration), !result.contains(where: { $0.start < segment.end && segment.start < $0.end }),
               result.reduce(segment.end - segment.start, { $0 + $1.end - $1.start }) < duration else { return }
@@ -63,14 +68,22 @@ public enum RemoteEpisodeSkipPlan {
 
 public struct RemoteEpisodeSkipPass: Sendable {
     private var handled: Set<RemoteEpisodeSkipSegment> = []
+    private var userPosition: Double?
+    public mutating func userSought(to time: Double) { userPosition = time }
     public init() {}
     public mutating func target(time: Double, duration: Double, playing: Bool, enabled: Bool, segments: [RemoteEpisodeSkipSegment]) -> Double? {
         guard enabled, playing, time.isFinite, time >= 0, duration.isFinite, time <= duration else { return nil }
         for segment in segments where segment.isValid(duration: duration) && !handled.contains(segment) {
             // A plan arriving after a segment must not revive it on a manual rewind.
+            if let userPosition, userPosition >= segment.start, userPosition < segment.end {
+                handled.insert(segment); continue
+            }
             if time >= segment.end - 0.05 { handled.insert(segment); continue }
             guard time >= segment.start else { continue }
+            // A later chapter or provider may describe the same opening with a different end.
+            let alreadyPassed = handled.contains { $0.kind == segment.kind && $0.start < segment.end && segment.start < $0.end }
             handled.insert(segment)
+            if alreadyPassed { continue }
             return min(segment.end, duration - 0.05)
         }
         return nil

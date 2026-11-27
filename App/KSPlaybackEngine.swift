@@ -155,6 +155,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     private(set) var muted = false
     private(set) var volume: Float = 1
     var speed: Float = 1 { didSet { core?.playbackRate = min(8, max(0.25, speed)); synchronizePictureInPictureClock() } }
+    var onUserSeek: ((Double) -> Void)?
     var onReady: (() -> Void)?
     var onTick: (() -> Void)?
     var onFinish: ((Error?) -> Void)?
@@ -344,7 +345,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             Task { @MainActor [weak self] in
                 guard let self, let player = self.core,
                       ObjectIdentifier(player) == playerIdentity, self.openID == activeOpen else { return }
-                self.seek(to: target)
+                self.seekFromUser(to: target)
             }
         }
         player.playbackRate = speed
@@ -483,6 +484,10 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             host.addSubview(picture)
         }
         renderingRevision = UUID()
+    }
+    func seekFromUser(to time: Double, completion: @escaping (Bool) -> Void = { _ in }) {
+        if isReady, seekable, time.isFinite { onUserSeek?(min(max(0, time), duration)) }
+        seek(to: time, completion: completion)
     }
     func seek(to requested: Double, completion: @escaping (Bool) -> Void = { _ in }) {
         guard requested.isFinite, let core, isReady, core.seekable else { completion(false); return }

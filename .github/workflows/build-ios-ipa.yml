@@ -92,10 +92,11 @@ jobs:
       - name: Test production runtime startup and completion lifecycle
         run: |
           xcrun swiftc -swift-version 6 -parse-as-library \
-            Sources/TVCore/PlaybackOperationScope.swift Sources/TVCore/NodeSourceCompletion.swift Sources/TVCore/RuntimeStartupRegistry.swift \
+            Sources/TVCore/EpisodeSkip.swift Sources/TVCore/RemoteEpisodeSkip.swift Sources/TVCore/PlaybackOperationScope.swift Sources/TVCore/NodeSourceCompletion.swift Sources/TVCore/RuntimeStartupRegistry.swift \
             Tests/RuntimeLifecycle/checks.swift -o build/ci/runtime-lifecycle-checks
           build/ci/runtime-lifecycle-checks build/ci/runtime-lifecycle-checks.json \
             2>&1 | tee build/ci/runtime-lifecycle-checks.log
+          node --test Tests/RuntimeLifecycle/intro.test.mjs
       - name: Test production playback synchronization and resource ownership
         run: |
           xcrun swiftc -swift-version 6 -parse-as-library \

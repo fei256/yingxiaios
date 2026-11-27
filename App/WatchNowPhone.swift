@@ -6,6 +6,8 @@ import TVCore
 /// Watch Now on iPhone and the Mac, laid out as Discover is there: what you were watching last fills the top of the screen over its
 /// own cover, which tints the page, and every section below is a row of covers under a heading that opens all of it.
 struct WatchNowPhonePage: View {
+    @AppStorage(TMDBServiceSettings.titleLogoKey) private var showTitleLogo = true
+    @AppStorage("local.tmdb.custom.v1") private var configuration = Data()
     @Environment(Store.self) private var store
     let config: Subscription
     let sections: Set<HomeSection>
@@ -60,7 +62,9 @@ struct WatchNowPhonePage: View {
                         })))
                         .scrollIndicators(.hidden)
                     }
-                    .task(id: entries.map(\.id)) { await hero.load(entries) }
+                    .task(id: TMDBHeroArtworkRequest(items: entries.map(\.id), showTitleLogo: showTitleLogo, configuration: configuration)) {
+                        await hero.load(entries, preferTextless: showTitleLogo, configuration: configuration)
+                    }
                 }
             }
             // Over the hero the page has no title, as Discover; without one it keeps its name.
@@ -202,6 +206,7 @@ private struct WatchNowPhoneBackdrop: View {
 /// Up Next: a page for each of the newest titles not finished yet, with its logo or name, where you are in it and
 /// Resume. A swipe moves between them, as Discover's hero.
 private struct WatchNowPhoneHero: View {
+    @AppStorage(TMDBServiceSettings.titleLogoKey) private var showTitleLogo = true
     @Environment(Store.self) private var store
     @Environment(\.openRoute) private var openRoute
     #if os(iOS)
@@ -273,7 +278,7 @@ private struct WatchNowPhoneHero: View {
             Text(L10n.text("Up Next")).font(.system(size: 13, weight: .semibold)).opacity(0.7)
                 .padding(.bottom, 10)
             Group {
-                if let logo = details?.logo {
+                if showTitleLogo, let logo = details?.logo {
                     TMDBArtwork(url: logo, maxPixels: 1000, fill: false).accessibilityLabel(entry.context.videoName)
                 } else {
                     Text(entry.context.videoName).font(.system(size: 34, weight: .bold))

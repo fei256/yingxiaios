@@ -79,6 +79,8 @@ export class MobileServices {
   }
   async call(method, params = {}, signal) {
     switch (method) {
+      case 'intro.prefetch':
+        return await this.introSkip.prefetch(params.identity, params.metadata, signal);
       case 'intro.plan': {
         const session = this.assertSession(params);
         if (params.mediaVersion !== session.mediaVersion) throw new Error('播放媒体已改变');

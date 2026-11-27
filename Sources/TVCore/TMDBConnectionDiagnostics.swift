@@ -2,6 +2,30 @@ import Foundation
 import ImageIO
 
 extension TMDBServiceSettings {
+    public func testAPI(session: URLSession = .shared) async throws {
+        _ = try proxyConfiguration()
+        let value = try await CustomTMDBService.object("configuration", config: self, session: session, refresh: true, timeout: 12)
+        guard value["images"] is [String: Any] else { throw TMDBConnectionError.invalidResponse }
+    }
+
+    public func testImage(session: URLSession = .shared) async throws {
+        _ = try proxyConfiguration()
+        // A public poster lets this probe work with an empty key or an unreachable API.
+        guard let url = image("/pB8BM7pdSp6B6Ih7QZ4DrQ3PmJK.jpg", size: "w92") else { throw URLError(.badURL) }
+        var request = URLRequest(url: Self.artworkURL(url, settings: self), cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 12)
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        let data = try await self.data(for: request, session: session)
+        try Self.validateImage(data)
+    }
+
+    private static func validateImage(_ data: Data) throws {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                                              kCGImageSourceThumbnailMaxPixelSize: 64] as CFDictionary) != nil else {
+            throw TMDBConnectionError.invalidImage
+        }
+    }
+
     public struct ConnectionCheck: Identifiable, Sendable {
         public enum Status: Equatable, Sendable { case passed, warning, failed }
         public let title: String
@@ -19,9 +43,7 @@ extension TMDBServiceSettings {
             ConnectionCheck(title: title, message: TMDBConnectionError.message(for: error), status: .failed)
         }
         do {
-            _ = try config.proxyConfiguration()
-            let value = try await CustomTMDBService.object("configuration", config: config, session: session, refresh: true, timeout: 12)
-            guard value["images"] is [String: Any] else { throw TMDBConnectionError.invalidResponse }
+            try await config.testAPI(session: session)
             checks.append(ConnectionCheck(title: "API 与凭据", message: "TMDB API 验证通过。", status: .passed))
         } catch {
             try Task.checkCancellation()
@@ -65,11 +87,7 @@ extension TMDBServiceSettings {
             }
             do {
                 let data = try await Self.artworkData(for: address, settings: config, session: session)
-                guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-                      CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                                                                   kCGImageSourceThumbnailMaxPixelSize: 64] as CFDictionary) != nil else {
-                    throw TMDBConnectionError.invalidImage
-                }
+                try Self.validateImage(data)
                 let message = title == "演员头像" ? "图片读取成功；TMDB 提供了 \(details.cast.compactMap(\.profile).count) / \(details.cast.count) 位演员的头像。" : "图片读取成功。"
                 checks.append(ConnectionCheck(title: title, message: message, status: .passed))
             } catch {

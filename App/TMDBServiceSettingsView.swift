@@ -3,106 +3,145 @@ import TVCore
 
 struct TMDBServiceSettingsView: View {
     @State private var config = TMDBServiceSettings.load()
+    @State private var credential = TMDBServiceSettings.load().credential
+    @State private var showTitleLogo = UserDefaults.standard.object(forKey: TMDBServiceSettings.titleLogoKey) as? Bool ?? true
     @State private var message: String?
-    @State private var credentialType: TMDBServiceSettings.CredentialType = TMDBServiceSettings.load().token.isEmpty ? .apiKey : .token
-    @State private var testTitle = "凡人修仙传"
-    @State private var checks: [TMDBServiceSettings.ConnectionCheck] = []
-    @State private var testTask: Task<Void, Never>?
-    @State private var testing = false
-    @State private var testRevision = UUID()
+    @State private var advanced = false
+    @State private var clearRevision = 0
+
     var body: some View {
-        SettingsPage(title: "TMDB", symbol: "film.stack") {
-            SettingsGroup(footer: "默认使用内置 TMDB。关闭自定义后保留已填写的配置。") {
-                Toggle("自定义 TMDB", isOn: $config.enabled)
-                    .appOnChange(of: config.enabled) { _, enabled in if !enabled { save() } }
-            }
-            if config.enabled {
-                SettingsGroup(title: "自定义 TMDB") {
-                    Toggle("超清海报", isOn: $config.ultraHD)
-                    Picker("凭据类型", selection: $credentialType) {
-                        Text("API Key (v3)").tag(TMDBServiceSettings.CredentialType.apiKey)
-                        Text("Read Access Token").tag(TMDBServiceSettings.CredentialType.token)
-                    }
-                    SecureField(credentialType == .token ? "TMDB Read Access Token" : "TMDB API Key", text: credential)
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    if !config.credential.isEmpty {
-                        Button("清除已保存的密钥") { config.apiKey = ""; config.token = ""; message = "密钥将在保存后清除" }
-                    }
-                    TextField("语言", text: $config.language, prompt: Text("zh-CN"))
-                        .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("API 地址", text: $config.apiBase, prompt: Text(TMDBServiceSettings.defaultAPIBase))
-                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    TextField("图片地址", text: $config.imageBase, prompt: Text(TMDBServiceSettings.defaultImageBase))
-                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Toggle("使用代理", isOn: $config.proxyEnabled)
-                    if config.proxyEnabled {
-                        TextField("代理地址", text: $config.proxyUrl, prompt: Text("http://127.0.0.1:7890"))
-                            .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        TextField("代理账号（可选）", text: $config.proxyUsername)
+        SettingsPage(title: "TMDB 设置", symbol: "film.stack") {
+            SettingsGroup(title: "TMDB") {
+                SecureField("TMDB API Key 或 Read Access Token", text: $credential)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .accessibilityIdentifier("tmdb.credential")
+                TMDBEndpointRow(endpoint: .api, address: $config.apiBase, draft: draft)
+                TMDBEndpointRow(endpoint: .image, address: $config.imageBase, draft: draft)
+                HStack {
+                    Text("清晰度")
+                    Picker("清晰度", selection: $config.ultraHD) {
+                        Text("高清").tag(false)
+                        Text("原图").tag(true)
+                    }.labelsHidden().pickerStyle(.menu)
+                }
+                Toggle("使用 TMDB 片名图标", isOn: $showTitleLogo)
+                Text("开启后，首页轮播和详情页优先显示片名图标，首页竖图优先使用无字海报。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                DisclosureGroup(config.proxyEnabled ? "高级设置（网络代理已开启）" : "高级设置", isExpanded: $advanced) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        TextField("语言", text: $config.language, prompt: Text("zh-CN"))
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        SecureField("代理密码（可选）", text: $config.proxyPassword)
-                        if !config.proxyPassword.isEmpty { Button("清除已保存的代理密码") { config.proxyPassword = ""; message = "代理密码将在保存后清除" } }
-                        Text("支持 HTTP、HTTPS、SOCKS5；TMDB API 与图片使用相同代理。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Button("保存 TMDB 设置", action: save).settingsButton(prominent: true)
+                        Toggle("使用网络代理", isOn: $config.proxyEnabled)
+                        if config.proxyEnabled {
+                            TextField("代理地址", text: $config.proxyUrl, prompt: Text("http://127.0.0.1:7890"))
+                                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            TextField("代理账号（可选）", text: $config.proxyUsername)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            SecureField("代理密码（可选）", text: $config.proxyPassword)
+                        }
+                        Button("恢复直连地址并关闭网络代理") {
+                            config.useDirectConnection()
+                            message = "已填入直连地址，可先测试，再保存。"
+                        }
+                    }.padding(.top, 8)
                 }
-                SettingsGroup(title: "连接测试", footer: "使用当前填写的配置测试 API、影片资料和图片。修改后请保存设置，详情页会重新获取资料。") {
-                    TextField("测试影片", text: $testTitle).autocorrectionDisabled()
-                        .accessibilityIdentifier("tmdb.testTitle")
-                    Button(action: testConnection) {
-                        HStack { if testing { ProgressView() }; Text(testing ? "正在测试…" : "测试连接与图片") }
-                    }.settingsButton(prominent: true).disabled(testing)
-                        .accessibilityIdentifier("tmdb.testConnection")
-                    if testing { Button("取消测试", action: cancelTest).accessibilityIdentifier("tmdb.cancelTest") }
-                    ForEach(checks) { check in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Label(check.title, systemImage: check.status == .passed ? "checkmark.circle" : check.status == .warning ? "info.circle" : "exclamationmark.triangle")
-                                .font(.subheadline.weight(.medium))
-                            Text(check.message).font(.footnote).foregroundStyle(.secondary)
-                        }.accessibilityElement(children: .combine)
-                    }
+                HStack(spacing: 20) {
+                    Button("保存", action: save).settingsButton(prominent: true)
+                    Button("清除", role: .destructive, action: clear).buttonStyle(.borderless)
                 }
+                if let message { Text(message).font(.footnote).foregroundStyle(.secondary) }
             }
-            if let message { SettingsGroup { Text(message).font(.footnote).foregroundStyle(.secondary) } }
+            .id(clearRevision)
         }
-        .onDisappear(perform: cancelTest)
-        .appOnChange(of: config) { _, _ in cancelTest(); checks = [] }
-        .appOnChange(of: credentialType) { _, _ in cancelTest(); checks = [] }
     }
-    private var credential: Binding<String> {
-        Binding(get: { credentialType == .token ? config.token : config.apiKey }, set: {
-            if credentialType == .token { config.token = $0; config.apiKey = "" }
-            else { config.apiKey = $0; config.token = "" }
-        })
+
+    private var draft: TMDBServiceSettings {
+        config.editorConfiguration(credential: credential)
     }
-    private var currentConfiguration: TMDBServiceSettings { config.formConfiguration(credentialType: credentialType) }
+
     private func save() {
         do {
-            let value = currentConfiguration
-            try value.save()
-            config = value
-            credentialType = value.token.isEmpty ? .apiKey : .token
-            message = config.enabled ? "已保存自定义 TMDB，详情页将重新获取资料。可测试连接确认 API 和图片。" : "已使用内置 TMDB"
-        } catch { message = "配置无效，请检查 API、图片和代理地址。" }
+            let value = draft
+            try value.save(showTitleLogo: showTitleLogo)
+            config = TMDBServiceSettings.load()
+            credential = config.credential
+            message = config.custom == nil ? "已保存图片与显示设置。未填写密钥，影片资料使用内置服务。" : "已保存 TMDB 配置。"
+        } catch { message = "保存失败，请检查 API、图片和网络代理地址。" }
     }
-    private func testConnection() {
-        cancelTest(); checks = []; testing = true
-        let revision = testRevision, draft = currentConfiguration, title = testTitle
-        testTask = Task {
-            do {
-                let result = try await draft.testConnection(title: title)
-                guard !Task.isCancelled, revision == testRevision else { return }
-                checks = result
-            } catch {
-                guard !Task.isCancelled, revision == testRevision else { return }
-                message = TMDBConnectionError.message(for: error)
+
+    private func clear() {
+        TMDBServiceSettings.clear()
+        config = TMDBServiceSettings()
+        credential = ""
+        showTitleLogo = true
+        advanced = false
+        clearRevision += 1
+        message = "已清除 TMDB 配置，恢复内置服务。"
+    }
+}
+
+private struct TMDBEndpointRow: View {
+    enum Endpoint { case api, image }
+    let endpoint: Endpoint
+    @Binding var address: String
+    let draft: TMDBServiceSettings
+    @State private var attempt: UUID?
+    @State private var result: String?
+    @State private var testing = false
+
+    private var title: String { endpoint == .api ? "API 代理地址" : "图片代理地址" }
+    private var testInputs: [String] {
+        [address, endpoint == .api ? draft.credential : "", endpoint == .api ? draft.language : String(draft.ultraHD),
+         draft.proxyEnabled ? draft.proxyUrl : "",
+         draft.proxyEnabled ? draft.proxyUsername : "", draft.proxyEnabled ? draft.proxyPassword : "",
+         String(draft.proxyEnabled)]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.footnote).foregroundStyle(.secondary)
+            HStack {
+                TextField(title, text: $address, prompt: Text(endpoint == .api ? "https://api.tmdb.org" : TMDBServiceSettings.defaultImageBase))
+                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button(testing ? "测试中…" : "测试") {
+                    result = nil
+                    testing = true
+                    attempt = UUID()
+                }
+                .buttonStyle(.borderless).frame(minWidth: 50, minHeight: 44).disabled(testing)
+                .accessibilityLabel("测试" + title)
+                .accessibilityIdentifier(endpoint == .api ? "tmdb.testAPI" : "tmdb.testImage")
             }
-            guard revision == testRevision else { return }
-            testing = false; testTask = nil
+            if let result { Text(result).font(.footnote).foregroundStyle(.secondary) }
         }
+        .task(id: attempt) {
+            guard let id = attempt else { return }
+            let feedback: String
+            do {
+                switch endpoint {
+                case .api:
+                    try await draft.testAPI()
+                    feedback = "API 测试通过，已读取 TMDB 配置。"
+                case .image:
+                    try await draft.testImage()
+                    feedback = "图片测试通过，已下载并解码海报。"
+                }
+            } catch {
+                if endpoint == .image, let failure = error as? TMDBConnectionError, case let .http(code) = failure, code != 407 {
+                    feedback = "图片服务返回 HTTP \(code)，请检查图片代理地址。"
+                } else { feedback = TMDBConnectionError.message(for: error) }
+            }
+            guard !Task.isCancelled, attempt == id else { return }
+            result = feedback
+            testing = false
+        }
+        .appOnChange(of: testInputs) { _, _ in reset() }
+        .onDisappear(perform: reset)
     }
-    private func cancelTest() {
-        testRevision = UUID(); testTask?.cancel(); testTask = nil; testing = false
+
+    private func reset() {
+        attempt = nil
+        testing = false
+        result = nil
     }
 }

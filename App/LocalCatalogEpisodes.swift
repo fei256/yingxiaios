@@ -52,11 +52,7 @@ struct LocalCatalogDetailEpisodeCard: View {
     var progress: Double? = nil
     var watched = false
     @ScaledMetric(relativeTo: .caption) private var captionSize: CGFloat = 12
-    private var size: String? { value.fileDetail?.components(separatedBy: " · ").last.flatMap { ["M", "G", "T"].contains(where: $0.hasSuffix) ? $0 : nil } }
     private var overview: String { value.info?.overview.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
-    private var description: String {
-        value.episode.name != value.title || overview.isEmpty ? value.episode.name : overview
-    }
     private var metadata: String {
         var parts: [String] = []
         if let date = value.info?.airDate, LocalCatalogDetailRules.date(date) != nil { parts.append(date) }
@@ -67,13 +63,18 @@ struct LocalCatalogDetailEpisodeCard: View {
         return parts.joined(separator: " · ")
     }
     var body: some View {
+        let metadata = self.metadata
+        let parts = value.fileDetail?.components(separatedBy: " · ") ?? []
+        let size = parts.last.flatMap { part in ["M", "G", "T"].contains(where: part.hasSuffix) ? part : nil }
+        let fileDetail = size == nil ? parts.joined(separator: " · ") : parts.dropLast().joined(separator: " · ")
+        let summary = value.episode.name == value.title && !overview.isEmpty ? overview : value.episode.name
         VStack(alignment: .leading, spacing: 0) {
             LocalCatalogEpisodeArtwork(primary: value.info?.still ?? backdrop, fallback: video.poster, headers: video.posterHeaders)
                 .frame(width: width, height: width * 9 / 16).clipped()
                 .overlay {
                     if loading { ProgressView().tint(.white).padding(12).background(.black.opacity(0.5), in: Circle()) }
                 }
-                .overlay(alignment: .top) { badges.padding(7) }
+                .overlay(alignment: .top) { badges(size: size).padding(7) }
                 .overlay(alignment: .bottomLeading) {
                     Text(value.title == value.episode.name ? value.numberLabel ?? value.title : value.title)
                         .font(.system(size: captionSize, weight: .medium)).lineLimit(1)
@@ -88,15 +89,22 @@ struct LocalCatalogDetailEpisodeCard: View {
                         ProgressView(value: min(1, progress)).tint(Brand.amber).padding(.horizontal, 8).padding(.bottom, 2)
                     }
                 }
-            VStack(alignment: .leading, spacing: 5) {
-                Text(metadata.isEmpty ? " " : metadata).font(.system(size: captionSize - 1))
-                    .foregroundStyle(.white.opacity(0.58)).lineLimit(1, reservesSpace: true)
-                Text(description).font(.system(size: captionSize)).foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(4, reservesSpace: true).fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(value.fileDetail ?? " ").font(.system(size: captionSize - 1))
-                    .foregroundStyle(.white.opacity(0.55)).lineLimit(1, reservesSpace: true)
-            }.padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 8)
+            if !metadata.isEmpty || !summary.isEmpty || !fileDetail.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    if !metadata.isEmpty {
+                        Text(metadata).font(.system(size: captionSize - 1))
+                            .foregroundStyle(.white.opacity(0.58)).lineLimit(1)
+                    }
+                    if !summary.isEmpty {
+                        Text(summary).font(.system(size: captionSize)).foregroundStyle(.white.opacity(0.9))
+                            .lineLimit(4).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !fileDetail.isEmpty {
+                        Text(fileDetail).font(.system(size: captionSize - 1))
+                            .foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                    }
+                }.padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 8)
+            }
         }
         .frame(width: width, alignment: .topLeading)
         .foregroundStyle(.white)
@@ -108,7 +116,7 @@ struct LocalCatalogDetailEpisodeCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous)).contentShape(Rectangle())
     }
-    private var badges: some View {
+    private func badges(size: String?) -> some View {
         HStack(alignment: .top, spacing: 6) {
             if let number = value.key.number { badge(String(number)) }
             else if let number = value.numberLabel { badge(number) }

@@ -38,14 +38,6 @@ struct DetailPlaybackControls: View {
             action(.resume, title: reading == nil ? (canResume ? "继续播放" : "开始播放") : (finishedReading ? "重新阅读" : "继续阅读"),
                    subtitle: context, symbol: reading == nil ? "play.fill" : "book.fill")
                 .background(.white, in: Capsule())
-                .overlay(alignment: .bottom) {
-                    if canResume {
-                        ProgressView(value: progress).tint(Brand.amber)
-                            .padding(.horizontal, 26).padding(.bottom, 5)
-                            .accessibilityLabel(reading == nil ? "观看进度" : "阅读进度")
-                            .accessibilityValue("\(Int((progress * 100).rounded()))%")
-                    }
-                }
                 .clipShape(Capsule())
         }
         .frame(maxWidth: .infinity)
@@ -65,19 +57,29 @@ struct DetailPlaybackControls: View {
     }
     private func action(_ mode: PlaybackResumeMode, title: String, subtitle: String, symbol: String) -> some View {
         Button { start(mode) } label: {
-            HStack(spacing: 8) {
-                if busy && loadingMode == mode { ProgressView().controlSize(.small).tint(.black) }
-                else { Image(systemName: symbol).font(.system(size: 19, weight: .semibold)) }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                    if !subtitle.isEmpty { Text(subtitle).font(.system(size: 11)).foregroundStyle(.black.opacity(0.58)).lineLimit(1) }
+            VStack(spacing: 5) {
+                HStack(spacing: 8) {
+                    if busy && loadingMode == mode { ProgressView().controlSize(.small).tint(.black) }
+                    else { Image(systemName: symbol).font(.system(size: 19, weight: .semibold)) }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+                        if !subtitle.isEmpty { Text(subtitle).font(.system(size: 11)).foregroundStyle(.black.opacity(0.58)).lineLimit(1) }
+                    }
                 }
-            }.foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 48, alignment: .center).padding(.horizontal, 16)
-                .contentShape(Rectangle())
+                if canResume {
+                    ProgressView(value: progress).progressViewStyle(.linear).tint(Brand.amber)
+                        .padding(.horizontal, 10)
+                }
+            }
+            .foregroundStyle(.black)
+            .padding(.vertical, canResume ? 6 : 0)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(busy || selection.episode == nil)
         .accessibilityLabel(title + " " + (selection.episode?.name ?? ""))
-        .accessibilityValue(mode == .beginning ? beginningLabel : context)
+        .accessibilityValue(canResume ? "\(context)，\(reading == nil ? "观看进度" : "阅读进度") \(Int((progress * 100).rounded()))%" : context)
         .accessibilityIdentifier(mode == .beginning ? "detail.playBeginning" : "detail.play")
     }
     private func time(_ position: Double) -> String {

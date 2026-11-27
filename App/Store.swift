@@ -2,6 +2,36 @@ import SwiftUI
 import Perception
 import TVCore
 
+struct CatalogEpisodePlayback: Identifiable {
+    let id = UUID()
+    let video: Video
+    let episode: Episode
+    let label: String
+    let client: CatalogClient
+    let historyScope: String?
+    let resumePosition: Double?
+    let reportFailure: @MainActor (Error) -> Void
+
+    @MainActor func resolve(in store: Store, isCurrent: () -> Bool) async throws -> Channel {
+        let started = Date()
+        guard isCurrent(), store.historyScope == historyScope else { throw CancellationError() }
+        let origin = store.subscription?.origin
+        Diagnostics.shared.record(.info, "player.startup", "entry=detail request=\(id) stage=resolve-begin")
+        defer { Diagnostics.shared.record(.info, "player.startup", "entry=detail request=\(id) stage=resolve-end elapsed=\(Date().timeIntervalSince(started)) cancelled=\(Task.isCancelled)") }
+        try Task.checkCancellation()
+        let plan = try await client.preparePlayback(episode)
+        try Task.checkCancellation()
+        guard isCurrent(), store.historyScope == historyScope, store.subscription?.origin == origin else { throw CancellationError() }
+        guard let choice = plan.choices.first else { throw URLError(.cannotParseResponse) }
+        let playback = store.subscription.map { client.applying($0) } ?? client
+        let resolved = try await playback.resolvePlayback(plan, choice: choice)
+        try Task.checkCancellation()
+        guard isCurrent(), store.historyScope == historyScope, store.subscription?.origin == origin else { throw CancellationError() }
+        Diagnostics.shared.record(.info, "player.startup", "entry=detail request=\(id) stage=source-ready elapsed=\(Date().timeIntervalSince(started))")
+        return store.catalogChannel(resolved, video: video, episode: episode, client: playback, resumePosition: resumePosition)
+    }
+}
+
 @MainActor @Perceptible final class Store {
     static let defaultURL = "https://raw.githubusercontent.com/qist/tvbox/master/fty.json"
     let searchModel = SearchModel()
@@ -123,10 +153,16 @@ import TVCore
     /// iPhone and iPad that alert closed the Add Subscription sheet over it and took the viewer out of the form (#357).
     var importError: String?
     var notice: String?
+    #if os(iOS)
+    var pendingCatalogPlayback: CatalogEpisodePlayback?
+    #endif
     var localReading: LocalReadingSession?
     var playing: Channel? {
         // An episode of a listening source (audiobooks, radio, songs) plays in the music player instead (#289).
         didSet {
+            #if os(iOS)
+            pendingCatalogPlayback = nil
+            #endif
             if let channel = playing, let media = channel.playback?.reading {
                 playing = nil
                 music.stop()

@@ -4,6 +4,12 @@ import SwiftUI
 import Perception
 import TVCore
 
+struct TMDBHeroArtworkRequest<Items: Equatable>: Equatable {
+    let items: Items
+    let showTitleLogo: Bool
+    let configuration: Data
+}
+
 /// Large artwork and transparent logos share the configured TMDB image transport.
 struct TMDBArtwork: View {
     @AppStorage("local.tmdb.custom.v1") private var tmdbSettings = Data()

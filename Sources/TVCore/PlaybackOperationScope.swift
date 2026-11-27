@@ -13,7 +13,7 @@ public struct PlaybackOperationScope: Sendable {
 public struct PlaybackStartupWork: Sendable {
     public enum Kind: Double, Hashable, Sendable {
         case subtitles = 1
-        case remoteSkip = 2
+        case remoteSkip = 0
         case danmaku = 4
     }
     private var stableSince: TimeInterval?
@@ -48,12 +48,17 @@ public struct PlaybackStartupWork: Sendable {
         if requested.contains(kind) { return true }
         guard let stableSince else { return false }
         // Some sources expose little buffered time even when playback advances steadily.
-        return now - stableSince >= kind.rawValue + (hasHeadroom ? 0 : 6)
+        let extra: TimeInterval = hasHeadroom ? 0 : (kind == .remoteSkip ? 1 : 6)
+        return now - stableSince >= kind.rawValue + extra
     }
 }
 
 public enum NextMediaPolicy {
-    public static func mayPrepare(enabled: Bool, paused: Bool, buffering: Bool, seeking: Bool, bufferedSeconds: Double, speed: Double) -> Bool {
-        enabled && !paused && !buffering && !seeking && speed.isFinite && speed > 0 && bufferedSeconds.isFinite && bufferedSeconds / speed >= 20
+    public static func mayPrepare(enabled: Bool, paused: Bool, buffering: Bool, seeking: Bool, bufferedSeconds: Double, speed: Double, remainingSeconds: Double? = nil) -> Bool {
+        guard enabled, !paused, !buffering, !seeking, speed.isFinite, speed > 0, bufferedSeconds.isFinite, bufferedSeconds > 0 else { return false }
+        if bufferedSeconds / speed >= 20 { return true }
+        // Fully buffered to EOF: the current episode has no outstanding bytes to protect.
+        guard let remainingSeconds, remainingSeconds.isFinite, remainingSeconds > 0 else { return false }
+        return bufferedSeconds >= remainingSeconds
     }
 }

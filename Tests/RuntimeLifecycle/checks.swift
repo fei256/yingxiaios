@@ -1,5 +1,8 @@
 import Foundation
 
+// The standalone runner links episode rules without the app's localization bundle.
+enum L10n { static func text(_ key: String) -> String { key } }
+
 private enum CheckFailure: Error { case expected, assertion(String) }
 private func require(_ value: Bool, _ message: String) throws {
     if !value { throw CheckFailure.assertion(message) }
@@ -57,8 +60,9 @@ private func cancelled<T>(_ result: Result<T, Error>) -> Bool {
             try require(kinds.allSatisfy { !startup.allows($0, now: 100) }, "Network work ran before a picture")
             startup.observe(ready: true, now: 100)
             startup.observe(ready: true, now: 101)
-            try require(startup.allows(.subtitles, now: 101) && !startup.allows(.remoteSkip, now: 101),
-                        "Automatic subtitles and remote skip started together")
+            try require(startup.allows(.remoteSkip, now: 100) && !startup.allows(.subtitles, now: 100),
+                        "Opening lookup did not get the first stable playback interval")
+            try require(startup.allows(.subtitles, now: 101), "A slow opening lookup delayed subtitles")
             try require(startup.allows(.remoteSkip, now: 102) && !startup.allows(.danmaku, now: 102),
                         "Automatic metadata and comments started together")
             startup.observe(ready: false, now: 103)
@@ -79,10 +83,38 @@ private func cancelled<T>(_ result: Result<T, Error>) -> Bool {
             for second in 0...12 {
                 startup.observeProgress(ready: true, mediaTime: Double(second), now: Double(second),
                                         stallTolerance: 1.5, hasHeadroom: false)
+                if second == 2 { try require(startup.allows(.remoteSkip, now: 2) && !startup.allows(.subtitles, now: 2), "Low-buffer opening lookup lost priority") }
                 if second == 5 { try require(!startup.allows(.danmaku, now: 5), "Low-buffer startup ran too early") }
             }
             try require(startup.allows(.danmaku, now: 12), "Smooth low-buffer video starved automatic comments")
             record("automatic subtitles, intro matching and comments yield to startup and buffering")
+            let chapters = [RemoteEpisodeSkipChapter(time: 30, title: "OP", end: 90),
+                            RemoteEpisodeSkipChapter(time: 1100, title: "ED", end: 1190)]
+            let segments = RemoteEpisodeSkipPlan.local(settings: EpisodeSkipSettings(), duration: 1200, chapters: chapters)
+            var pass = RemoteEpisodeSkipPass()
+            func skip(_ time: Double, enabled: Bool = true, playing: Bool = true) -> Double? {
+                pass.target(time: time, duration: 1200, playing: playing, enabled: enabled, segments: segments)
+            }
+            try require(skip(0) == nil && skip(28) == nil, "Cold-open footage was skipped")
+            try require(skip(40, enabled: false) == nil && skip(40, playing: false) == nil, "Paused or disabled skip was consumed")
+            try require(skip(40) == 90 && skip(35) == nil, "Resume within opening must skip only once")
+            let longerOpening = [RemoteEpisodeSkipSegment(kind: "opening", start: 30, end: 105, source: "章节")]
+            try require(pass.target(time: 91, duration: 1200, playing: true, enabled: true, segments: longerOpening) == nil,
+                        "Revised metadata jumped twice for the same opening")
+            pass = RemoteEpisodeSkipPass()
+            try require(skip(100) == nil && skip(45) == nil, "Late opening revived on rewind")
+            pass = RemoteEpisodeSkipPass()
+            pass.userSought(to: 48)
+            try require(skip(49) == nil && skip(1100) == 1190, "Manual replay suppressed the wrong segment")
+            try require(RemoteEpisodeSkipPlan.remainingPlayback(time: 1085, duration: 1200, segments: segments) == 25,
+                        "Next episode prefetch lost the post-credit scene")
+            try require(RemoteEpisodeSkipPlan.remainingPlayback(time: 1195, duration: 1200, segments: segments) == 5,
+                        "Past credits were subtracted twice")
+            try require(NextMediaPolicy.mayPrepare(enabled: true, paused: false, buffering: false, seeking: false,
+                        bufferedSeconds: 8, speed: 1, remainingSeconds: 8), "Full tail buffer cancelled prefetch")
+            try require(!NextMediaPolicy.mayPrepare(enabled: true, paused: false, buffering: false, seeking: false,
+                        bufferedSeconds: 8, speed: 1, remainingSeconds: 20), "Partial tail buffer admitted prefetch")
+            record("opening, resume, manual replay and post-credit prefetch respect episode time")
             do {
                 let calls = Counter()
                 for control in [NodeHostControl(error: "fixture-stop"), NodeHostControl(port: 0, token: "token"), NodeHostControl(port: 8123)] {

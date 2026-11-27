@@ -69,15 +69,9 @@ struct MobilePlayerView: View {
     @State private var holding = false
     @AppStorage(SpeedBoost.key) private var holdSpeed = SpeedBoost.standard
     @AppStorage(PlaybackInfo.key) private var showsPlaybackInfo = false
-    /// The full-screen top row's height, which the info panel keeps clear of while the controls show.
-    @State private var topRowHeight: CGFloat = 44
     @State private var bottomControlsHeight: CGFloat = 0
     @State private var noticeStackHeight: CGFloat = 0
     @State private var noticeExpiryRevision = 0
-    /// Double taps on a side skip (YouTube); the run's total shows on that side for a moment.
-    @State private var taps = PictureTaps()
-    @State private var skipped: (forward: Bool, total: Double)?
-    @State private var skippedTask: Task<Void, Never>?
     /// Sliding sideways across the picture: where the slide began.
     @State private var swipeStart: Double?
     /// Sliding up or down: the brightness on the left, the volume on the right, from where the slide began.
@@ -108,15 +102,14 @@ struct MobilePlayerView: View {
                 ZStack {
                     playbackPicture
                     playbackInteractionOverlay
-                    playbackInformationOverlay
-                    controls.opacity(chromeVisible && !locked ? 1 : 0)
-                        .allowsHitTesting(chromeVisible && !locked)
-                        .environment(\.playerControlsTouchActive, chromeVisible && !locked)
+                    controls.opacity(controlsVisible ? 1 : 0)
+                        .allowsHitTesting(controlsVisible)
+                        .environment(\.playerControlsTouchActive, controlsVisible)
                     playbackNotices
                     localPopup.playerControlHitRegion()
-                        .opacity(chromeVisible && !locked ? 1 : 0)
-                        .allowsHitTesting(chromeVisible && !locked && localPanel != nil)
-                        .environment(\.playerControlsTouchActive, chromeVisible && !locked && localPanel != nil)
+                        .opacity(controlsVisible ? 1 : 0)
+                        .allowsHitTesting(controlsVisible && localPanel != nil)
+                        .environment(\.playerControlsTouchActive, controlsVisible && localPanel != nil)
                     if !inline { lockButton.environment(\.playerControlsTouchActive, locked ? showsLock : chromeVisible) }
                 }
                 // The screen proposes the viewport. A previous landscape control width must
@@ -189,7 +182,6 @@ struct MobilePlayerView: View {
         WithPerceptionTracking {
             ZStack {
                 // A tap on the picture shows or hides the controls; a tap on a control keeps them up (see `rows`).
-                // Two taps on a side skip, touching and holding plays faster, and sliding sideways seeks.
                 PictureGestures(tap: tapped, hold: held, swipe: swiped, levels: slidesLevels && !inline, excludedHitRegions: pictureControlFrames) { wider in
                     guard !locked else { return }
                     withAnimation(.easeInOut(duration: 0.25)) { fillsScreen = wider }
@@ -200,7 +192,6 @@ struct MobilePlayerView: View {
                     MusicVolumeSlider.HiddenVolumeView(system: systemVolume).frame(width: 1, height: 1).opacity(0.01).allowsHitTesting(false)
                 }
                 boostLabel
-                skippedLabel
                 swipeLabel
                 levelLabel
                 if let playingOn {
@@ -213,19 +204,13 @@ struct MobilePlayerView: View {
         }
     }
 
-    private var playbackInformationOverlay: some View {
+    private var controlsVisible: Bool { chromeVisible && !locked }
+
+    private var playbackInformation: some View {
         WithPerceptionTracking {
-                // While the controls show it moves below their top row; on a watch page, too small for both, they take
-                // its corner and it comes back with the bare picture.
-                if showsPlaybackInfo && session.error == nil && session.showsPicture && !pip.active && playingOn == nil {
-                    PlaybackInfoPanel(session: session)
-                        .padding(inline ? 8 : 16)
-                        .padding(.top, chromeVisible && !inline ? topRowHeight + 12 : 0)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .opacity(chromeVisible && inline ? 0 : 1)
-                        .animation(.appSmooth(duration: 0.25), value: chromeVisible)
-                        .allowsHitTesting(false)
-                }
+            if controlsVisible && showsPlaybackInfo && session.showsPicture && session.error == nil && !pip.active && playingOn == nil {
+                PlaybackInfoPanel(session: session)
+            }
         }
     }
 
@@ -270,7 +255,7 @@ struct MobilePlayerView: View {
 
     private var noticeBottomInset: CGFloat {
         let resting: CGFloat = inline ? 12 : 28
-        guard chromeVisible && !locked && showsTransport else { return resting }
+        guard controlsVisible && showsTransport else { return resting }
         let clearance = bottomControlsHeight + (inline ? 8 : 16) + 10
         return min(clearance, max(0, playerSize.height - noticeStackHeight - 8))
     }
@@ -405,35 +390,22 @@ struct MobilePlayerView: View {
 
     // MARK: Taps and slides
 
-    private func tapped(_ x: CGFloat, _ width: CGFloat) {
+    private func tapped(_ tap: PictureGestures.Tap) {
         #if DEBUG
-        Diagnostics.shared.record(.debug, "player.chrome", "event=picture-tap x=\(x) width=\(width) visible=\(chromeVisible) locked=\(locked)")
+        Diagnostics.shared.record(.debug, "player.chrome", "event=picture-tap type=\(tap) visible=\(chromeVisible) locked=\(locked)")
         #endif
-        // Locked, a tap shows (or hides) the lock button and nothing else: no controls, no skip, no pause.
         if locked {
             if showsLock { withAnimation(.easeOut(duration: 0.2)) { showsLock = false } } else { flashLock() }
             return
         }
-        let zone = PictureTaps.zone(x: x, width: width, seekable: seekable && showsTransport && playingOn == nil && !pip.active)
-        switch taps.tap(at: ProcessInfo.processInfo.systemUptime, in: zone) {
-        case .toggleControls:
+        switch tap {
+        case .single:
             let showing = !chromeVisible
             toggleChrome()
-            if showing { clearLabels() }
-        case .togglePlayback:
-            toggleChrome()
+            if showing { clearLevelLabel() }
+        case .double:
+            guard showsTransport, playingOn == nil, !pip.active else { return }
             session.togglePlayback()
-        case .skip(let seconds, let total, _):
-            // Hidden whether the first tap showed the controls or hid them.
-            hideChrome()
-            session.skip(seconds)
-            nowPlaying.update(title: channel.name, session: session)
-            withAnimation(.appSnappy(duration: 0.25)) { skipped = (seconds > 0, total) }
-            skippedTask?.cancel()
-            skippedTask = Task {
-                try? await Task.sleep(for: .seconds(PictureTaps.streak + 0.1))
-                if !Task.isCancelled { withAnimation(.easeOut(duration: 0.2)) { skipped = nil } }
-            }
         }
     }
 
@@ -442,9 +414,7 @@ struct MobilePlayerView: View {
         if chromeVisible && showsTransport { toggleChrome() }
     }
 
-    /// The controls a tap brings up replace the labels a skip or a slide leaves for a moment.
-    private func clearLabels() {
-        skippedTask?.cancel(); skipped = nil
+    private func clearLevelLabel() {
         guard !leveling else { return }
         levelTask?.cancel(); level = nil; mountsVolume = false
     }
@@ -521,32 +491,6 @@ struct MobilePlayerView: View {
         }
     }
 
-    /// How far a run of double taps skipped, on its side.
-    @ViewBuilder private var skippedLabel: some View {
-        if let skipped {
-            // Glass like the other gesture labels, with the skip buttons' symbol; it bounces on each further tap.
-            VStack(spacing: 4) {
-                Image(systemName: skipped.forward ? "goforward.10" : "gobackward.10")
-                    .font(.system(size: 30, weight: .medium))
-                    .appBounce(value: skipped.total)
-                Text((skipped.forward ? "+" : "\u{2212}") + L10n.text("%lld s", Int(skipped.total)))
-                    .font(.footnote.weight(.semibold).monospacedDigit())
-                    .contentTransition(.numericText(countsDown: !skipped.forward))
-            }
-            .foregroundStyle(.white)
-            .frame(width: 96, height: 96)
-            .glassSurface(.regular, in: Circle())
-            .environment(\.colorScheme, .dark)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: skipped.forward ? .trailing : .leading)
-            .padding(.horizontal, 48)
-            .allowsHitTesting(false)
-            .transition(.scale(scale: 0.8, anchor: skipped.forward ? .trailing : .leading).combined(with: .opacity))
-            .accessibilityElement(children: .ignore)
-            .accessibilityIdentifier("player.tapSkip")
-            .accessibilityValue("\(skipped.forward ? "+" : "-")\(Int(skipped.total))")
-        }
-    }
-
     /// Where a slide across the picture will seek to: the frame there, the time and how far it moves.
     @ViewBuilder private var swipeLabel: some View {
         if let swipeStart {
@@ -610,7 +554,7 @@ struct MobilePlayerView: View {
             // The picture to itself; the lock button stays a moment to show where it is.
             endBoost()
             hideChrome()
-            clearLabels()
+            clearLevelLabel()
             flashLock()
         } else {
             showsLock = false
@@ -722,6 +666,11 @@ struct MobilePlayerView: View {
             .allowsHitTesting(false)
             VStack(spacing: 0) {
                 topRow
+                    .overlay(alignment: .bottomLeading) {
+                        if !inline {
+                            playbackInformation.alignmentGuide(.bottom) { $0[.top] - 12 }
+                        }
+                    }
                 Spacer(minLength: 0)
                 if showsTransport {
                     VStack(spacing: 0) {
@@ -763,6 +712,7 @@ struct MobilePlayerView: View {
                             .accessibilityIdentifier("player.cacheStatus")
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
+                if inline { playbackInformation }
                 if playerSize.width > 600 {
                     VStack(alignment: .trailing, spacing: 3) {
                         if let status = session.cacheStatus {
@@ -781,37 +731,45 @@ struct MobilePlayerView: View {
                 }
             }.padding(.horizontal, 6)
             HStack(spacing: playerSize.width < 350 ? 2 : 8) {
-            Button(action: close) { Image(systemName: "chevron.backward").playerControlTarget() }
-                .buttonStyle(PlayerToolbarButtonStyle()).accessibilityLabel("返回").accessibilityIdentifier("player.close")
-            Button { togglePanel(.cast) } label: {
-                Image(systemName: "airplayvideo").playerControlTarget()
-            }.buttonStyle(PlayerToolbarButtonStyle(selected: localPanel == .cast)).accessibilityLabel("投屏")
-                .accessibilityIdentifier("player.cast")
-            Button { togglePanel(.aspect) } label: {
-                Image(systemName: "aspectratio").playerControlTarget()
-            }.buttonStyle(PlayerToolbarButtonStyle(selected: localPanel == .aspect)).accessibilityLabel("画面比例")
-                .accessibilityIdentifier("player.aspect")
-            Button { togglePanel(.information) } label: {
-                Image(systemName: "info.circle").playerControlTarget()
-            }.buttonStyle(PlayerToolbarButtonStyle(selected: localPanel == .information)).accessibilityLabel("视频信息")
-                .accessibilityIdentifier("player.information")
-            Spacer(minLength: 4)
-            Button { pip.toggle() } label: { Image(systemName: pip.active ? "pip.exit" : "pip.enter").playerControlTarget() }
-                .buttonStyle(PlayerToolbarButtonStyle(selected: pip.active)).disabled(!pip.supported || !pip.possible && !pip.active)
-                .accessibilityLabel("画中画").accessibilityIdentifier("player.pip")
-            if PlayerOrientation.available {
-                Button(action: rotatePlayer) {
-                    Image(systemName: "rotate.right").playerControlTarget()
-                }.buttonStyle(PlayerToolbarButtonStyle())
-                    .accessibilityLabel(playerSize.width > playerSize.height ? "切换竖屏" : "切换横屏")
-                    .accessibilityIdentifier("player.rotate")
-            }
+                Button(action: close) { Image(systemName: "chevron.backward").playerControlTarget() }
+                    .buttonStyle(PlayerToolbarButtonStyle()).accessibilityLabel("返回").accessibilityIdentifier("player.close")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: playerSize.width < 350 ? 2 : 8) {
+                        Button { togglePanel(.cast) } label: {
+                            Image(systemName: "airplayvideo").playerControlTarget()
+                        }.buttonStyle(PlayerToolbarButtonStyle(selected: localPanel == .cast)).accessibilityLabel("投屏")
+                            .accessibilityIdentifier("player.cast")
+                        Button { togglePanel(.aspect) } label: {
+                            Image(systemName: "aspectratio").playerControlTarget()
+                        }.buttonStyle(PlayerToolbarButtonStyle(selected: localPanel == .aspect)).accessibilityLabel("画面比例")
+                            .accessibilityIdentifier("player.aspect")
+                        Button { togglePanel(.information) } label: {
+                            Image(systemName: "info.circle").playerControlTarget()
+                        }.buttonStyle(PlayerToolbarButtonStyle(selected: localPanel == .information)).accessibilityLabel("视频信息")
+                            .accessibilityIdentifier("player.information")
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: 48)
+                if showsTransport {
+                    panelButton(.subtitle) { Image(systemName: "captions.bubble") }
+                    panelButton(.danmaku) { Image(systemName: "text.bubble") }
+                }
+                Button { pip.toggle() } label: { Image(systemName: pip.active ? "pip.exit" : "pip.enter").playerControlTarget() }
+                    .buttonStyle(PlayerToolbarButtonStyle(selected: pip.active)).disabled(!pip.supported || !pip.possible && !pip.active)
+                    .accessibilityLabel("画中画").accessibilityIdentifier("player.pip")
+                if PlayerOrientation.available {
+                    Button(action: rotatePlayer) {
+                        Image(systemName: "rotate.right").playerControlTarget()
+                    }.buttonStyle(PlayerToolbarButtonStyle())
+                        .accessibilityLabel(playerSize.width > playerSize.height ? "切换竖屏" : "切换横屏")
+                        .accessibilityIdentifier("player.rotate")
+                }
             }
         }
         .background { Color.black.opacity(0.001).contentShape(Rectangle()).onTapGesture { poke() } }
         .playerControlHitRegion()
         .simultaneousGesture(TapGesture().onEnded { poke() })
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { topRowHeight = $0 }
     }
 
     /// The title area uses one presentation at a time, with technical information in its own popup.
@@ -914,7 +872,7 @@ struct MobilePlayerView: View {
             }
         } else if session.hasTimeline {
             // Dragging holds the controls up itself (`hold`); a tap gesture here would compete with the scrubber's drag.
-            SeekBar(clock: clock, moving: chromeVisible && !locked && !session.paused && !pip.active && scenePhase == .active, hold: hold, sought: sought) { EmptyView() }
+            SeekBar(clock: clock, moving: controlsVisible && !session.paused && !pip.active && scenePhase == .active, hold: hold, sought: sought) { EmptyView() }
         }
     }
 
@@ -952,7 +910,7 @@ struct MobilePlayerView: View {
                     let overlap = keyboardTop.map { max(0, geometry.frame(in: .global).maxY - $0) } ?? 0
                     let availableHeight = max(0, geometry.size.height - overlap)
                     let panelSize = PlayerPopupLayout.size(viewport: geometry.size, keyboardOverlap: overlap,
-                        preferred: CGSize(width: panel == .speed || panel == .volume || panel == .aspect ? 300 : panel == .information ? 560 : 420,
+                        preferred: CGSize(width: panel == .speed || panel == .aspect ? 300 : panel == .information ? 560 : 420,
                                           height: popupHeight(panel)))
                     ZStack(alignment: .topTrailing) {
                         Color.black.opacity(0.10).contentShape(Rectangle()).onTapGesture { localPanel = nil; poke() }
@@ -986,7 +944,6 @@ struct MobilePlayerView: View {
         switch panel {
         case .cast: 430
         case .speed: 260
-        case .volume: 180
         case .aspect: 410
         default: 520
         }
@@ -994,11 +951,7 @@ struct MobilePlayerView: View {
 
     private var transportButtons: some View {
         HStack(spacing: 6) {
-            let previous = store.step(back: true, from: channel, session: session)
             let next = store.step(back: false, from: channel, session: session)
-            Button { previous?.go(); poke() } label: { Image(systemName: "backward.end.fill").playerControlTarget() }
-                .disabled(previous == nil || previous?.busy == true).accessibilityLabel("上一集")
-                .accessibilityIdentifier("player.previous")
             Button { session.togglePlayback(); poke() } label: { Image(systemName: session.paused ? "play.fill" : "pause.fill").playerControlTarget() }
                 .accessibilityLabel(session.paused ? "播放" : "暂停")
                 .accessibilityIdentifier("player.playPause")
@@ -1008,29 +961,30 @@ struct MobilePlayerView: View {
             Button { togglePanel(.speed) } label: { Text(Self.speedLabel(speed)).font(.subheadline.weight(.semibold)).playerControlTarget() }
                 .accessibilityLabel("倍速")
                 .accessibilityIdentifier("player.panel.speed").disabled(session.isLive)
-            Button { togglePanel(.volume) } label: {
-                Image(systemName: session.engine.muted ? "speaker.slash.fill" : "speaker.wave.2.fill").playerControlTarget()
-            }.accessibilityLabel("音量").accessibilityIdentifier("player.panel.volume")
         }.buttonStyle(PlayerToolbarButtonStyle())
     }
 
     private var panelButtons: some View {
         HStack(spacing: 6) {
             ForEach(availablePanels) { panel in
-                Button { togglePanel(panel) } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: panel.symbol).font(.system(size: 16))
-                        if playerSize.width >= 760 { Text(panel.title).font(.system(size: 12)) }
-                    }
-                    .padding(.horizontal, playerSize.width >= 760 ? 7 : 0).playerControlTarget()
-                }.buttonStyle(PlayerToolbarButtonStyle(selected: localPanel == panel)).accessibilityLabel(panel.title)
-                    .accessibilityIdentifier("player.panel." + panel.rawValue)
+                panelButton(panel) {
+                    Text(panel.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 6)
+                }
             }
         }
     }
 
+    private func panelButton<Label: View>(_ panel: LocalPlayerPanel, @ViewBuilder label: () -> Label) -> some View {
+        Button { togglePanel(panel) } label: { label().playerControlTarget() }
+            .buttonStyle(PlayerToolbarButtonStyle(selected: localPanel == panel))
+            .accessibilityLabel(panel.title)
+            .accessibilityIdentifier("player.panel." + panel.rawValue)
+    }
+
     private var availablePanels: [LocalPlayerPanel] {
-        var panels: [LocalPlayerPanel] = [.episodes, .quality, .video, .audio, .subtitle, .danmaku]
+        var panels: [LocalPlayerPanel] = [.episodes, .quality, .video, .audio]
         if !session.engine.chapters.isEmpty || !session.discTitles.isEmpty { panels.append(.chapters) }
         if channel.skipScope != nil && !session.isLive { panels.append(.skip) }
         return panels
@@ -1041,7 +995,6 @@ struct MobilePlayerView: View {
         case .cast: castingPanel
         case .aspect: PlayerAspectPanel(value: $videoAspect) { localPanel = nil; poke() }
         case .speed: speedPanel
-        case .volume: volumePanel
         case .information: CompactPlayerInformationPanel(session: session, channel: channel)
         case .episodes: CompactPlayerQueuePanel(channel: channel)
         case .quality: qualityPanel
@@ -1075,26 +1028,6 @@ struct MobilePlayerView: View {
                 }
             }
         }
-    }
-
-    private var volumePanel: some View {
-        WithPerceptionTracking {
-            VStack(spacing: 12) {
-                HStack {
-                    Button { session.engine.setMuted(!session.engine.muted) } label: {
-                        Image(systemName: session.engine.muted ? "speaker.slash.fill" : "speaker.wave.2.fill").playerControlTarget()
-                    }.buttonStyle(.plain).accessibilityLabel(session.engine.muted ? "取消静音" : "静音")
-                    Spacer()
-                    Text("\(Int(session.engine.volume * 100))%").monospacedDigit()
-                }
-                Slider(value: playbackVolume, in: 0...1).accessibilityLabel("播放音量")
-            }
-        }
-    }
-    private var playbackVolume: Binding<Double> {
-        Binding(get: { Double(session.engine.volume) }, set: { value in
-            session.engine.setVolume(Float(value)); if value > 0 { session.engine.setMuted(false) }
-        })
     }
 
     private var qualityPanel: some View {
@@ -2138,14 +2071,14 @@ private struct KSPlayerSurface: UIViewRepresentable {
     @PerceptionIgnored private var previewScope = UUID()
     func attach(_ session: PlaybackSession) { detach(); self.session = session; engine = session.engine }
     func detach() { replaceMedia(); engine = nil; session = nil }
-    func replaceMedia() { operations.replaceMedia(); scrubbing = nil; cancelPreview() }
+    func replaceMedia() { operations.replaceMedia(); scrubbing = nil; session?.scrubbing = false; cancelPreview() }
     func scrub(to seconds: Double) {
         // A previous submitted seek may complete while this draft is still held.
         // Its callback must not clear the newer target before the finger lifts.
         _ = operations.beginSeek()
         let target = min(max(0, seconds), duration)
         guard scrubbing != target else { return }
-        scrubbing = target
+        scrubbing = target; session?.scrubbing = true
         makePreview(at: target)
     }
     func endScrub() {
@@ -2153,6 +2086,7 @@ private struct KSPlayerSurface: UIViewRepresentable {
         if let target = scrubbing { seek(to: target) }
     }
     func cancelScrub() {
+        session?.scrubbing = false
         _ = operations.beginSeek()
         scrubbing = nil
         cancelPreview()
@@ -2181,7 +2115,8 @@ private struct KSPlayerSurface: UIViewRepresentable {
         guard let engine else { scrubbing = nil; return }
         let ticket = operations.beginSeek(), media = engine.mediaID
         scrubbing = seconds
-        engine.seek(to: seconds) { [weak self, weak engine] _ in
+        session?.scrubbing = false
+        engine.seekFromUser(to: seconds) { [weak self, weak engine] _ in
             guard let self, let engine, self.operations.accepts(ticket), engine.mediaID == media else { return }
             self.scrubbing = nil
         }
@@ -2189,10 +2124,9 @@ private struct KSPlayerSurface: UIViewRepresentable {
 }
 
 private enum LocalPlayerPanel: String, Identifiable {
-    case cast, aspect, speed, volume, information, episodes, quality, video, audio, subtitle, danmaku, chapters, skip, subtitleAddress, danmakuList, danmakuConfiguration
+    case cast, aspect, speed, information, episodes, quality, video, audio, subtitle, danmaku, chapters, skip, subtitleAddress, danmakuList, danmakuConfiguration
     var id: String { rawValue }
-    var title: String { switch self { case .cast: "投屏"; case .aspect: "画面比例"; case .speed: "倍速"; case .volume: "音量"; case .information: "视频信息"; case .episodes: "选集"; case .quality: "画质"; case .video: "视轨"; case .audio: "音轨"; case .subtitle: "字幕"; case .danmaku: "弹幕"; case .chapters: "章节"; case .skip: "片头片尾"; case .subtitleAddress: "从网址添加字幕"; case .danmakuList: "弹幕列表"; case .danmakuConfiguration: "配置弹幕来源" } }
-    var symbol: String { switch self { case .cast: "airplayvideo"; case .aspect: "aspectratio"; case .speed: "speedometer"; case .volume: "speaker.wave.2"; case .information: "info.circle"; case .episodes: "rectangle.stack"; case .quality: "slider.horizontal.3"; case .video: "film"; case .audio: "speaker.wave.2"; case .subtitle, .subtitleAddress: "captions.bubble"; case .danmaku, .danmakuList: "text.bubble"; case .chapters: "book"; case .skip: "forward.end"; case .danmakuConfiguration: "globe" } }
+    var title: String { switch self { case .cast: "投屏"; case .aspect: "画面比例"; case .speed: "倍速"; case .information: "视频信息"; case .episodes: "选集"; case .quality: "画质"; case .video: "视轨"; case .audio: "音轨"; case .subtitle: "字幕"; case .danmaku: "弹幕"; case .chapters: "章节"; case .skip: "片头片尾"; case .subtitleAddress: "从网址添加字幕"; case .danmakuList: "弹幕列表"; case .danmakuConfiguration: "配置弹幕来源" } }
 }
 
 /// The video on the Lock Screen, in Control Center and on headphones, with play, pause, skip and scrub: AVKit's
@@ -2224,7 +2158,7 @@ private enum LocalPlayerPanel: String, Identifiable {
         on(commands.skipBackwardCommand) { session, _ in session.skip(-10) }
         on(commands.changePlaybackPositionCommand) { session, event in
             guard let event = event as? MPChangePlaybackPositionCommandEvent else { return }
-            session.engine.seek(to: event.positionTime)
+            session.engine.seekFromUser(to: event.positionTime)
         }
     }
 

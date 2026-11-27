@@ -1,6 +1,8 @@
 import SwiftUI
+import TVCore
 
 struct LocalCatalogDetailTitle: View {
+    @AppStorage(TMDBServiceSettings.titleLogoKey) private var showTitleLogo = true
     let title: String
     let logo: URL?
     let width: CGFloat
@@ -8,7 +10,7 @@ struct LocalCatalogDetailTitle: View {
     @State private var logoAspect: CGFloat?
     var body: some View {
         Group {
-            if let logo {
+            if showTitleLogo, let logo {
                 TMDBArtwork(url: logo, maxPixels: 1000, fill: false, aspect: $logoAspect)
                     .frame(width: min(width * 0.70, centered ? 260 : 300), height: centered ? 92 : 84)
                     .overlay { if logoAspect == nil { titleText } }

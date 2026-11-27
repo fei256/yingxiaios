@@ -23,7 +23,8 @@ public enum TMDBMatch {
 
     /// TMDB's language for the app's: names, overviews and episode titles come in it where TMDB has them.
     public static var language: String {
-        if let custom = TMDBServiceSettings.load().custom { return custom.language }
+        let settings = TMDBServiceSettings.load()
+        if settings.enabled { return settings.language.isEmpty ? "zh-CN" : settings.language }
         return switch L10n.resolvedLanguage() {
         case "zh-Hans": "zh-CN"
         case "zh-Hant": "zh-TW"

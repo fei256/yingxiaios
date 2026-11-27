@@ -126,9 +126,76 @@ private struct ResultRow: Codable { let name: String; let passed: Bool; let fail
             let request = try value.request(path: "configuration", parameters: [:])
             try expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fixture.payload.signature", "JWT was treated as a v3 key")
         }
-        await run("official hostname without version normalizes to v3") {
-            var value = config; value.apiBase = "https://api.themoviedb.org/"
-            try expect(try value.request(path: "configuration", parameters: [:]).url?.path == "/3/configuration", "The version path must be added")
+        await run("new custom configurations reach the direct API without an app proxy") {
+            let value = TMDBServiceSettings(apiKey: "fixture-key")
+            let request = try value.request(path: "configuration", parameters: [:])
+            try expect(request.url?.host == "api.tmdb.org" && request.url?.path == "/3/configuration", "Unexpected default endpoint")
+            try expect(try value.proxyConfiguration() == nil, "New custom settings enabled a proxy")
+        }
+        await run("both TMDB API hosts accept a bare address and preserve an explicit version") {
+            for host in ["api.tmdb.org", "api.themoviedb.org"] {
+                for suffix in ["", "/", "/3", "/3/"] {
+                    var value = config
+                    value.apiBase = "https://" + host + suffix
+                    let request = try value.request(path: "configuration", parameters: [:])
+                    try expect(request.url?.host == host && request.url?.path == "/3/configuration", "Incorrect endpoint for " + value.apiBase)
+                }
+            }
+            var mirror = config
+            mirror.apiBase = "https://api.fixture/gateway"
+            try expect(try mirror.request(path: "configuration", parameters: [:]).url?.path == "/gateway/configuration", "Mirror path was rewritten")
+        }
+        await run("independent draft probes reach only their configured endpoint before save") {
+            let name = "yingxia-tmdb-preset-" + UUID().uuidString
+            let defaults = UserDefaults(suiteName: name)!
+            defer { defaults.removePersistentDomain(forName: name) }
+            var original = config
+            original.proxyEnabled = true
+            original.proxyUrl = "https://proxy.fixture"
+            try original.save(defaults: defaults)
+            var edit = TMDBServiceSettings.load(defaults: defaults)
+            edit.useDirectConnection()
+            let draft = edit.editorConfiguration(credential: original.credential)
+            try await draft.testAPI(session: session)
+            try expect(FixtureServer.shared.calls.count == 1 && FixtureServer.shared.calls[0].url?.host == "api.tmdb.org", "API probe fetched unrelated resources")
+            try await draft.testImage(session: session)
+            let imageRequest = FixtureServer.shared.calls.last!
+            try expect(imageRequest.url?.host == "image.tmdb.org" && imageRequest.url?.query == nil, "Wrong artwork probe or credential in URL")
+            try expect(imageRequest.value(forHTTPHeaderField: "Authorization") == nil, "API credential sent to image service")
+            try expect(TMDBServiceSettings.load(defaults: defaults) == original, "Testing changed the saved configuration")
+            try draft.save(defaults: defaults)
+            let saved = TMDBServiceSettings.load(defaults: defaults)
+            try expect(saved == draft && saved.apiKey == original.apiKey && saved.proxyUrl == original.proxyUrl, "Saving lost credentials or proxy details")
+            try expect(try saved.proxyConfiguration() == nil, "The direct preset still uses a proxy")
+        }
+        await run("image test decodes the chosen mirror even with a broken API and no credential") {
+            var edit = config
+            edit.apiBase = "invalid"
+            edit.ultraHD = true
+            let draft = edit.editorConfiguration(credential: "")
+            try await draft.testImage(session: session)
+            try expect(FixtureServer.shared.calls.count == 1 && FixtureServer.shared.calls.first?.url?.host == "images.fixture", "Image test depended on the API")
+            try expect(FixtureServer.shared.calls.first?.url?.path.contains("/original/") == true, "Image test ignored selected quality")
+            FixtureServer.shared.reset { _, _ in Reply("<html>error</html>") }
+            let error = try await errorFrom { try await draft.testImage(session: session) }
+            try expect(error as? TMDBConnectionError == .invalidImage, "Image test accepted an HTML response")
+        }
+        await run("an image-only profile uses built-in metadata and persists artwork preferences") {
+            let name = "yingxia-tmdb-art-" + UUID().uuidString
+            let defaults = UserDefaults(suiteName: name)!
+            defer { defaults.removePersistentDomain(forName: name) }
+            var draft = TMDBServiceSettings(imageBase: "https://images.fixture/covers", ultraHD: true)
+            draft = draft.editorConfiguration(credential: "")
+            try draft.save(defaults: defaults, showTitleLogo: false)
+            let saved = TMDBServiceSettings.load(defaults: defaults)
+            let poster = URL(string: "https://image.tmdb.org/t/p/w500/poster.jpg")!
+            try expect(saved.custom == nil && saved.enabled && saved == draft, "Image-only profile lost its metadata route")
+            try expect(TMDBServiceSettings.artworkURL(poster, settings: saved).absoluteString == "https://images.fixture/covers/original/poster.jpg", "Saved mirror or quality was ignored")
+            try expect(defaults.object(forKey: TMDBServiceSettings.titleLogoKey) as? Bool == false, "Title logo preference was not saved")
+            let direct = saved.editorConfiguration(credential: "Bearer fixture-token")
+            try expect(direct.custom != nil && direct.token == "fixture-token" && direct.apiKey.isEmpty, "Adding a credential did not activate the direct API")
+            TMDBServiceSettings.clear(defaults: defaults)
+            try expect(defaults.object(forKey: TMDBServiceSettings.titleLogoKey) == nil && TMDBServiceSettings.load(defaults: defaults) == TMDBServiceSettings(), "Clear left presentation or connection overrides behind")
         }
         await run("language defaults and explicit overrides agree") {
             var value = config; value.language = "ja-JP"

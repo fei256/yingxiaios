@@ -35,7 +35,7 @@ private struct ControlHarness: View {
     var body: some View {
         ZStack {
             Color.black.allowsHitTesting(false)
-            PictureGestures(tap: { _, _ in record("picture") }, hold: { _ in record("hold") }, swipe: { _ in record("swipe") }, excludedHitRegions: controlFrames) { _ in record("pinch") }
+            PictureGestures(tap: { record($0 == .double ? "playback" : "picture") }, hold: { _ in record("hold") }, swipe: { _ in record("swipe") }, excludedHitRegions: controlFrames) { _ in record("pinch") }
                 .ignoresSafeArea()
                 .allowsHitTesting(!ProcessInfo.processInfo.arguments.contains("no-picture"))
             VStack(spacing: 30) {

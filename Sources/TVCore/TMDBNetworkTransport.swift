@@ -8,7 +8,7 @@ public enum TMDBConnectionError: LocalizedError, Equatable, Sendable {
 
     public var errorDescription: String? {
         switch self {
-        case .http(401): "TMDB 凭据无效或未填写，请检查 API Key / Read Access Token（HTTP 401）。"
+        case .http(401): "API 已响应，但凭据未通过验证（HTTP 401）。请检查 API Key 或 Read Access Token。"
         case .http(403): "TMDB 拒绝访问，请检查凭据权限及网络（HTTP 403）。"
         case .http(404): "TMDB 地址或资料不存在，请检查 API 地址（HTTP 404）。"
         case .http(407): "代理认证失败，请检查代理账号和密码（HTTP 407）。"
@@ -84,8 +84,9 @@ extension TMDBServiceSettings {
     public static func artworkData(for url: URL, headers: [String: String] = [:], settings: Self? = nil,
                                    session: URLSession = .shared) async throws -> Data {
         let settings = settings ?? load()
-        var request = URLRequest(url: artworkURL(url, settings: settings), timeoutInterval: 30)
-        request.allHTTPHeaderFields = headers
+        let address = artworkURL(url, settings: settings)
+        var request = URLRequest(url: address, timeoutInterval: 30)
+        if address.host == url.host { request.allHTTPHeaderFields = headers }
         if settings.isArtwork(url) { return try await settings.data(for: request, session: session) }
         return try await HTTPClient().get(url, headers: headers).0
     }

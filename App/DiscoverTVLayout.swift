@@ -39,6 +39,7 @@ enum DiscoverTVFocus: Hashable { case search, page(Int) }
 /// Directional focus moves between page dots; Select opens the title and Down enters the rail.
 /// The full hero is a focus section so the dot group is reachable from the sidebar.
 struct DiscoverTVHeroPager: View {
+    @AppStorage(TMDBServiceSettings.titleLogoKey) private var showTitleLogo = true
     let items: [TMDBCatalog.Item]
     let details: [String: TMDBMatch.Details]
     @Binding var selection: String?
@@ -61,7 +62,7 @@ struct DiscoverTVHeroPager: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Spacer(minLength: 120)
                         Group {
-                            if let logo = detail?.logo {
+                            if showTitleLogo, let logo = detail?.logo {
                                 DiscoverTVLogo(url: logo).id(logo)
                             } else {
                                 Text(item.name).font(.system(size: 64, weight: .bold)).lineLimit(2)

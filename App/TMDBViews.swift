@@ -796,6 +796,7 @@ struct TMDBTVPicker: View {
 /// Mac and iPad, and Apple TV: TMDB's backdrop across the page, with the title (its logo when TMDB has one), the facts and
 /// the page's actions over its lower edge, as in the TV app.
 struct TMDBBanner<Actions: View>: View {
+    @AppStorage(TMDBServiceSettings.titleLogoKey) private var showTitleLogo = true
     let details: TMDBMatch.Details
     let backdrop: URL
     /// The words of the source's title outside TMDB's name, such as 第二季.
@@ -835,7 +836,7 @@ struct TMDBBanner<Actions: View>: View {
     }
 
     @ViewBuilder private func title(width: CGFloat) -> some View {
-        if let logo = details.logo {
+        if showTitleLogo, let logo = details.logo {
             // The name until the logo is in, and instead of one that fails.
             let size = logoSize(width)
             TMDBArtwork(url: logo, maxPixels: 1000, fill: false, aspect: $logoAspect)

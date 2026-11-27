@@ -141,6 +141,7 @@ private struct WatchNowTVBackdrop: View {
 /// Up Next: the title's logo or name, where you are in it, Resume and its page; the dots move between the newest
 /// titles not finished yet, and Select on one resumes it.
 private struct WatchNowTVHero: View {
+    @AppStorage(TMDBServiceSettings.titleLogoKey) private var showTitleLogo = true
     @Environment(Store.self) private var store
     @Environment(\.openHistoryDetails) private var openDetails
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -160,7 +161,7 @@ private struct WatchNowTVHero: View {
                 Spacer(minLength: 0)
                 Text(L10n.text("Up Next")).font(.system(size: 24, weight: .semibold)).foregroundStyle(.white.opacity(0.7))
                 Group {
-                    if let logo = details?.logo {
+                    if showTitleLogo, let logo = details?.logo {
                         WatchNowTVLogo(url: logo).id(logo)
                     } else {
                         Text(entry.context.videoName).font(.system(size: 64, weight: .bold)).lineLimit(2)
@@ -568,13 +569,21 @@ struct WatchNowTVCategoryRail: View {
 @MainActor @Perceptible final class WatchNowHeroState {
     var selected: String?
     var scrollY: CGFloat = 0
+    private var lastTextlessPreference = true
+    private var lastConfiguration = Data()
     var paints: [String: DiscoverPaint] = [:]
     var details: [String: TMDBMatch.Details] = [:]
     var paint: DiscoverPaint? { selected.flatMap { paints[$0] } }
 
     /// Artwork for each title, two at a time, the shown one first: on Apple TV the TMDB backdrop this device already has
     /// for it (from its page), else its own poster, blurred; on iPhone the TMDB cover, else its own. Never a new TMDB lookup.
-    func load(_ entries: [PlaybackHistoryEntry]) async {
+    func load(_ entries: [PlaybackHistoryEntry], preferTextless: Bool = true, configuration: Data = Data()) async {
+        if preferTextless != lastTextlessPreference || configuration != lastConfiguration {
+            lastTextlessPreference = preferTextless
+            lastConfiguration = configuration
+            details.removeAll()
+            paints.removeAll()
+        }
         if selected == nil || !entries.contains(where: { $0.id == selected }) { selected = entries.first?.id }
         let missing = entries.filter { paints[$0.id] == nil }
         await withTaskGroup(of: (String, TMDBMatch.Details?, DiscoverPaint?).self) { group in
@@ -590,7 +599,8 @@ struct WatchNowTVCategoryRail: View {
                     } else { nil }
                     #else
                     // The phone's hero is portrait: a cover fills it, sharp at the top, as Discover's.
-                    let paint: DiscoverPaint? = if let poster = details?.heroPoster ?? details?.poster {
+                    let portrait = preferTextless ? details?.heroPoster ?? details?.poster : details?.poster
+                    let paint: DiscoverPaint? = if let poster = portrait {
                         await DiscoverPainter.shared.paint(poster)
                     } else if let poster = entry.context.poster {
                         await DiscoverPainter.shared.paint(poster, headers: entry.context.posterHeaders ?? [:])

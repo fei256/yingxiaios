@@ -6,6 +6,7 @@ import AVKit
 /// Catalog detail keeps its artwork independent of the scrolling reading surface.
 /// Available actions use Yingxia's source search and system share sheet.
 struct DiscoverDetailView: View {
+    @AppStorage(TMDBServiceSettings.titleLogoKey) private var showTitleLogo = true
     @Environment(Store.self) private var store
     @Environment(\.scenePhase) private var scenePhase
     #if os(iOS)
@@ -322,7 +323,7 @@ struct DiscoverDetailView: View {
         #else
         VStack(spacing: 16) {
             Group {
-                if let logo = details?.logo {
+                if showTitleLogo, let logo = details?.logo {
                     TMDBArtwork(url: logo, maxPixels: 1000, fill: false)
                         .frame(width: min(width * 0.82, 440), height: 116)
                         .accessibilityLabel(details?.name ?? item.name)
@@ -923,7 +924,7 @@ extension DiscoverDetailView {
     private var tvHero: some View {
         VStack(alignment: .leading, spacing: 34) {
             Group {
-                if let logo = details?.logo {
+                if showTitleLogo, let logo = details?.logo {
                     TMDBArtwork(url: logo, maxPixels: 1400, fill: false)
                         .frame(width: 600, height: 240, alignment: .bottomLeading)
                         .accessibilityLabel(details?.name ?? item.name)

@@ -364,7 +364,7 @@ struct CompactEpisodeSkipPanel: View {
                     .accessibilityIdentifier(opening ? "player.skip.introValue" : "player.skip.outroValue")
                 if !session.skipSettings.enabled {
                     Button {
-                        if let matched { session.engine.seek(to: min(matched.end, session.duration - 0.05)) }
+                        if let matched { session.engine.seekFromUser(to: min(matched.end, session.duration - 0.05)) }
                     } label: { Image(systemName: "forward.end").playerControlTarget() }
                         .buttonStyle(.plain).disabled(!session.hasTimeline || matched == nil)
                         .accessibilityLabel(opening ? "手动跳过片头" : "手动跳过片尾")

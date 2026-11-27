@@ -16,7 +16,7 @@ import TVCore
     private(set) var sessionID = ""
     private(set) var timelineVersion = 0
     var mediaVersion: Int { 0 }
-    var serviceReady: Bool { ready }
+    @PerceptionIgnored private(set) var serviceReady = false
     var hasSelectedTrack: Bool {
         if catalog.selection.origin == .manual && !nativeManual { return false }
         return catalog.selection.origin == .cleared || indexed || isLive || (!comments.isEmpty && catalog.selection.origin != .manual) || nativeManual
@@ -92,6 +92,7 @@ import TVCore
             do {
                 _ = try await MobileMediaServices.call("session.set", self.sessionDefinition())
                 guard active == self.generation else { return }
+                self.serviceReady = true
                 try await LocalMediaServiceSettings.apply()
                 guard active == self.generation else { return }
                 self.ready = true
@@ -278,7 +279,7 @@ import TVCore
         let previous = sessionID
         hasSourceComments = false
         CatPawDanmaku.endPlayback(sessionID: previous)
-        generation = UUID(); loading?.cancel(); loading = nil; ready = false; indexed = false
+        generation = UUID(); loading?.cancel(); loading = nil; ready = false; serviceReady = false; indexed = false
         comments = []; revision = UUID(); sourceRevision = UUID(); isLive = false; nativeManual = false; descriptor = nil; busy = false
         usesBuiltinSource = false; selectedCatalogSource = nil; pendingCatalogSelection = nil; builtinEnabled = LocalDanmakuPreferences.builtinEnabled()
         lastWindow = -1000; lastPosition = -1; timelineVersion = 0

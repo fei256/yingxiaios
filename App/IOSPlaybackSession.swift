@@ -83,6 +83,8 @@ private final class AudioServiceObservation: @unchecked Sendable {
     @PerceptionIgnored private var runtimePinTask: Task<Void, Never>?
     @PerceptionIgnored private var runtimePinnedURLs = Set<URL>()
     @PerceptionIgnored private var startupWork = PlaybackStartupWork()
+    @PerceptionIgnored private var skipLookupEligible = false
+    @PerceptionIgnored private var openingFrameTarget: Double?
     @PerceptionIgnored private var enhancementTicker: Task<Void, Never>?
     @PerceptionIgnored private var preparationStarted = Date()
     @PerceptionIgnored private var discSelection: Task<Void, Never>?
@@ -116,7 +118,8 @@ private final class AudioServiceObservation: @unchecked Sendable {
     @PerceptionIgnored private var pendingResume: Double?
     @PerceptionIgnored private var restoringPosition = false
     @PerceptionIgnored private var skipScope: String?
-    @PerceptionIgnored private var skipPass = EpisodeSkipPass()
+    @PerceptionIgnored private var initialStartPending = false
+    @PerceptionIgnored var scrubbing = false
     @PerceptionIgnored private var editingSkip = false
     @PerceptionIgnored private var resumeAfterEditing = false
     @PerceptionIgnored private var seekingSegment = false
@@ -134,6 +137,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
     @PerceptionIgnored private var upcoming: (Channel, Prepared)?
     @PerceptionIgnored private var upcomingAttempted = false
     @PerceptionIgnored private var prefetchWarm: Task<Void, Never>?
+    @PerceptionIgnored private var upcomingSkipWarm: Task<Void, Never>?
     @PerceptionIgnored private var prefetchComplete = false
     @PerceptionIgnored private var prefetchWarmID = UUID()
     @PerceptionIgnored private var advancing = false
@@ -191,8 +195,12 @@ private final class AudioServiceObservation: @unchecked Sendable {
         externalSubtitles.engine = engine
         externalSubtitles.changed = { [weak self] in self?.updateSubtitles() }
         subtitles.nativeChosen = { [weak self] in self?.externalSubtitles.nativeChosen() }
+        engine.onUserSeek = { [weak self] time in
+            self?.openingFrameTarget = nil
+            self?.remoteSkip.userSought(to: time)
+        }
         engine.onReady = { [weak self] in self?.ready() }
-        engine.onTick = { [weak self] in self?.updatePictureState(); self?.updateSubtitles() }
+        engine.onTick = { [weak self] in self?.updatePictureState(); self?.updateSkipping(); self?.updateSubtitles() }
         engine.onFinish = { [weak self] error in self?.finished(error) }
         engine.onAudioServicesResume = { [weak self] context in
             self?.recoverPlayback(reusePrepared: true, audioServices: context) ?? false
@@ -244,7 +252,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
     }
     func skip(_ seconds: Double) {
         sampleWatchActivity(); watchSampler.interrupt()
-        engine.seek(to: position + seconds)
+        engine.seekFromUser(to: position + seconds)
     }
     func chooseAudio(_ id: CMPersistentTrackID) { engine.selectAudio(id: String(id)) }
     func setSpeed(_ speed: Float) { selectedSpeed = min(8, max(0.25, speed)); clearBoost(); engine.speed = selectedSpeed }
@@ -268,7 +276,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
     }
     func applySkipSettings(_ settings: EpisodeSkipSettings) {
         guard let skipScope else { return }
-        settings.save(scope: skipScope, defaults: skipDefaults); skipSettings = settings; skipPass = EpisodeSkipPass(); remoteSkip.settingsChanged()
+        settings.save(scope: skipScope, defaults: skipDefaults); skipSettings = settings; remoteSkip.settingsChanged()
     }
     func lineSwitchFailed(_ message: String) { switchNotice = nil; error = message; loading = false }
     func start(_ channel: Channel) {
@@ -340,7 +348,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         restoringPosition = false; restoredPosition = nil
         skipScope = channel.skipScope ?? channel.historyContext?.id ?? "direct:" + channel.id
         skipSettings = skipScope.map { EpisodeSkipSettings.load(scope: $0, defaults: skipDefaults) } ?? EpisodeSkipSettings()
-        skipPass = EpisodeSkipPass(); seekingSegment = false
+        initialStartPending = true; seekingSegment = false
         savedDownload = channel.url.scheme == DownloadLibrary.scheme
         isLive = channel.playback?.isLive == true || MediaAddress.streamingSchemes.contains(channel.url.scheme?.lowercased() ?? "")
             || LiveCatalog.isRoom(channel.url) || channel.group == L10n.text("Bilibili Live") || MediaDanmakuRegistry.descriptor(for: channel.url)?.live != nil
@@ -353,6 +361,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         startupWork.observe(ready: false, now: ProcessInfo.processInfo.systemUptime)
         updateRuntimePlaybackPins(Set([channel.url, prepared.url, prepared.audioURL].compactMap { $0 }))
         error = nil; loading = true; showsPicture = false; buffering = false
+        skipLookupEligible = false; openingFrameTarget = nil; seekingSegment = false
         remoteSkip.begin(channel: channel, isLive: isLive)
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
@@ -405,25 +414,45 @@ private final class AudioServiceObservation: @unchecked Sendable {
         guard recovery == nil else { return }
         buffering = false
         Diagnostics.shared.record(.info, "player.startup", "stage=ready elapsed=\(Date().timeIntervalSince(preparationStarted))")
-        if let requested = pendingResume {
-            let target = PlaybackHistoryEntry.resumeTarget(requested, duration: duration)
-            pendingResume = nil
-            guard let target else { loading = false; return }
+        let resume = pendingResume.flatMap { PlaybackHistoryEntry.resumeTarget($0, duration: duration) }
+        pendingResume = nil
+        var opening: NativeRemoteSkip.Action?
+        if initialStartPending && hasTimeline && !editingSkip && !scrubbing && !keepPausedAfterRestore && !paused {
+            remoteSkip.refreshLocal(settings: skipSettings, duration: duration, chapters: engine.chapters,
+                                    sessionID: mediaEnhancements.sessionID)
+            opening = remoteSkip.nextAction(time: resume ?? position, duration: duration, playing: true,
+                                            enabled: skipSettings.enabled, openingOnly: true)
+        }
+        initialStartPending = false
+        if let target = opening?.target ?? resume {
             restoringPosition = true
-            steps = ["正在恢复播放进度"]
-            let active = generation
-            engine.seek(to: target) { [weak self] success in
-                guard let self, self.generation == active else { return }
-                self.restoringPosition = false; self.loading = false
-                if success { self.restoredPosition = self.position }
-                else if !self.engine.seeking { self.error = L10n.text("The player could not restore the saved position. Try again.") }
-                if self.editingSkip { self.engine.pause() }
-                self.keepPausedAfterRestore = false
-            }
+            steps = [opening == nil ? "正在恢复播放进度" : "正在跳过片头"]
+            seekAtStart(to: target, resume: resume, opening: opening)
         } else {
             loading = false
             if editingSkip { engine.pause() }
             keepPausedAfterRestore = false
+        }
+    }
+
+    private func seekAtStart(to target: Double, resume: Double?, opening: NativeRemoteSkip.Action?) {
+        let active = generation, input = engine.inputRevision
+        engine.seek(to: target) { [weak self] success in
+            guard let self, self.generation == active, self.engine.inputRevision == input else { return }
+            if let opening {
+                self.completedSkip(opening, succeeded: success)
+                if !success, !self.engine.seeking, let resume {
+                    self.seekAtStart(to: resume, resume: resume, opening: nil)
+                    return
+                }
+            }
+            self.restoringPosition = false; self.loading = false
+            if success, resume != nil { self.restoredPosition = self.position }
+            if !success, opening == nil, !self.engine.seeking {
+                self.error = L10n.text("The player could not restore the saved position. Try again.")
+            }
+            if self.editingSkip { self.engine.pause() }
+            self.keepPausedAfterRestore = false
         }
     }
     private func updateSubtitles() {
@@ -442,7 +471,9 @@ private final class AudioServiceObservation: @unchecked Sendable {
             guard sourceDanmakuGeneration == episode else { throw CancellationError() }
             if isLive || startupWork.isRequested(kind) { return }
             let competing = kind == .danmaku && (externalSubtitles.fetchingOffered || remoteSkip.matching)
-            if !competing && startupWork.allows(kind, now: ProcessInfo.processInfo.systemUptime) { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            // Give active metadata a short head start without starving comments on a slow service.
+            if startupWork.allows(kind, now: competing ? now - 2 : now) { return }
             try await Task.sleep(for: .milliseconds(250))
         }
     }
@@ -459,6 +490,13 @@ private final class AudioServiceObservation: @unchecked Sendable {
             mediaTime: engine.startupMediaTime, now: ProcessInfo.processInfo.systemUptime,
             stallTolerance: max(0.75, 2 / max(0.1, fps * speed)),
             hasHeadroom: local || headroom >= min(remaining, 1.5 * speed))
+        let eligible = ready && !scrubbing && mediaEnhancements.serviceReady && startupWork.allows(.remoteSkip, now: ProcessInfo.processInfo.systemUptime)
+        if eligible && !skipLookupEligible { updateSkipPlan(allowAutomatic: true) }
+        skipLookupEligible = eligible
+        if ready, let target = openingFrameTarget, let mediaTime = engine.startupMediaTime, mediaTime >= target - 0.05 {
+            openingFrameTarget = nil
+            Diagnostics.shared.record(.info, "player.startup", "stage=opening-picture elapsed=\(Date().timeIntervalSince(preparationStarted)) target=\(target) displayed=\(mediaTime)")
+        }
         guard recovery == nil else { return }
         buffering = engine.buffering
         guard engine.isReady, !restoringPosition, pendingResume == nil else { return }
@@ -523,9 +561,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
                     throttle.update(ahead: max(0, self.engine.bufferedPosition - self.position), waiting: self.buffering)
                     self.throttle = throttle; self.applyBoost()
                 }
-                self.remoteSkip.tick(settings: self.skipSettings, duration: self.duration, chapters: self.engine.chapters,
-                                     sessionID: self.mediaEnhancements.sessionID, ready: self.mediaEnhancements.serviceReady,
-                                     allowAutomatic: !self.externalSubtitles.fetchingOffered && self.startupWork.allows(.remoteSkip, now: ProcessInfo.processInfo.systemUptime))
+                self.updateSkipPlan(allowAutomatic: self.skipLookupEligible)
                 self.updateSkipping()
                 self.queueUpcomingIfDue()
                 self.sampleWatchActivity()
@@ -535,16 +571,27 @@ private final class AudioServiceObservation: @unchecked Sendable {
             }
         }
     }
+    private func updateSkipPlan(allowAutomatic: Bool) {
+        remoteSkip.tick(settings: skipSettings, duration: duration, chapters: engine.chapters,
+                        sessionID: mediaEnhancements.sessionID, ready: mediaEnhancements.serviceReady, allowAutomatic: allowAutomatic)
+    }
+
+    private func completedSkip(_ action: NativeRemoteSkip.Action, succeeded: Bool) {
+        remoteSkip.complete(action, succeeded: succeeded)
+        if succeeded && action.kind == "opening" { openingFrameTarget = action.target }
+    }
+
     private func updateSkipping() {
-        guard !isLive, !editingSkip, !seekingSegment, !engine.seeking, pendingResume == nil, !restoringPosition, engine.isReady else { return }
-        guard let action = remoteSkip.nextAction(time: position, duration: duration, playing: !paused && !buffering, enabled: skipSettings.enabled) else { return }
+        guard !remoteSkip.segments.isEmpty, hasTimeline, !initialStartPending, !editingSkip, !scrubbing,
+              !seekingSegment, !engine.seeking, pendingResume == nil, !restoringPosition, recovery == nil, error == nil else { return }
+        guard let action = remoteSkip.nextAction(time: position, duration: duration, playing: !engine.paused && !engine.buffering, enabled: skipSettings.enabled) else { return }
         sampleWatchActivity(); watchSampler.interrupt()
         seekingSegment = true
-        let active = generation
+        let active = generation, input = engine.inputRevision
         engine.seek(to: action.target) { [weak self] success in
-            guard let self, self.generation == active else { return }
+            guard let self, self.generation == active, self.engine.inputRevision == input else { return }
             self.seekingSegment = false
-            self.remoteSkip.complete(action, succeeded: success)
+            self.completedSkip(action, succeeded: success)
         }
     }
     private func finished(_ failure: Error?) {
@@ -751,7 +798,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         if playing != nil { ErrorReports.shared.stoppedPlaying() }
         playing = nil; sourceChannel = nil; activeChannelID = nil; historyContext = nil; pendingResume = nil
         requestedResumePosition = nil; restoredPosition = nil; restoringPosition = false; keepPausedAfterRestore = false
-        skipScope = nil; skipPass = EpisodeSkipPass(); skipSettings = EpisodeSkipSettings()
+        skipScope = nil; initialStartPending = false; scrubbing = false; skipSettings = EpisodeSkipSettings()
         editingSkip = false; resumeAfterEditing = false; seekingSegment = false
         transfer = Transfer(); steps = []; switchNotice = nil; orientationPolicy = PlaybackOrientationPolicy()
         qualities = []; quality = nil; showsPicture = false; buffering = false; loading = true
@@ -913,35 +960,47 @@ private final class AudioServiceObservation: @unchecked Sendable {
         HongguoStreams.stop(channel.url)
         CloudStreams.stop(prepared.backingURL ?? prepared.url)
     }
-    private func queueUpcomingIfDue() {
+    private var canPrefetchUpcoming: Bool {
         let enabled = UserDefaults.standard.object(forKey: "local.playback.prefetchNext") as? Bool ?? true
-        let ahead = max(0, engine.bufferedPosition - position)
-        let healthy = NextMediaPolicy.mayPrepare(enabled: enabled, paused: paused, buffering: buffering,
-            seeking: engine.seeking || restoringPosition || seekingSegment, bufferedSeconds: ahead, speed: Double(engine.speed))
-        guard healthy else {
+        return NextMediaPolicy.mayPrepare(enabled: enabled, paused: paused, buffering: buffering,
+            seeking: engine.seeking || restoringPosition || seekingSegment || scrubbing, bufferedSeconds: engine.bufferedPosition - position,
+            speed: Double(engine.speed), remainingSeconds: duration - position)
+    }
+
+    private func queueUpcomingIfDue() {
+        guard canPrefetchUpcoming else {
             healthyPrefetchSince = nil
+            if upcomingTask != nil {
+                upcomingTask?.cancel(); upcomingTask = nil; upcomingAttempted = false
+            }
+            upcomingSkipWarm?.cancel(); upcomingSkipWarm = nil
             prefetchWarmID = UUID(); prefetchWarm?.cancel(); prefetchWarm = nil
             return
         }
         if healthyPrefetchSince == nil { healthyPrefetchSince = Date() }
         if upcoming != nil { warmUpcomingIfSafe(); return }
+        let remaining = skipSettings.enabled && playsOn()
+            ? RemoteEpisodeSkipPlan.remainingPlayback(time: position, duration: duration, segments: remoteSkip.segments)
+            : duration - position
         guard Date().timeIntervalSince(healthyPrefetchSince!) >= 3, !upcomingAttempted, !looping, !isLive,
-              duration > 0, duration - position < Self.upcomingLead * Double(max(1, engine.speed)), let upcomingEpisode else { return }
+              duration > 0, remaining < Self.upcomingLead * Double(max(1, engine.speed)), let upcomingEpisode else { return }
         upcomingAttempted = true; let active = generation
         upcomingTask = Task { [weak self] in
+            defer { if !Task.isCancelled, self?.generation == active { self?.upcomingTask = nil } }
             guard let next = await upcomingEpisode(), let self, self.generation == active, !Task.isCancelled else { return }
+            if self.canPrefetchUpcoming { self.warmUpcomingOpening(next) }
             do {
                 let prepared = try await self.prepare(next)
                 guard self.generation == active, !Task.isCancelled else { Self.release(next, prepared); return }
                 self.upcoming = (next, prepared); self.prefetchComplete = false; self.warmUpcomingIfSafe()
-            } catch { Diagnostics.shared.record(.warning, "player", "KS next preparation: \(error.localizedDescription)") }
+            } catch {
+                if !Task.isCancelled { Diagnostics.shared.record(.warning, "player", "KS next preparation: \(error.localizedDescription)") }
+            }
         }
     }
     private func warmUpcomingIfSafe() {
-        let healthy = NextMediaPolicy.mayPrepare(enabled: UserDefaults.standard.object(forKey: "local.playback.prefetchNext") as? Bool ?? true,
-            paused: paused, buffering: buffering, seeking: engine.seeking || restoringPosition || seekingSegment,
-            bufferedSeconds: max(0, engine.bufferedPosition - position), speed: Double(engine.speed))
-        guard healthy, let since = healthyPrefetchSince, Date().timeIntervalSince(since) >= 3 else { return }
+        guard canPrefetchUpcoming, let since = healthyPrefetchSince, Date().timeIntervalSince(since) >= 3 else { return }
+        if let next = upcoming?.0 { warmUpcomingOpening(next) }
         guard !prefetchComplete, prefetchWarm == nil, let owner = upcoming?.1.owner else { return }
         let active = generation, warmID = UUID()
         prefetchWarmID = warmID
@@ -954,7 +1013,16 @@ private final class AudioServiceObservation: @unchecked Sendable {
             if let self, self.generation == active, self.prefetchWarmID == warmID { self.prefetchWarm = nil }
         }
     }
+    private func warmUpcomingOpening(_ next: Channel) {
+        guard upcomingSkipWarm == nil, playsOn(), next.playback?.isLive != true,
+              let scope = next.skipScope ?? next.historyContext?.id else { return }
+        let settings = EpisodeSkipSettings.load(scope: scope, defaults: skipDefaults)
+        if settings.enabled && settings.introEnd <= 0 {
+            upcomingSkipWarm = Task { [remoteSkip] in await remoteSkip.prefetch(next) }
+        }
+    }
     private func discardUpcoming() {
+        upcomingSkipWarm?.cancel(); upcomingSkipWarm = nil
         prefetchWarmID = UUID(); prefetchWarm?.cancel(); prefetchWarm = nil; prefetchComplete = false
         upcomingTask?.cancel(); upcomingTask = nil
         if let (channel, prepared) = upcoming { Self.release(channel, prepared) }; upcoming = nil

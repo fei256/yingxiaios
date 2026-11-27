@@ -115,7 +115,9 @@ struct RootView: View {
     /// A message from the website waits while a video plays or another alert or sheet is up.
     private var messageWaits: Bool {
         var busy = store.playing != nil || store.error != nil || updates.sheet != nil || updates.message != nil || PluginSignIn.shared.prompt != nil
-        #if os(tvOS)
+        #if os(iOS)
+        busy = busy || store.pendingCatalogPlayback != nil
+        #elseif os(tvOS)
         busy = busy || store.music.presentsPlayer
         #endif
         return busy
@@ -174,7 +176,17 @@ struct RootView: View {
                 if section != .search { store.searchModel.suspend() }
             }
             // A Baidu or Aliyun line waiting for its plugin's sign-in code to be scanned.
-            .sheet(item: Binding(get: { PluginSignIn.shared.prompt }, set: { if $0 == nil { PluginSignIn.shared.dismiss() } })) { perceptionArgument0 in
+            .sheet(item: Binding(get: {
+                #if os(iOS)
+                if store.pendingCatalogPlayback != nil { return nil }
+                #endif
+                return PluginSignIn.shared.prompt
+            }, set: { value in
+                #if os(iOS)
+                if store.pendingCatalogPlayback != nil { return }
+                #endif
+                if value == nil { PluginSignIn.shared.dismiss() }
+            })) { perceptionArgument0 in
                 WithPerceptionTracking {
                     PluginSignInView(prompt: perceptionArgument0)
                 }
@@ -457,7 +469,7 @@ private struct TVMoreView: View {
 #if !os(macOS)
 /// What the player cover shows; the same presentation whichever channel it holds.
 private struct PlayerSlot: Identifiable {
-    let channel: Channel
+    let channel: Channel?
     var id: String { "player" }
 }
 #endif
@@ -467,6 +479,7 @@ private struct PlayerPresentation: ViewModifier {
     @Binding var playing: Channel?
     #if os(iOS)
     @State private var orientationID = PlayerOrientation.Presentation()
+    @State private var readingAfterDismiss: Channel?
     #endif
     #if os(macOS)
     @State private var playerWindow = PlayerWindowController()
@@ -484,6 +497,7 @@ private struct PlayerPresentation: ViewModifier {
             #else
             #if os(iOS)
             let presentationID = orientationID
+            let pendingID = store.pendingCatalogPlayback?.id
             #endif
             // One presentation while anything plays: the next episode replaces the channel inside the player.
             // Keyed by the channel, every change dismissed the player and presented a new one, so even a
@@ -492,10 +506,15 @@ private struct PlayerPresentation: ViewModifier {
             content.fullScreenCover(item: Binding<PlayerSlot?>(get: {
                 #if os(iOS)
                 if PictureInPicture.shared.hidesPlayer { return nil }
+                if pendingID != nil { return PlayerSlot(channel: nil) }
                 #endif
-                return playing.map(PlayerSlot.init)
+                return playing.map { PlayerSlot(channel: $0) }
             }, set: { value in
                 #if os(iOS)
+                if value == nil, let current = store.pendingCatalogPlayback {
+                    if current.id == pendingID { store.pendingCatalogPlayback = nil }
+                    return
+                }
                 if PictureInPicture.shared.preservesSessionOnDismiss { return }
                 #endif
                 if value == nil { playing = nil }
@@ -504,22 +523,110 @@ private struct PlayerPresentation: ViewModifier {
                 PlayerOrientation.release(presentationID: presentationID)
                 if orientationID === presentationID { orientationID = PlayerOrientation.Presentation() }
                 PictureInPicture.shared.coverDismissed()
+                if let reading = readingAfterDismiss {
+                    readingAfterDismiss = nil
+                    if playing == nil, store.pendingCatalogPlayback == nil,
+                       reading.historyContext?.libraryScope == store.historyScope {
+                        playing = reading
+                    }
+                }
                 #endif
-            }) { perceptionArgument0 in
-                                                      WithPerceptionTracking {
-                    // Handed in: the iPad app on a Mac presents a full-screen cover without the presenter's environment
-                    // objects, and every video stopped the app there ("No Observable object of type Store found").
+            }) { slot in
+                WithPerceptionTracking {
                     #if os(iOS)
-                    PlaybackView(channel: playing ?? perceptionArgument0.channel, orientationID: presentationID).environment(store)
+                    if let request = store.pendingCatalogPlayback {
+                        CatalogPlayerLoading(request: request) { channel in
+                            if channel.playback?.reading != nil {
+                                // The reader has its own cover. Present it after this cover closes.
+                                readingAfterDismiss = channel
+                                store.pendingCatalogPlayback = nil
+                            } else {
+                                playing = channel
+                            }
+                        }
+                        .id(request.id)
+                        .environment(store)
+                    } else if let channel = playing ?? slot.channel {
+                        PlaybackView(channel: channel, orientationID: presentationID).environment(store)
+                    }
                     #else
-                    PlaybackView(channel: playing ?? perceptionArgument0.channel).environment(store)
+                    if let channel = playing ?? slot.channel { PlaybackView(channel: channel).environment(store) }
                     #endif
-                                                      }
+                }
             }
             #endif
         }
     }
 }
+
+#if os(iOS)
+private struct CatalogPlayerLoading: View {
+    @Environment(Store.self) private var store
+    let request: CatalogEpisodePlayback
+    let play: @MainActor (Channel) -> Void
+    @State private var attempt = 0
+    @State private var failure: String?
+
+    var body: some View {
+        WithPerceptionTracking {
+            let prompt = PluginSignIn.shared.prompt
+            ZStack(alignment: .topLeading) {
+                Color.black.ignoresSafeArea()
+                if let failure {
+                    VStack(spacing: 16) {
+                        Text(failure).multilineTextAlignment(.center)
+                        Button("重试") { self.failure = nil; attempt += 1 }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding(24).frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    PlaybackWaitView(artwork: PlaybackArtwork(poster: request.video.poster, headers: request.video.posterHeaders),
+                                     starting: true) { _ in PlaybackWait(message: L10n.text("Resolving playback URL…")) }
+                }
+                HStack(spacing: 12) {
+                    Button { close() } label: { Image(systemName: "chevron.backward").playerControlTarget() }
+                        .buttonStyle(PlayerToolbarButtonStyle()).accessibilityLabel("返回")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(request.video.name).font(.headline)
+                        if request.label != request.video.name { Text(request.label).font(.caption) }
+                    }.lineLimit(1)
+                }.padding(12)
+            }
+            .foregroundStyle(.white)
+            .preferredColorScheme(.dark)
+            .statusBarHidden()
+            .sheet(item: Binding(get: { prompt }, set: { if $0 == nil { PluginSignIn.shared.dismiss() } })) { prompt in
+                PluginSignInView(prompt: prompt)
+            }
+            .task(id: attempt) { await resolve() }
+        }
+    }
+
+    private func close() {
+        guard store.pendingCatalogPlayback?.id == request.id else { return }
+        store.pendingCatalogPlayback = nil
+    }
+
+    @MainActor private func resolve() async {
+        guard store.pendingCatalogPlayback?.id == request.id else { return }
+        do {
+            let channel = try await request.resolve(in: store) { store.pendingCatalogPlayback?.id == request.id }
+            guard !Task.isCancelled, store.pendingCatalogPlayback?.id == request.id else { return }
+            play(channel)
+        } catch {
+            guard !Task.isCancelled, store.pendingCatalogPlayback?.id == request.id else { return }
+            if error is CancellationError { close(); return }
+            if error is CloudDriveLoginRequired || (request.client.site.isCatPawOpen && CatPawSignIn.provider(for: error.localizedDescription) != nil) {
+                request.reportFailure(error)
+                close()
+            } else {
+                Diagnostics.shared.failure("catalog", "play \(request.client.reportContext) flag=\(request.episode.flag)", error)
+                failure = error.localizedDescription
+            }
+        }
+    }
+}
+#endif
 
 #if os(macOS)
 /// Content-first sidebar: grouped rows, neutral selection, and ⌘1–⌘8 to switch sections.

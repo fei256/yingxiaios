@@ -2322,6 +2322,7 @@ struct VideoDetailView: View {
     #if os(iOS)
     @Environment(\.isLocalPageActive) private var localPageActive
     @Environment(\.localDockInset) private var localDockInset
+    @Environment(\.dynamicTypeSize) private var detailTypeSize
     /// The source's config center, open in the app (`ConfigCenterView`).
     @State private var showsConfigCenter = false
     #endif
@@ -2567,7 +2568,7 @@ struct VideoDetailView: View {
                             .settingsButton(prominent: true)
                             .accessibilityIdentifier("playbackIssue.bundleSignIn")
                         }
-                        Button(L10n.text("Retry")) { startRequest { await play(issue.episode, mode: issue.mode) } }
+                        Button(L10n.text("Retry")) { requestPlayback(issue.episode, mode: issue.mode) }
                             .settingsButton(prominent: issue.signIn == nil)
                         #if os(tvOS)
                         // A focusable action instead of the small corner close button.
@@ -2877,7 +2878,7 @@ struct VideoDetailView: View {
                     DetailPlaybackControls(selection: selection, busy: busy, loadingMode: loadingMode,
                                            showsBeginningButton: false) { mode in
                         selectedEpisode = first
-                        startRequest { await play(first, mode: mode) }
+                        requestPlayback(first, mode: mode)
                     }
                 } tools: { mobileDetailTools }
                 #else
@@ -2929,7 +2930,7 @@ struct VideoDetailView: View {
     }
     #endif
     private func playButton(_ episode: Episode, continuation: Bool = false) -> some View {
-        Button { startRequest { await play(episode) } } label: {
+        Button { requestPlayback(episode) } label: {
             HStack(spacing: 8) {
                 if loadingEpisode == episode.id { ProgressView().controlSize(.small) } else { Image(systemName: "play.fill") }
                 #if os(iOS)
@@ -3048,6 +3049,9 @@ struct VideoDetailView: View {
             WithPerceptionTracking {
                 let width = geometry.size.width
                 let height = CatalogDetailLayout.heroHeight(in: geometry.size)
+                let alignActionsWithLines = CatalogDetailLayout.usesWideHero(in: geometry.size)
+                    && !detailTypeSize.isAccessibilitySize && detail?.episodes.isEmpty == false
+                let actionWidth = alignActionsWithLines ? CatalogDetailLayout.actionsWidth(in: width, wide: true) : nil
                 ZStack(alignment: .top) {
                     (detailArtworkPaint?.color ?? Color(white: 0.22)).ignoresSafeArea()
                     LocalCatalogArtworkCarousel(video: currentVideo(), images: mobileDetailArtwork,
@@ -3059,10 +3063,20 @@ struct VideoDetailView: View {
                     ScrollView {
                         WithPerceptionTracking {
                             VStack(alignment: .leading, spacing: 20) {
-                                mobileDetailHeader(size: geometry.size)
-                                if detail != nil {
+                                mobileDetailHeader(size: geometry.size, lineActionWidth: actionWidth)
+                                if let detail {
                                     VStack(alignment: .leading, spacing: 24) {
-                                        episodePanel
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            if !detail.episodes.isEmpty {
+                                                if let actionWidth {
+                                                    HStack(alignment: .center, spacing: 24) {
+                                                        mobileFlagPicker
+                                                        playControl.frame(width: actionWidth)
+                                                    }
+                                                } else { mobileFlagPicker }
+                                            }
+                                            episodePanel
+                                        }
                                         tmdbExtras
                                     }.detailReadableContent()
                                 } else if let error { errorCard(error).padding(.top, 12) }
@@ -3087,23 +3101,29 @@ struct VideoDetailView: View {
         .ignoresSafeArea(edges: .top)
     }
 
-    private func mobileDetailHeader(size: CGSize) -> some View {
+    private func mobileDetailHeader(size: CGSize, lineActionWidth: CGFloat?) -> some View {
         WithPerceptionTracking {
             let centered = CatalogDetailLayout.usesWideHero(in: size)
+            let identity = VStack(alignment: centered ? .center : .leading, spacing: 10) {
+                LocalCatalogDetailTitle(title: tmdb.details?.name ?? currentVideo().name, logo: tmdb.details?.logo,
+                                        width: size.width, centered: centered)
+                    .id(tmdb.details?.logo)
+                LocalCatalogRatingsRow(details: tmdb.details, centered: centered)
+                LocalCatalogMetadataPills(details: tmdb.details, year: mobileSourceMetadata.year,
+                                          area: mobileSourceMetadata.area, remarks: mobileSourceMetadata.remarks,
+                                          source: SourceLabel(client.site.name).text, category: mobileSourceMetadata.type,
+                                          centered: centered)
+                    .accessibilityValue(mobileTMDBStatus)
+            }.detailReadableContent()
             VStack(alignment: .leading, spacing: 16) {
-                CatalogDetailHero(size: size) {
-                    VStack(alignment: centered ? .center : .leading, spacing: 10) {
-                        LocalCatalogDetailTitle(title: tmdb.details?.name ?? currentVideo().name, logo: tmdb.details?.logo,
-                                                width: size.width, centered: centered)
-                            .id(tmdb.details?.logo)
-                        LocalCatalogRatingsRow(details: tmdb.details, centered: centered)
-                        LocalCatalogMetadataPills(details: tmdb.details, year: mobileSourceMetadata.year,
-                                                  area: mobileSourceMetadata.area, remarks: mobileSourceMetadata.remarks,
-                                                  source: SourceLabel(client.site.name).text, category: mobileSourceMetadata.type,
-                                                  centered: centered)
-                            .accessibilityValue(mobileTMDBStatus)
-                    }.detailReadableContent()
-                } actions: { playControl }
+                if let lineActionWidth {
+                    identity
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.trailing, lineActionWidth + 24)
+                        .padding(.top, CatalogDetailLayout.identityTopInset(in: size))
+                } else {
+                    CatalogDetailHero(size: size) { identity } actions: { playControl }
+                }
                 playbackBanner
                 if tmdb.phase == .ambiguous || tmdb.phase == .failed || tmdb.phase == .looking { tmdbStatus }
             }
@@ -3133,7 +3153,7 @@ struct VideoDetailView: View {
                         if let episode = selection.episode {
                             Button("从头播放", systemImage: "arrow.counterclockwise") {
                                 selectedEpisode = episode
-                                startRequest { await play(episode, mode: .beginning) }
+                                requestPlayback(episode, mode: .beginning)
                             }.disabled(busy).accessibilityIdentifier("detail.playBeginning")
                         }
                     }
@@ -3240,7 +3260,6 @@ struct VideoDetailView: View {
         let group = mobileEpisodeGroupFlag == activeFlag ? min(mobileEpisodeGroup, max(0, count - 1)) : continuationIndex / LocalCatalogDetailRules.groupSize
         let visible = LocalCatalogDetailRules.page(ordered, group: group, descending: reversesEpisodes).map { entries[$0.index] }
         return VStack(alignment: .leading, spacing: 12) {
-            mobileFlagPicker
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 4) {
                     Text("剧集 · \(items.count)").font(.system(size: 17, weight: .semibold)).monospacedDigit()
@@ -3299,7 +3318,7 @@ struct VideoDetailView: View {
             } else {
                 ScrollViewReader { rail in
                     ScrollView(.horizontal, showsIndicators: false) {
-                        LazyHStack(alignment: .top, spacing: 14) {
+                        HStack(alignment: .top, spacing: 14) {
                             ForEach(visible) { value in WithPerceptionTracking { mobileEpisodeButton(value, list: false, selection: selection, history: histories[value.id]).id(value.id) } }
                         }.padding(.horizontal, 20).padding(.vertical, 2)
                     }
@@ -3321,7 +3340,7 @@ struct VideoDetailView: View {
         let episode = value.episode
         let saved = download(episode)
         let movie = tmdb.details?.mediaType == .movie
-        return Button { selectedEpisode = episode; startRequest { await play(episode) } } label: {
+        return Button { selectedEpisode = episode; requestPlayback(episode) } label: {
             if list { LocalCatalogDetailEpisodeRow(value: value, movie: movie, loading: loadingEpisode == episode.id, selected: selection.episode?.id == episode.id) }
             else {
                 LocalCatalogDetailEpisodeCard(value: value, video: currentVideo(),
@@ -3347,7 +3366,7 @@ struct VideoDetailView: View {
                 Text(episode.name)
                 Button("从头播放", systemImage: "arrow.counterclockwise") {
                     selectedEpisode = episode
-                    startRequest { await play(episode, mode: .beginning) }
+                    requestPlayback(episode, mode: .beginning)
                 }
                 FavoriteMenuButton(item: episodeFavorite(episode), name: episode.name)
                 if saved == nil || saved?.status == .failed {
@@ -3472,7 +3491,7 @@ struct VideoDetailView: View {
                         let saved = download(episode)
                         Group {
                             if showsStills {
-                                Button { startRequest { await play(episode) } } label: {
+                                Button { requestPlayback(episode) } label: {
                                     #if os(iOS)
                                     LocalCatalogEpisodePoster(name: episodeTitle(episode), sourceName: episode.name, info: stills[episode.id],
                                                               fileDetail: episodeDetails[episode.id], video: currentVideo(),
@@ -3488,11 +3507,11 @@ struct VideoDetailView: View {
                             } else if longNames {
                                 EpisodeRow(name: episode.name, label: episodeLabels[episode.id], file: episodeDetails[episode.id],
                                            loading: loadingEpisode == episode.id, download: saved) {
-                                    startRequest { await play(episode) }
+                                    requestPlayback(episode)
                                 }
                             } else {
                                 Chip(title: episodeLabels[episode.id] ?? episode.name, selected: loadingEpisode == episode.id, fill: true,
-                                     subtitle: episodeDetails[episode.id]) { startRequest { await play(episode) } }
+                                     subtitle: episodeDetails[episode.id]) { requestPlayback(episode) }
                                     .overlay(alignment: .topTrailing) { WithPerceptionTracking { if saved?.status == .completed { DownloadedBadge() } } }
                             }
                         }
@@ -3556,40 +3575,49 @@ struct VideoDetailView: View {
     private func download(_ episode: Episode) -> DownloadItem? {
         DownloadLibrary.shared.item(for: DownloadSource(site: client.site, videoID: video.id, episode: episode, origin: client.origin, historyScope: store.historyScope))
     }
-    private func play(_ episode: Episode, mode: PlaybackResumeMode = .resume) async {
-        guard !busy else { return }
+    private func requestPlayback(_ episode: Episode, mode: PlaybackResumeMode = .resume) {
+        #if os(iOS)
+        guard localPageActive else { return }
+        #endif
+        guard !busy || loadingEpisode != nil else { return }
         selectedEpisode = episode
-        let sourceStarted = Date(), startupRequest = UUID()
-        Diagnostics.shared.record(.info, "player.startup", "entry=detail request=\(startupRequest) stage=resolve-begin")
-        defer { Diagnostics.shared.record(.info, "player.startup", "entry=detail request=\(startupRequest) stage=resolve-end elapsed=\(Date().timeIntervalSince(sourceStarted)) cancelled=\(Task.isCancelled)") }
-        // Normal play retains this episode's own progress; an explicit beginning overrides it with zero.
+        playbackIssue = nil
         let selection = DetailPlaybackSelection(episodes: detail?.episodes ?? [episode], activeFlag: episode.flag,
                                                 selectedEpisode: episode, history: watchHistories)
         let resume = selection.position(for: mode)
-        // A downloaded episode plays from the device: no link to fetch, and it works offline.
+        let video = currentVideo()
         if let saved = download(episode), saved.status == .completed {
-            store.playing = store.catalogChannel(DownloadLibrary.shared.channel(for: saved), video: currentVideo(),
+            requestTask?.cancel()
+            store.cancelResume()
+            store.playing = store.catalogChannel(DownloadLibrary.shared.channel(for: saved), video: video,
                                                  episode: episode, client: client, resumePosition: resume)
             return
         }
-        // A drive line goes to the plugin even without an app sign-in: the plugin asks for its account itself, with
-        // its own code, which the app shows (PluginSignIn, or the bundle's sign-in below).
-        busy = true; loadingEpisode = episode.id; loadingMode = mode
-        withAnimation(.appSmooth(duration: 0.2)) { playbackIssue = nil }
-        defer { busy = false; loadingEpisode = nil; loadingMode = nil }
-        do {
-            let plan = try await client.preparePlayback(episode)
-            try Task.checkCancellation()
-            guard let choice = plan.choices.first else { throw URLError(.cannotParseResponse) }
-            let playback = store.subscription.map { client.applying($0) } ?? client
-            let resolved = try await playback.resolvePlayback(plan, choice: choice)
-            try Task.checkCancellation()
-            Diagnostics.shared.record(.info, "player.startup", "entry=detail request=\(startupRequest) stage=source-ready elapsed=\(Date().timeIntervalSince(sourceStarted))")
-            store.playing = store.catalogChannel(resolved, video: currentVideo(), episode: episode, client: playback, resumePosition: resume)
-        } catch { fail(episode, error, mode: mode) }
+        let request = CatalogEpisodePlayback(video: video, episode: episode,
+            label: episodeLabels[episode.id] ?? EpisodeRow.title(episode.name), client: client, historyScope: store.historyScope, resumePosition: resume,
+            reportFailure: { fail(episode, $0, mode: mode) })
+        #if os(iOS)
+        let context = PlaybackHistoryContext(origin: client.origin, site: client.site, video: video, episode: episode)
+        let audio = AudioSources.isCandidate(client.site) && !AudioSourceVerdicts(defaults: store.playbackDefaults).showsVideo(context)
+        if !audio, !PictureInPicture.shared.hidesPlayer {
+            requestTask?.cancel()
+            store.cancelResume()
+            store.pendingCatalogPlayback = request
+            return
+        }
+        #endif
+        startRequest {
+            busy = true; loadingEpisode = episode.id; loadingMode = mode
+            defer { busy = false; loadingEpisode = nil; loadingMode = nil }
+            do {
+                let channel = try await request.resolve(in: store, isCurrent: { !Task.isCancelled })
+                try Task.checkCancellation()
+                store.playing = channel
+            } catch { fail(episode, error, mode: mode) }
+        }
     }
     private func retryAfterSignIn() {
-        if let issue = playbackIssue { startRequest { await play(issue.episode, mode: issue.mode) } }
+        if let issue = playbackIssue { requestPlayback(issue.episode, mode: issue.mode) }
     }
     private func fail(_ episode: Episode, _ error: Error, mode: PlaybackResumeMode = .resume) {
         guard !Task.isCancelled, !(error is CancellationError) else { return }

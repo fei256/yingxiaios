@@ -8,12 +8,12 @@ import TVCore
 /// The picture's own gestures, in UIKit: taps, a touch and hold followed while the finger moves, slides and a pinch.
 /// SwiftUI's long press ends where a drag would begin, and a tap beside it can fire as the held finger lifts.
 struct PictureGestures: View {
+    enum Tap { case single, double }
     enum Hold { case began, moved(CGSize), ended }
     /// Sideways seeks; up or down sets the brightness on the left half and the volume on the right.
     enum Slide { case seek, brightness, volume }
     enum Swipe { case began(Slide), moved(CGSize, in: CGSize), ended }
-    /// Where the tap landed across the picture, and the picture's width.
-    let tap: (CGFloat, CGFloat) -> Void
+    let tap: (Tap) -> Void
     let hold: (Hold) -> Void
     let swipe: (Swipe) -> Void
     /// Whether slides up or down set the brightness and the volume.
@@ -42,14 +42,17 @@ struct PictureGestures: View {
             let press = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pressed(_:)))
             press.minimumPressDuration = 0.35
             let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
-            // A touch that lifts before the hold begins is a tap, at once; each tap of a double tap comes on its own.
+            let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tapped(_:)))
+            doubleTap.numberOfTapsRequired = 2
+            tap.require(toFail: doubleTap)
             tap.require(toFail: press)
+            doubleTap.require(toFail: press)
             // A finger that moves before the hold begins slides instead.
             let pan = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.panned(_:)))
             pan.maximumNumberOfTouches = 1
             pan.delegate = context.coordinator
             let pinch = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.pinched(_:)))
-            for recognizer in [press, tap, pan, pinch] { view.addGestureRecognizer(recognizer) }
+            for recognizer in [press, tap, doubleTap, pan, pinch] { view.addGestureRecognizer(recognizer) }
             return view
         }
 
@@ -74,8 +77,7 @@ struct PictureGestures: View {
         private var slide = Slide.seek
 
         @objc func tapped(_ tap: UITapGestureRecognizer) {
-            guard let view = tap.view else { return }
-            parent?.tap(tap.location(in: view).x, view.bounds.width)
+            parent?.tap(tap.numberOfTapsRequired == 2 ? .double : .single)
         }
 
         @objc func pressed(_ press: UILongPressGestureRecognizer) {
