@@ -247,7 +247,7 @@ struct AListServerForm: View {
                         if let error { StatusNotice(text: error) }
                         HStack(spacing: 20) {
                             Button(checking ? L10n.text("Checking…") : L10n.text("Save")) { save() }.controlButton(prominent: true).disabled(!canSave)
-                            Button(L10n.text("Cancel")) { dismiss() }.controlButton()
+                            Button(L10n.text("Cancel")) { saveTask?.cancel(); dismiss() }.controlButton()
                         }
                     }
                     .frame(maxWidth: 1100, alignment: .leading)

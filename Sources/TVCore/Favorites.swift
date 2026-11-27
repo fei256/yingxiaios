@@ -74,7 +74,7 @@ public struct FavoriteEpisode: Codable, Hashable, Sendable {
     /// Continue Watching's position only when that entry is still this episode. A later episode of the same video starts at 0. A finished entry also starts at 0, matching `resumePosition`.
     public func resumePosition(in entries: [PlaybackHistoryEntry]) -> Double {
         guard let entry = entries.first(where: { item in
-            item.context.origin == video.origin && item.context.sourceKey == video.sourceKey && item.context.videoID == video.videoID
+            PlaybackHistoryContext.sourceIdentity(item.context.origin) == PlaybackHistoryContext.sourceIdentity(video.origin) && item.context.sourceKey == video.sourceKey && item.context.videoID == video.videoID
                 && item.context.episodeFlag == episodeFlag && item.context.episodeName == episodeName
         }) else { return 0 }
         return entry.resumePosition

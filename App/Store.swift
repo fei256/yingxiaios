@@ -338,7 +338,6 @@ import TVCore
                        headers: resolved.headers, skipScope: context.id, historyContext: context, subtitles: resolved.subtitles, playback: resolved.playback)
     }
 
-    /// The current media address of a downloading episode, from its source; the queue asks again when a link expires.
     func playDownload(_ item: DownloadItem) {
         let source = item.source, file = DownloadLibrary.shared.channel(for: item)
         var context = PlaybackHistoryContext(origin: source.origin ?? file.url, sourceKey: source.originalSiteKey ?? source.siteKey,
@@ -351,22 +350,29 @@ import TVCore
                           historyContext: context, resumePosition: position)
     }
 
+    /// Resolve using the original catalog, including when merged site keys have changed.
     private func resolveDownload(_ item: DownloadItem) async throws -> Channel {
         let config = subscription
         let source = item.source
-        let sites = (config?.sites ?? []) + (cloudDocument?.sites ?? [])
-        let site = sites.first { candidate in
-            if let origin = source.origin, let key = source.originalSiteKey {
-                guard let candidateOrigin = candidate.provenance?.origin ?? config?.origin else { return false }
-                return candidate.sourceKey == key && PlaybackHistoryContext.sourceIdentity(candidateOrigin) == PlaybackHistoryContext.sourceIdentity(origin)
+        let catalogs = [config, cloudDocument].compactMap { $0 }
+        var candidates: [CatalogClient] = []
+        var owners = Set<URL>()
+        for catalog in catalogs {
+            for site in catalog.sites {
+                let identity = PlaybackHistoryContext.sourceIdentity(site.origin(or: catalog.origin))
+                if let origin = source.origin, let key = source.originalSiteKey {
+                    guard site.sourceKey == key, identity == PlaybackHistoryContext.sourceIdentity(origin) else { continue }
+                } else {
+                    guard site.key == source.siteKey, site.name == source.siteName else { continue }
+                }
+                if owners.insert(identity).inserted {
+                    candidates.append(CatalogClient(site: site, origin: catalog.origin, jarURL: catalog.spiderURL).applying(catalog))
+                }
             }
-            return candidate.key == source.siteKey && candidate.name == source.siteName
         }
-        guard let site else {
-            throw TVError.unsupported(L10n.text("%@ is no longer in your subscription, so this download can't continue.", item.source.siteName))
+        guard candidates.count == 1, let client = candidates.first else {
+            throw TVError.unsupported(L10n.text("%@ is no longer in your subscription, so this download can't continue.", source.siteName))
         }
-        let base = CatalogClient(site: site, origin: config?.origin ?? URL(string: "https://example.invalid/")!, jarURL: config?.spiderURL)
-        let client = config.map { base.applying($0) } ?? base
         if source.origin == nil {
             let video = try await client.detail(source.videoID)
             guard video.name == item.title, video.episodes.contains(source.episode) else {
@@ -374,7 +380,8 @@ import TVCore
             }
         }
         let plan = try await client.preparePlayback(item.source.episode, forDownload: true)
-        let channel = try await client.resolvePlayback(plan, choice: plan.choices[0])
+        guard let choice = plan.choices.first else { throw URLError(.cannotParseResponse) }
+        let channel = try await client.resolvePlayback(plan, choice: choice)
         // A cloud-drive file downloads straight from its CDN, as it plays: through the plugin's
         // proxy every part costs the embedded runtime download threads and interpreted TLS.
         // A file of a drive in Cloud Files downloads from the address its stream reads.

@@ -15,8 +15,8 @@ public struct DownloadSource: Codable, Hashable, Sendable {
     public let originalSiteKey: String?
     public let historyScope: String?
 
-    public init(site: Site, videoID: String, episode: Episode, origin: URL, historyScope: String?) {
-        self.origin = site.origin(or: origin)
+    public init(site: Site, videoID: String, episode: Episode, origin: URL? = nil, historyScope: String? = nil) {
+        self.origin = site.provenance?.origin ?? origin
         originalSiteKey = site.sourceKey
         self.historyScope = historyScope ?? ""
         siteKey = site.key; siteName = site.name; self.videoID = videoID

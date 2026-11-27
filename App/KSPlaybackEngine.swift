@@ -189,7 +189,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     }
     var startupMediaTime: Double? {
         guard let core else { return nil }
-        let audioOnly = videoSelection == "no" || core.tracks(mediaType: .video).isEmpty
+        let audioOnly = videoSelection == "no" || (!tracks.isEmpty && !tracks.contains { $0.kind == .video })
         let time = audioOnly ? position : core.displayedVideoTime
         return time.isFinite && time >= 0 ? time : nil
     }

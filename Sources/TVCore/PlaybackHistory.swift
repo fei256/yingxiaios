@@ -207,8 +207,7 @@ extension PlaybackHistoryEntry {
     }
     @PerceptionIgnored private var confirmedArtwork: [Artwork] = []
     private let cache: MediaCache
-    /// Store updates this when the selected subscription changes during playback. Nil leaves explicit
-    /// contexts alone (imports); an empty string records in the standalone library.
+    /// Fallback for unscoped legacy contexts. New playback and offline downloads keep their recorded owner.
     public var recordingScope: String?
     /// Called after the history changes here (not after `adopt`), for iCloud sync.
     @PerceptionIgnored public var onChange: (@MainActor () -> Void)?

@@ -455,9 +455,10 @@ private final class AudioServiceObservation: @unchecked Sendable {
         let headroom = engine.bufferedPosition - position
         let local = currentPrepared?.url.isFileURL == true
         let fps = engine.playbackInfo.frameRate ?? 24
-        startupWork.observeProgress(ready: ready && !paused && (local || headroom >= min(remaining, 1.5 * speed)),
+        startupWork.observeProgress(ready: ready && !paused,
             mediaTime: engine.startupMediaTime, now: ProcessInfo.processInfo.systemUptime,
-            stallTolerance: max(0.75, 2 / max(0.1, fps * speed)))
+            stallTolerance: max(0.75, 2 / max(0.1, fps * speed)),
+            hasHeadroom: local || headroom >= min(remaining, 1.5 * speed))
         guard recovery == nil else { return }
         buffering = engine.buffering
         guard engine.isReady, !restoringPosition, pendingResume == nil else { return }

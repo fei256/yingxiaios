@@ -17,6 +17,7 @@ public struct PlaybackStartupWork: Sendable {
         case danmaku = 4
     }
     private var stableSince: TimeInterval?
+    private var hasHeadroom = true
     private var lastMediaTime: Double?
     private var advancedAt: TimeInterval?
     private var requested = Set<Kind>()
@@ -25,7 +26,8 @@ public struct PlaybackStartupWork: Sendable {
         if !ready { stableSince = nil }
         else if stableSince == nil { stableSince = now }
     }
-    public mutating func observeProgress(ready: Bool, mediaTime: Double?, now: TimeInterval, stallTolerance: Double) {
+    public mutating func observeProgress(ready: Bool, mediaTime: Double?, now: TimeInterval, stallTolerance: Double, hasHeadroom: Bool = true) {
+        self.hasHeadroom = hasHeadroom
         guard ready, let mediaTime else {
             lastMediaTime = nil; advancedAt = nil; stableSince = nil
             return
@@ -45,7 +47,8 @@ public struct PlaybackStartupWork: Sendable {
     public func allows(_ kind: Kind, now: TimeInterval) -> Bool {
         if requested.contains(kind) { return true }
         guard let stableSince else { return false }
-        return now - stableSince >= kind.rawValue
+        // Some sources expose little buffered time even when playback advances steadily.
+        return now - stableSince >= kind.rawValue + (hasHeadroom ? 0 : 6)
     }
 }
 

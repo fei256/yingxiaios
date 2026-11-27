@@ -76,6 +76,12 @@ private func cancelled<T>(_ result: Result<T, Error>) -> Bool {
             try require(!startup.allows(.subtitles, now: 207), "A frozen picture retained its priority")
             startup = PlaybackStartupWork()
             try require(kinds.allSatisfy { !startup.allows($0, now: 300) }, "New episode inherited user priority")
+            for second in 0...12 {
+                startup.observeProgress(ready: true, mediaTime: Double(second), now: Double(second),
+                                        stallTolerance: 1.5, hasHeadroom: false)
+                if second == 5 { try require(!startup.allows(.danmaku, now: 5), "Low-buffer startup ran too early") }
+            }
+            try require(startup.allows(.danmaku, now: 12), "Smooth low-buffer video starved automatic comments")
             record("automatic subtitles, intro matching and comments yield to startup and buffering")
             do {
                 let calls = Counter()

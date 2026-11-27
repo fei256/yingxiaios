@@ -139,8 +139,8 @@ extension WebSignIn {
             try CloudDriveAccounts.update { accounts in
                 switch self {
                 case .quark:
+                    if mobileTicket != nil || accounts.quarkCookie != cookie { accounts.quarkServiceTicket = mobileTicket }
                     accounts.quarkCookie = cookie
-                    accounts.quarkServiceTicket = mobileTicket
                 case .uc: accounts.ucCookie = cookie
                 case .baidu: accounts.baiduCookie = cookie
                 case .bilibili, .aliyun: return false

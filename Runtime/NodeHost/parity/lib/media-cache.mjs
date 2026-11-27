@@ -515,10 +515,13 @@ export class MediaCache {
   }
   async *body(resource, upstream, meta, signal, maxBytes = Infinity, { writeThrough = false } = {}) {
     const iterator = upstream.response.body?.[Symbol.asyncIterator]();
-    if (!iterator) return;
     let savedAt = meta?.start || 0, pending = Buffer.alloc(0), received = 0;
     const revision = resource.owner.cacheRevision;
     try {
+      if (!iterator) {
+        if (meta && meta.end >= meta.start) throw new Error('truncated media response');
+        return;
+      }
       while (true) {
         const timer = setTimeout(() => upstream.controller.abort(), this.idleTimeoutMs); timer.unref?.();
         let next;
@@ -558,7 +561,7 @@ export class MediaCache {
         }
       } finally {
         upstream.controller.abort();
-        await iterator.return?.().catch(() => {});
+        await iterator?.return?.().catch(() => {});
         upstream.releaseBudget?.();
       }
     }

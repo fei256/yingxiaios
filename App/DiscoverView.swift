@@ -59,7 +59,8 @@ import TVCore
         let generation = UUID()
         loadGeneration = generation
         loading = true
-        carouselLoading = true
+        carouselLoading = carousel.isSubset(of: Set(pending))
+        let previouslyLoaded = Set(refreshedAt.keys)
         let task = Task {
             defer { if loadGeneration == generation { loading = false; carouselLoading = false } }
             var received: [TMDBCatalog.Feed: TMDBCatalog.Page] = [:]
@@ -70,7 +71,7 @@ import TVCore
             await withTaskGroup(of: (TMDBCatalog.Feed, TMDBCatalog.Page?).self) { group in
                 var remaining = pending.makeIterator()
                 func enqueue(_ feed: TMDBCatalog.Feed) {
-                    let reload = refresh || carousel.contains(feed) || (refreshedAt[feed] != nil && expired.contains(feed))
+                    let reload = refresh || carousel.contains(feed) || (previouslyLoaded.contains(feed) && expired.contains(feed))
                     group.addTask { (feed, try? await TMDBCatalog.page(feed, refresh: reload)) }
                 }
                 for _ in 0..<3 { if let feed = remaining.next() { enqueue(feed) } }
@@ -78,7 +79,7 @@ import TVCore
                     guard !Task.isCancelled, loadGeneration == generation else { group.cancelAll(); continue }
                     if let next = remaining.next() { enqueue(next) }
                     answered.insert(feed)
-                    if carousel.isSubset(of: answered) { carouselLoading = false }
+                    if carouselLoading && carousel.isSubset(of: answered) { carouselLoading = false }
                     if let page {
                         // Fetch time is bookkeeping, not visible content. Publishing an
                         // identical page needlessly invalidates the entire Home view.
@@ -180,106 +181,107 @@ struct DiscoverView: View {
         _model = State(initialValue: model)
         _heroState = State(initialValue: DiscoverHeroState(items: model.featured))
     }
-    var body: some View {
-        WithPerceptionTracking {
-            // Turning Featured Titles off in Edit Layout also drops its backdrop, trailer and colours (#447).
-            let heroShown = visible(.hero)
-            GeometryReader { proxy in
-                WithPerceptionTracking {
-                    let heroHeight = DiscoverLayout.heroHeight(proxy.size.width)
-                    ZStack(alignment: .top) {
-                        if heroShown {
-                            DiscoverHeroBackground(state: heroState, items: featured, width: proxy.size.width, height: heroHeight,
-                                                   active: previewActive)
-                        } else {
-                            DiscoverBackdrop(paint: nil, width: proxy.size.width, heroHeight: heroHeight, scrollY: 0, trailer: nil, playsTrailer: false)
-                        }
-                        ScrollView {
-                            WithPerceptionTracking {
-                                LazyVStack(alignment: .leading, spacing: 30) {
-                                    WithPerceptionTracking {
-                                        if featured.isEmpty, model.loading {
-                                            ProgressView().frame(maxWidth: .infinity).frame(height: heroShown ? min(proxy.size.width * 1.5, 660) : 160)
-                                        }
-                                        ForEach(DiscoverSection.allCases.filter(visible)) { section in
-                                            WithPerceptionTracking {
-                                                sectionView(section, width: proxy.size.width)
-                                                #if os(iOS)
-                                                if section == .hero { LocalContinueWatching() }
-                                                #endif
-                                            }
-                                        }
-                                        #if os(iOS)
-                                        if !heroShown { LocalContinueWatching() }
-                                        #endif
-                                        if !model.failures.isEmpty || model.collectionsFailed {
-                                            Button { Task { await model.load(sections: visibleSections) } } label: {
-                                                Label(L10n.text("Some lists couldn't load. Try again."), systemImage: "arrow.clockwise")
-                                                    #if !os(tvOS)
-                                                    .font(.subheadline).frame(maxWidth: .infinity).padding()
-                                                    #endif
-                                            }
-                                            #if os(tvOS)
-                                            .controlButton().frame(maxWidth: .infinity)
-                                            #else
-                                            .buttonStyle(.plain)
+    private func catalogGrid(heroShown: Bool) -> some View {
+        GeometryReader { proxy in
+            WithPerceptionTracking {
+                let heroHeight = DiscoverLayout.heroHeight(proxy.size.width)
+                ZStack(alignment: .top) {
+                    if heroShown {
+                        DiscoverHeroBackground(state: heroState, items: featured, width: proxy.size.width, height: heroHeight,
+                                               active: previewActive)
+                    } else {
+                        DiscoverBackdrop(paint: nil, width: proxy.size.width, heroHeight: heroHeight, scrollY: 0, trailer: nil, playsTrailer: false)
+                    }
+                    ScrollView {
+                        WithPerceptionTracking {
+                            LazyVStack(alignment: .leading, spacing: 30) {
+                                WithPerceptionTracking {
+                                    if featured.isEmpty, model.loading {
+                                        ProgressView().frame(maxWidth: .infinity).frame(height: heroShown ? min(proxy.size.width * 1.5, 660) : 160)
+                                    }
+                                    ForEach(DiscoverSection.allCases.filter(visible)) { section in
+                                        WithPerceptionTracking {
+                                            sectionView(section, width: proxy.size.width)
+                                            #if os(iOS)
+                                            if section == .hero { LocalContinueWatching() }
                                             #endif
-                                            .accessibilityIdentifier("discover.retry")
                                         }
-                                        if !model.loading, model.pages.values.allSatisfy({ $0.items.isEmpty }) {
-                                            EmptyResults(symbol: "film", title: L10n.text("No Titles Available"), message: L10n.text("Please try again later."),
-                                                         // The failure row above already offers a retry.
-                                                         action: model.failures.isEmpty && !model.collectionsFailed ? L10n.text("Try Again") : nil) { Task { await model.load(sections: visibleSections) } }
-                                        }
-                                        Button { editing = true } label: {
-                                            Label(L10n.text("Edit Layout"), systemImage: "slider.horizontal.3")
+                                    }
+                                    #if os(iOS)
+                                    if !heroShown { LocalContinueWatching() }
+                                    #endif
+                                    if !model.failures.isEmpty || model.collectionsFailed {
+                                        Button { Task { await model.load(sections: visibleSections) } } label: {
+                                            Label(L10n.text("Some lists couldn't load. Try again."), systemImage: "arrow.clockwise")
                                                 #if !os(tvOS)
-                                                .font(.subheadline).padding(18).glassSurface(.regular, in: Capsule())
+                                                .font(.subheadline).frame(maxWidth: .infinity).padding()
                                                 #endif
                                         }
-                                        // On tvOS .plain lays its focus platter under the glass capsule; one glass control instead.
                                         #if os(tvOS)
-                                        .controlButton()
+                                        .controlButton().frame(maxWidth: .infinity)
                                         #else
                                         .buttonStyle(.plain)
                                         #endif
-                                        .frame(maxWidth: .infinity).padding(.top, 10)
-                                        HStack(spacing: 8) {
-                                            TMDBBadge()
-                                            Text(L10n.text("This product uses the TMDB API but is not endorsed or certified by TMDB."))
-                                                .font(.caption2).foregroundStyle(.white.opacity(0.5))
-                                        }.padding(.horizontal, DiscoverLayout.gutter).padding(.vertical, 20)
+                                        .accessibilityIdentifier("discover.retry")
                                     }
+                                    if !model.loading, model.pages.values.allSatisfy({ $0.items.isEmpty }) {
+                                        EmptyResults(symbol: "film", title: L10n.text("No Titles Available"), message: L10n.text("Please try again later."),
+                                                     // The failure row above already offers a retry.
+                                                     action: model.failures.isEmpty && !model.collectionsFailed ? L10n.text("Try Again") : nil) { Task { await model.load(sections: visibleSections) } }
+                                    }
+                                    Button { editing = true } label: {
+                                        Label(L10n.text("Edit Layout"), systemImage: "slider.horizontal.3")
+                                            #if !os(tvOS)
+                                            .font(.subheadline).padding(18).glassSurface(.regular, in: Capsule())
+                                            #endif
+                                    }
+                                    // On tvOS .plain lays its focus platter under the glass capsule; one glass control instead.
+                                    #if os(tvOS)
+                                    .controlButton()
+                                    #else
+                                    .buttonStyle(.plain)
+                                    #endif
+                                    .frame(maxWidth: .infinity).padding(.top, 10)
+                                    HStack(spacing: 8) {
+                                        TMDBBadge()
+                                        Text(L10n.text("This product uses the TMDB API but is not endorsed or certified by TMDB."))
+                                            .font(.caption2).foregroundStyle(.white.opacity(0.5))
+                                    }.padding(.horizontal, DiscoverLayout.gutter).padding(.vertical, 20)
                                 }
-                                .padding(.bottom, 28)
-                                #if os(tvOS)
-                                // Without the hero the first shelf would sit under the search button.
-                                .padding(.top, heroShown ? 0 : 150)
-                                #endif
-                                .background {
-                                    WithPerceptionTracking {
-                                        GeometryReader { geometry in
-                                            WithPerceptionTracking {
-                                                Color.clear.preference(key: DiscoverScrollKey.self, value: -geometry.frame(in: .named("discoverScroll")).minY)
-                                            }
+                            }
+                            .padding(.bottom, 28)
+                            #if os(tvOS)
+                            // Without the hero the first shelf would sit under the search button.
+                            .padding(.top, heroShown ? 0 : 150)
+                            #endif
+                            .background {
+                                WithPerceptionTracking {
+                                    GeometryReader { geometry in
+                                        WithPerceptionTracking {
+                                            Color.clear.preference(key: DiscoverScrollKey.self, value: -geometry.frame(in: .named("discoverScroll")).minY)
                                         }
                                     }
                                 }
                             }
                         }
-                        .coordinateSpace(name: "discoverScroll")
-                        .modifier(DiscoverScrollObserver(offset: Binding(get: { heroState.scrollY }, set: { heroState.scrollY = $0 })))
-                        .scrollIndicators(.hidden)
-                        .refreshable {
-                            if doubanShown {
-                                async let douban: Void = model.loadDouban(refresh: true)
-                                await model.load(sections: visibleSections, refresh: true)
-                                await douban
-                            } else { await model.load(sections: visibleSections, refresh: true) }
-                        }
+                    }
+                    .coordinateSpace(name: "discoverScroll")
+                    .modifier(DiscoverScrollObserver(offset: Binding(get: { heroState.scrollY }, set: { heroState.scrollY = $0 })))
+                    .scrollIndicators(.hidden)
+                    .refreshable {
+                        if doubanShown {
+                            async let douban: Void = model.loadDouban(refresh: true)
+                            await model.load(sections: visibleSections, refresh: true)
+                            await douban
+                        } else { await model.load(sections: visibleSections, refresh: true) }
                     }
                 }
             }
+        }
+    }
+
+    private func navigation(heroShown: Bool) -> some View {
+        catalogGrid(heroShown: heroShown)
             .modifier(DiscoverHeroTheme(state: heroState, hero: heroShown))
             .historyDetailsDestination()
             .navigationTitle("")
@@ -345,13 +347,20 @@ struct DiscoverView: View {
             // Only the hero runs under the status and navigation bars; without it the first shelf starts below them.
             .ignoresSafeArea(edges: heroShown ? .top : [])
             #endif
+    }
+
+    private var catalogRequest: Set<DiscoverSection>? { catalogActive ? visibleSections : nil }
+
+    var body: some View {
+        WithPerceptionTracking {
+            navigation(heroShown: visible(.hero))
             .onAppear { onScreen = true }
             .onReceive(NotificationCenter.default.publisher(for: TMDBServiceSettings.changed)) { _ in
                 Task { await model.load(sections: visibleSections, refresh: true) }
             }
             .onDisappear { onScreen = false }
             .task(id: model.featured) { _ = heroState.prepare(model.featured) }
-            .task(id: String(catalogActive) + visibleSections.map(\.rawValue).sorted().joined(separator: "|")) { if catalogActive { await model.load(sections: visibleSections) } }
+            .task(id: catalogRequest) { if catalogActive { await model.load(sections: visibleSections) } }
             .task(id: doubanShown) { if doubanShown { await model.loadDouban() } }
             .sheet(isPresented: $editing) {
                 WithPerceptionTracking {

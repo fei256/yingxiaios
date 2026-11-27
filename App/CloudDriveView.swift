@@ -523,16 +523,17 @@ extension CloudProvider {
     /// Saves a login captured outside the accounts page and restarts plugin sessions.
     /// `ticket` is Quark's approved sign-in ticket. FTY's player needs the mobile ticket exchanged from it.
     func saveLogin(_ cookie: String, ticket: String? = nil) async throws {
-        var accounts = (try? CloudDriveAccounts.load()) ?? CloudDriveAccounts()
-        set(cookie, in: &accounts)
-        if self == .quark {
-            // The cookie is the login every other plugin uses, so a missing or failed ticket does not stop the save.
-            if let ticket, !ticket.isEmpty {
-                do { accounts.quarkServiceTicket = try await CloudDriveQRLogin.quarkMobileTicket(ticket, cookie: cookie) } catch {}
-            }
-            Diagnostics.shared.record(.info, "cloud.signin", "quark login saved mobileTicket=\(accounts.quarkServiceTicket != nil)")
+        var mobileTicket: String?
+        if self == .quark, let ticket, !ticket.isEmpty {
+            mobileTicket = try? await CloudDriveQRLogin.quarkMobileTicket(ticket, cookie: cookie)
         }
-        try accounts.save()
+        try Task.checkCancellation()
+        try CloudDriveAccounts.update { accounts in
+            let previous = accounts.quarkCookie
+            set(cookie, in: &accounts)
+            if self == .quark, mobileTicket != nil || previous != cookie { accounts.quarkServiceTicket = mobileTicket }
+            return true
+        }
         await LocalJarHost.shared.reloadCloudAccounts()
         await EmbeddedJarHost.shared.reloadCloudAccounts()
     }
