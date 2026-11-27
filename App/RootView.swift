@@ -122,9 +122,22 @@ struct RootView: View {
         #endif
         return busy
     }
-    var body: some View {
+    private var signInPrompt: Binding<PluginSignIn.Prompt?> {
+        Binding(get: {
+            #if os(iOS)
+            if store.pendingCatalogPlayback != nil { return nil }
+            #endif
+            return PluginSignIn.shared.prompt
+        }, set: { value in
+            #if os(iOS)
+            if store.pendingCatalogPlayback != nil { return }
+            #endif
+            if value == nil { PluginSignIn.shared.dismiss() }
+        })
+    }
+
+    private var navigationContent: some View {
         WithPerceptionTracking {
-            @AppBindable var store = store
             Group {
                 #if os(macOS)
                 NavigationSplitView(columnVisibility: $columns) {
@@ -172,24 +185,18 @@ struct RootView: View {
                 platformTabs
                 #endif
             }
+        }
+    }
+
+    private var playbackContent: some View {
+        WithPerceptionTracking {
+            @AppBindable var store = store
+            navigationContent
             .appOnChange(of: store.section) { _, section in
                 if section != .search { store.searchModel.suspend() }
             }
-            // A Baidu or Aliyun line waiting for its plugin's sign-in code to be scanned.
-            .sheet(item: Binding(get: {
-                #if os(iOS)
-                if store.pendingCatalogPlayback != nil { return nil }
-                #endif
-                return PluginSignIn.shared.prompt
-            }, set: { value in
-                #if os(iOS)
-                if store.pendingCatalogPlayback != nil { return }
-                #endif
-                if value == nil { PluginSignIn.shared.dismiss() }
-            })) { perceptionArgument0 in
-                WithPerceptionTracking {
-                    PluginSignInView(prompt: perceptionArgument0)
-                }
+            .sheet(item: signInPrompt) { prompt in
+                WithPerceptionTracking { PluginSignInView(prompt: prompt) }
             }
             #if os(tvOS)
             .fullScreenCover(isPresented: Binding(get: { store.music.presentsPlayer }, set: { store.music.presentsPlayer = $0 })) { WithPerceptionTracking { MusicPlayerScreen() } }
@@ -210,6 +217,12 @@ struct RootView: View {
             }
             .modifier(PlayerPresentation(playing: $store.playing))
             .modifier(LocalReadingPresentation())
+        }
+    }
+
+    var body: some View {
+        WithPerceptionTracking {
+            playbackContent
             #if os(iOS)
             .preferredColorScheme(localAppearance.colorScheme)
             .disabled(store.restoringBackup)
