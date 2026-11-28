@@ -83,6 +83,11 @@ jobs:
             Sources/TVCore/LocalDetailEpisodeNumbers.swift Sources/TVCore/CustomTMDBService.swift \
             Tests/TMDB/Support.swift Tests/TMDB/checks.swift -o build/ci/tmdb-checks
           build/ci/tmdb-checks build/ci/tmdb-checks.json 2>&1 | tee build/ci/tmdb-checks.log
+      - name: Test playback kernel routing
+        run: |
+          xcrun swiftc -swift-version 6 -parse-as-library Sources/TVCore/PlaybackKernel.swift \
+            Tests/PlaybackResilience/kernel.swift -o build/ci/kernel-routing-checks
+          build/ci/kernel-routing-checks
       - name: Test completed cache timeline coverage
         run: |
           xcrun swiftc -swift-version 6 -parse-as-library Sources/TVCore/PlaybackCacheProgress.swift \

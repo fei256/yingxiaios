@@ -40,7 +40,7 @@ for name in ['_cffi_backend','cryptography.hazmat.bindings._rust']:
 loose=[str(p.relative_to(app)) for root in ['python','PythonHost'] for p in (app/root).rglob('*.so')]
 if loose:errors.append('Loose native extensions '+str(loose))
 if missing:errors.append('Missing declared packages '+str(missing))
-report={'framework_count':len(records),'python_framework_count':len(records)-1,'required_packages':required,'installed_packages':installed,'missing_packages':missing,'fwork_count':len(fworks),'loose_extensions':loose,'frameworks':records,'errors':errors}
+report={'framework_count':len(records),'python_framework_count':sum((source/'Frameworks'/r['framework']).is_dir() for r in records),'required_packages':required,'installed_packages':installed,'missing_packages':missing,'fwork_count':len(fworks),'loose_extensions':loose,'frameworks':records,'errors':errors}
 info=plistlib.loads((app/'Info.plist').read_bytes())
 executable=app/info['CFBundleExecutable']
 report['app_info']={k:info.get(k) for k in ['CFBundleIdentifier','CFBundleExecutable','CFBundleShortVersionString','CFBundleVersion','MinimumOSVersion','UIDeviceFamily']}

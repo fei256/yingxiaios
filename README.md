@@ -2,6 +2,8 @@
 
 映匣的独立 iOS 源码，面向 iPhone / iPad，最低 iOS 16.1。当前版本为 **1.8.13**，支持 Python、Node、QuickJS、FFmpeg、KSPlayer、原盘读取和离线语音字幕；iOS 不执行 JVM、JAR 或 DEX。
 
+在「设置 → 播放器 → 默认播放内核」可选择 AetherEngine 6.89.1，播放页的视频菜单也可切换。默认使用 KSPlayer。分离音视频、远程 DASH、原盘和直接 RTSP／RTMP／UDP 输入保留 KSPlayer，Aether 打开或播放失败时会回退。Aether 通过独立的动态 framework 链接其 FFmpegBuild 3.3.0；现有 KSPlayer 和 TVMedia 继续使用映匣的静态 FFmpeg。
+
 ## 内容
 
 - `App/`：SwiftUI 界面、播放器和 iOS 原生桥。

@@ -5,8 +5,10 @@ import json
 from pathlib import Path
 import plistlib
 import re
+import subprocess
 import sys
 
+from aether_frameworks import LIBRARIES
 from build_validation import require_validation_enabled
 
 require_validation_enabled()
@@ -135,9 +137,24 @@ for relative in ['lx/lx.js', 'music/prelude.js']:
     music_assets[relative] = len(copies) == 1 and copies[0].read_bytes() == source.read_bytes()
     if not music_assets[relative]:
         errors.append(f'Packaged music adapter differs from source or is missing: {relative}')
+bridge = app / 'Frameworks/YingxiaAether.framework/YingxiaAether'
+aether_bound = False
+if bridge.is_file():
+    imports = subprocess.check_output(['xcrun', 'nm', '-m', str(bridge)], text=True)
+    aether_bound = bool(re.search(r'\(undefined\).* _avcodec_open2 \(from AetherLibavcodec\)', imports))
+if not aether_bound:
+    errors.append('YingxiaAether must import avcodec_open2 from AetherLibavcodec')
+app_libraries = subprocess.check_output(['otool', '-L', str(executable)], text=True)
+if '@rpath/YingxiaAether.framework/YingxiaAether' not in app_libraries:
+    errors.append('App does not link the selectable Aether playback bridge')
+for name in LIBRARIES:
+    if not (app / 'Frameworks' / (name + '.framework') / name).is_file():
+        errors.append('Missing Aether runtime library: ' + name)
+if not (app / 'AetherNotices.txt').is_file():
+    errors.append('Missing Aether playback license notices')
 report = {
     'validation_kind': 'linked-binary inspection; no device runtime execution',
-    'ksplayer_linked': ksplayer,
+    'ksplayer_linked': ksplayer, 'aether_ffmpeg_binding_verified': aether_bound,
     'decoders': codecs, 'demuxers': formats, 'protocols': protocols, 'filters': filters, 'disc_reader': disc,
     'avs_native_implementations': avs,
     'dolby_p7_to_p81': dolby_conversion,

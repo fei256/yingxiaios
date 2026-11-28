@@ -11,6 +11,7 @@ import argparse
 
 from build_validation import require_validation_enabled
 from ipa_archive import write_payload_zip
+from aether_frameworks import embed as embed_aether_frameworks
 from source_snapshot import changed_inputs, native_checksums, source_checksums
 
 require_validation_enabled()
@@ -63,6 +64,7 @@ archive = out / 'Yingxia-local-iOS16.1.xcarchive'
 apps = list((archive / 'Products/Applications').glob('*.app'))
 assert len(apps) == 1, apps
 app = apps[0]
+embed_aether_frameworks(app / 'Frameworks', repo / 'build/SourcePackages/checkouts/FFmpegBuild')
 if args.revalidate_tools:
     archived_info = plistlib.loads((app / 'Info.plist').read_bytes())
     archived_executable = app / archived_info['CFBundleExecutable']

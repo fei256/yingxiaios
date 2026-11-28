@@ -7,6 +7,9 @@ FFmpegKit compatibility code — https://github.com/kingslay/FFmpegKit; GNU GPL 
 The GPL version 3 text appears below. Local source adaptations and pinned dependency
 information are supplied in Vendor/KSPlayer and Vendor/FFmpegKit.
 
+Optional AetherEngine playback and its dependencies
+See AetherNotices.txt included in the application bundle.
+
 iOS disc reader
 libbluray 1.3.4 and bundled libudfread — https://www.videolan.org/developers/libbluray.html
 GNU LGPL version 2.1 or later. This local build excludes Java/JVM execution.

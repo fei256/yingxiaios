@@ -14,11 +14,21 @@ private final class AudioServiceObservation: @unchecked Sendable {
 }
 
 /// iPhone and iPad share one playback session, including while its PiP window owns the picture.
-/// The movie is owned by KS. Shared platform helpers construct their AVKit objects on demand.
+/// The selected backend owns the movie. Shared platform helpers construct their AVKit objects on demand.
 @MainActor @Perceptible final class PlaybackSession {
     static let sharedLocal = PlaybackSession()
     static weak var current: PlaybackSession?
     let engine = KSPlaybackEngine()
+    private var fallbackToKS = false
+    var preferredKernel: PlaybackKernel {
+        PlaybackKernel(rawValue: UserDefaults.standard.string(forKey: PlaybackKernel.preferenceKey) ?? "") ?? .ksPlayer
+    }
+    func chooseKernel(_ kernel: PlaybackKernel) {
+        if preferredKernel == kernel, engine.usingAether == (kernel == .aether) { return }
+        UserDefaults.standard.set(kernel.rawValue, forKey: PlaybackKernel.preferenceKey)
+        fallbackToKS = false
+        reopenCurrent()
+    }
     @PerceptionIgnored lazy var player = AVQueuePlayer()
     @PerceptionIgnored lazy var enhancer = VideoEnhancer(player: player)
     let catalogDanmaku = CatalogDanmakuModel()
@@ -199,6 +209,13 @@ private final class AudioServiceObservation: @unchecked Sendable {
             self?.openingFrameTarget = nil
             self?.remoteSkip.userSought(to: time)
         }
+        engine.onReplayRequested = { [weak self] in self?.replayAether() }
+        engine.onAetherFailure = { [weak self] message in
+            guard let self, !self.fallbackToKS else { return }
+            self.fallbackToKS = true
+            Diagnostics.shared.record(.warning, "player.recovery", "Aether → KSPlayer: \(message)")
+            self.reopenCurrent()
+        }
         engine.onReady = { [weak self] in self?.ready() }
         engine.onTick = { [weak self] in self?.updatePictureState(); self?.updateSkipping(); self?.updateSubtitles() }
         engine.onFinish = { [weak self] error in self?.finished(error) }
@@ -256,10 +273,10 @@ private final class AudioServiceObservation: @unchecked Sendable {
         engine.seekFromUser(to: position + seconds)
     }
     func chooseAudio(_ id: CMPersistentTrackID) { engine.selectAudio(id: String(id)) }
-    func setSpeed(_ speed: Float) { selectedSpeed = min(8, max(0.25, speed)); clearBoost(); engine.speed = selectedSpeed }
+    func setSpeed(_ speed: Float) { selectedSpeed = min(engine.usingAether ? 2 : 8, max(0.25, speed)); clearBoost() }
     func setBoost(_ rate: Float?) {
         guard rate == nil || !paused else { return }
-        throttle = rate.map { SpeedBoost.Throttle(wanted: Double($0), after: throttle) }; applyBoost()
+        throttle = rate.map { SpeedBoost.Throttle(wanted: Double(engine.usingAether ? min(2, $0) : $0), after: throttle) }; applyBoost()
     }
     private func applyBoost() {
         boost = throttle.map { Float($0.rate) }; boostWanted = throttle.flatMap { $0.limited ? Float($0.wanted) : nil }
@@ -369,10 +386,15 @@ private final class AudioServiceObservation: @unchecked Sendable {
             try AVAudioSession.sharedInstance().setActive(true)
         } catch { Diagnostics.shared.failure("player", "KS audio session", error) }
         let descriptor = channel.playback
+        let useAether = preferredKernel == .aether && !fallbackToKS
+            && (selections?.video == nil || selections?.video == "auto")
+            && preferredKernel.supports(url: prepared.url, format: descriptor?.format,
+                                        separateAudio: prepared.audioURL != nil, disc: prepared.disc != nil)
+        if useAether { selectedSpeed = min(selectedSpeed, 2) }
         steps = ["正在连接视频", "等待第一帧画面"]
         Diagnostics.shared.record(.info, "player.startup", "stage=prepared elapsed=\(Date().timeIntervalSince(preparationStarted)) live=\(isLive) format=\(descriptor?.format ?? "")")
         engine.open(url: prepared.url, headers: prepared.headers, mediaID: generation.uuidString,
-                    format: prepared.disc == nil ? descriptor?.format : "mpegts", isLive: isLive,
+                    format: prepared.disc == nil ? descriptor?.format : "mpegts", isLive: isLive, useAether: useAether,
                     audioURL: prepared.audioURL, audioHeaders: prepared.audioHeaders,
                     cacheIOURL: prepared.cacheIOURL, audioCacheIOURL: prepared.audioCacheIOURL, selections: selections)
         if selections != nil { externalSubtitles.restoreAfterReopen(channel) }
@@ -596,6 +618,13 @@ private final class AudioServiceObservation: @unchecked Sendable {
             self.completedSkip(action, succeeded: success)
         }
     }
+    private func replayAether() {
+        guard let prepared = currentPrepared, let channel = playing else { return }
+        pendingResume = nil; keepPausedAfterRestore = false
+        let selections = engine.selections
+        externalSubtitles.prepareForReopen()
+        open(prepared, channel: channel, selections: selections)
+    }
     private func finished(_ failure: Error?) {
         if let failure, PlaybackAudioFailure.isUnavailable(failure) {
             engine.pause(); error = failure.localizedDescription; loading = false; buffering = false
@@ -617,6 +646,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         }
         if looping {
             sampleWatchActivity(); watchSampler.interrupt()
+            if engine.usingAether { replayAether(); return }
             engine.seek(to: 0) { [weak self] ok in if ok { self?.engine.play() } }
             return
         }
@@ -670,6 +700,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
                 if let previous = self.currentPrepared { Self.release(channel, previous) }
                 self.pendingResume = savedPosition; self.restoringPosition = false; self.keepPausedAfterRestore = wasPaused
                 self.currentPrepared = prepared; self.quality = requested; self.playing = next
+                self.fallbackToKS = false
                 self.externalSubtitles.begin(next, playing: prepared.url)
                 self.open(prepared, channel: next)
                 self.startSampler(generation: active)
@@ -776,6 +807,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         discSelectionID = UUID(); discSelection?.cancel(); discSelection = nil; selectingDiscTitle = false
     }
     func stop() {
+        fallbackToKS = false
         updateRuntimePlaybackPins([])
         needsVideoCacheActivation = false
         cachePreparationID = UUID(); cachePreparation?.cancel(); cachePreparation = nil

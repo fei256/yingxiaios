@@ -19,9 +19,9 @@ spec = json.loads(subprocess.check_output([
     generator, "dump", "--spec", str(root / "project.yml"), "--type", "json"
 ]))
 spec["name"] = "Yingxia-iOS"
-spec["targets"] = {"TVBox-iOS": spec["targets"]["TVBox-iOS"]}
+spec["targets"] = {name: spec["targets"][name] for name in ("TVBox-iOS", "YingxiaAether")}
 spec["packages"] = {name: value for name, value in spec["packages"].items()
-                    if name in ("TVCore", "Perception")}
+                    if name in ("TVCore", "Perception", "AetherEngine")}
 spec["options"]["deploymentTarget"] = {"iOS": "16.1"}
 spec["settings"]["base"]["IPHONEOS_DEPLOYMENT_TARGET"] = "16.1"
 destination = root / "build/ios-project.json"

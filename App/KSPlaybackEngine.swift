@@ -5,6 +5,7 @@ import UIKit
 import AVKit
 import TVCore
 import KSPlayer
+import YingxiaAether
 
 struct KSPlaybackFailure: LocalizedError {
     let message: String
@@ -140,8 +141,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     var end: Double? = nil
 }
 
-/// The sole active iOS playback core. The facade keeps every consumer on the same
-/// media identity and serializes seeks because FFmpeg accepts only one seek at a time.
+/// Both playback backends share one media identity and one serialized transport.
 @MainActor @Perceptible final class KSPlaybackEngine: NSObject, MediaPlayerDelegate {
     private(set) var position = 0.0
     private(set) var duration = 0.0
@@ -185,7 +185,21 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     private(set) var audioDelay = 0.0
     private(set) var muted = false
     private(set) var volume: Float = 1
-    var speed: Float = 1 { didSet { core?.playbackRate = min(8, max(0.25, speed)); synchronizePictureInPictureClock() } }
+    var speed: Float = 1 {
+        didSet {
+            guard speed != oldValue else { return }
+            core?.playbackRate = min(8, max(0.25, speed))
+            if let aether, wantsPlaying, isReady, !seeking { aether.play(rate: speed) }
+            synchronizePictureInPictureClock()
+        }
+    }
+    @PerceptionIgnored private var aether: AetherPlayback?
+    private(set) var usingAether = false
+    var onAetherFailure: ((String) -> Void)?
+    var onReplayRequested: (() -> Void)?
+    private var backendView: UIView? { aether?.view ?? core?.view }
+    @PerceptionIgnored private var appliedAetherSubtitles: (String?, String?)?
+    @PerceptionIgnored private var aetherReadyDelivered = false
     var onUserSeek: ((Double) -> Void)?
     var onReady: (() -> Void)?
     var onTick: (() -> Void)?
@@ -198,8 +212,8 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     /// External and AI cues remain owned by the session; PiP samples them at the decoded frame time.
     var pictureInPictureSubtitleProvider: ((Double) -> (primary: PlayerSubtitlePresentation, secondary: PlayerSubtitlePresentation))?
     private(set) var renderingRevision = UUID()
-    var renderView: UIView? { externalHost == nil ? core?.view : nil }
-    var pipController: AVPictureInPictureController? { pipPresenter?.controller ?? core?.pipController }
+    var renderView: UIView? { externalHost == nil ? backendView : nil }
+    var pipController: AVPictureInPictureController? { aether?.pipController ?? pipPresenter?.controller ?? core?.pipController }
     var pictureInPictureActive: Bool { pipController?.isPictureInPictureActive == true }
     var inputRevision: UUID { openID }
     var seeking: Bool { currentSeek != nil || pendingSeek != nil }
@@ -220,12 +234,13 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         return snapshot
     }
     var startupMediaTime: Double? {
+        if usingAether { return hasPicture ? position : nil }
         guard let core else { return nil }
         let audioOnly = videoSelection == "no" || (!tracks.isEmpty && !tracks.contains { $0.kind == .video })
         let time = audioOnly ? position : core.displayedVideoTime
         return time.isFinite && time >= 0 ? time : nil
     }
-    var seekable: Bool { core?.seekable == true }
+    var seekable: Bool { aether.map { $0.ready && duration > 0 } ?? (core?.seekable == true) }
     /// Direct picture time avoids a prefilling audio queue advancing danmaku ahead of the frame.
     var displayPosition: Double {
         guard videoSelection != "no", let core else { return position }
@@ -273,7 +288,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     @PerceptionIgnored private var pendingSeek: SeekRequest?
 
     func open(url: URL, headers: [String: String], mediaID: String, format: String? = nil,
-              discPlaylist: Int? = nil, startTime: Double = 0, isLive: Bool = false,
+              discPlaylist: Int? = nil, startTime: Double = 0, isLive: Bool = false, useAether: Bool = false,
               audioURL: URL? = nil, audioHeaders: [String: String] = [:],
               cacheIOURL: URL? = nil, audioCacheIOURL: URL? = nil, selections: KSPlaybackSelections? = nil) {
         let previousVideoTracks = selections?.video == "no" ? tracks.filter { $0.kind == .video } : []
@@ -303,6 +318,12 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             subtitlePolicy.selectSecondary(selections.secondarySubtitle)
             subtitleSelection = subtitlePolicy.primary; secondarySubtitleSelection = subtitlePolicy.secondary
             audioOff = selections.audio == "no"
+        }
+        if useAether {
+            let hls = ["m3u8", "hls", "application/vnd.apple.mpegurl", "application/x-mpegurl"].contains(format?.lowercased() ?? "")
+                || url.pathExtension.lowercased() == "m3u8"
+            openAether(url: cacheIOURL ?? url, headers: cacheIOURL == nil ? headers : [:], live: isLive, hls: hls)
+            return
         }
         let soloAudioURL = options.videoDisable ? audioURL : nil
         let playbackURL = soloAudioURL ?? url
@@ -399,6 +420,151 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             }
         }
     }
+    private func openAether(url: URL, headers: [String: String], live: Bool, hls: Bool) {
+        let opening = openID
+        usingAether = true; wantsPlaying = true; paused = false; buffering = true
+        currentDecoder = "AetherEngine 6.89.1"
+        clock = Task { [weak self] in
+            guard let self, self.openID == opening, !Task.isCancelled else { return }
+            do {
+                let player = try AetherPlayback.make()
+                self.aether = player
+                self.renderingRevision = UUID()
+                if let host = self.externalHost {
+                    player.view.frame = host.bounds
+                    player.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                    host.addSubview(player.view)
+                }
+                player.onSetPlaying = { [weak self] play in
+                    if play { self?.play() } else { self?.pause() }
+                }
+                player.onSkip = { [weak self] offset, done in
+                    guard let self else { done(false); return }
+                    self.seekFromUser(to: self.position + offset, completion: done)
+                }
+                try await player.load(url: url, headers: headers, live: live, hls: hls, audio: self.audioSelection.flatMap(Int32.init))
+                guard self.openID == opening, !Task.isCancelled else { return }
+                player.setVolume(self.muted || self.audioOff ? 0 : self.volume)
+                player.setAudioDelay(self.audioDelay)
+                if self.wantsPlaying { player.play(rate: self.speed) } else { player.pause() }
+                while self.openID == opening && !Task.isCancelled {
+                    if let failure = player.failure { self.onAetherFailure?(failure); return }
+                    self.sampleAether(player)
+                    guard self.openID == opening else { return }
+                    if player.ended {
+                        self.position = self.duration; self.wantsPlaying = false; self.paused = true; self.buffering = false
+                        self.onFinish?(nil)
+                        return
+                    }
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+            } catch {
+                if self.openID == opening, !Task.isCancelled { self.onAetherFailure?(error.localizedDescription) }
+            }
+        }
+    }
+
+    private func sampleAether(_ player: AetherPlayback) {
+        if !seeking { position = Self.finite(player.time) }
+        duration = Self.finite(player.duration)
+        bufferedPosition = max(position, Self.finite(player.buffered))
+        presentationSize = player.size
+        if isReady && !player.ready { appliedAetherSubtitles = nil }
+        isReady = player.ready
+        if pictureInPictureActive, !seeking, let playing = player.systemPlaying {
+            wantsPlaying = playing; paused = !playing
+        }
+        buffering = wantsPlaying && player.buffering
+        hasPicture = player.hasPicture
+        if hasPicture { hasPresentedPicture = true }
+        sampleStoppedPicture(position)
+        player.updatePiPController()
+        if observedPiP !== pipController { observedPiP = pipController; renderingRevision = UUID() }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now >= nextPlaybackInfoSample || (isReady && !aetherReadyDelivered) {
+            nextPlaybackInfoSample = now + 1
+            currentDecoder = "Aether · " + player.decoder
+            frameRate = Self.finite(player.frameRate ?? 0)
+            var info = PlaybackInfo()
+            info.width = Int(presentationSize.width); info.height = Int(presentationSize.height)
+            info.frameRate = player.frameRate
+            if playbackInfo != info { playbackInfo = info }
+            refreshAetherTracks(player)
+        }
+        if !seeking { sampleAetherSubtitles(player) }
+        if isReady, !aetherReadyDelivered { aetherReadyDelivered = true; onReady?() }
+        if aether === player { onTick?() }
+    }
+
+    private func aetherSubtitlePair(_ player: AetherPlayback) -> (primary: String?, secondary: String?) {
+        let subs = player.subtitleTracks
+        let ids = subs.map { String($0.id) }
+        return subtitlePolicy.resolved(available: ids + externalSubtitleOrder,
+            preferred: subs.first(where: \.preferred).map { String($0.id) }, automaticAvailable: ids)
+    }
+
+    private func refreshAetherTracks(_ player: AetherPlayback) {
+        let pair = aetherSubtitlePair(player)
+        var available: [KSPlaybackTrack] = []
+        if presentationSize.width > 0 {
+            available.append(KSPlaybackTrack(id: "auto", kind: .video, title: player.videoCodec ?? "视频",
+                codec: player.videoCodec, selected: true, width: Int(presentationSize.width), height: Int(presentationSize.height)))
+        }
+        available += player.audioTracks.map { track in
+            KSPlaybackTrack(id: String(track.id), kind: .audio, title: track.name, codec: track.codec,
+                            language: track.language, selected: !audioOff && track.id == player.activeAudio)
+        }
+        available += player.subtitleTracks.map { track in
+            KSPlaybackTrack(id: String(track.id), kind: .subtitle, title: track.name, codec: track.codec,
+                            language: track.language, selected: String(track.id) == pair.primary)
+        }
+        available += externalSubtitleOrder.compactMap { id in
+            guard let doc = externalSubtitleDocuments[id]?.document else { return nil }
+            return KSPlaybackTrack(id: id, kind: .subtitle, title: doc.name, codec: doc.format.rawValue,
+                                   language: doc.language, selected: id == pair.primary)
+        }
+        if tracks != available { tracks = available }
+        let chapterList = player.chapters.map { KSPlaybackChapter(id: $0.id, title: $0.title, start: $0.start, end: $0.end) }
+        if chapters != chapterList { chapters = chapterList }
+        guard player.ready else { return }
+        if appliedAetherSubtitles == nil || appliedAetherSubtitles?.0 != pair.primary {
+            player.selectSubtitle(pair.primary.flatMap(Int.init), secondary: false)
+        }
+        if appliedAetherSubtitles == nil || appliedAetherSubtitles?.1 != pair.secondary {
+            player.selectSubtitle(pair.secondary.flatMap(Int.init), secondary: true)
+        }
+        appliedAetherSubtitles = pair
+    }
+
+    private func sampleAetherSubtitles(_ player: AetherPlayback) {
+        func bitmaps(_ values: [AetherPlayback.Bitmap], previous: [KSPlaybackSubtitleBitmap]) -> [KSPlaybackSubtitleBitmap] {
+            values.map { value in
+                if let match = previous.first(where: { $0.id == value.id && $0.image.cgImage === value.image
+                    && $0.origin == value.origin && $0.canvasSize == value.canvas }) { return match }
+                return KSPlaybackSubtitleBitmap(id: value.id, image: UIImage(cgImage: value.image), origin: value.origin, canvasSize: value.canvas)
+            }
+        }
+        let primary = player.subtitles(secondary: false, delay: subtitleDelay)
+        let lines = SubtitleStyle.lines(primary.lines)
+        if lines != subtitleLines { subtitleLines = lines }
+        let pictures = bitmaps(primary.bitmaps, previous: subtitleBitmaps)
+        if pictures != subtitleBitmaps { subtitleBitmaps = pictures; subtitleImages = pictures.map(\.image) }
+        if let id = appliedAetherSubtitles?.1, let external = externalSubtitleDocuments[id] {
+            let time = Double(external.timing.source(at: position)) / 1_000_000
+            let parts = external.parts(at: time)
+            secondarySubtitleSourceTime = time
+            secondarySubtitleLines = SubtitleStyle.lines(parts.compactMap { $0.text?.string })
+            secondarySubtitleStyledParts = external.document.format.isStyled ? parts : []
+            secondarySubtitleImages = []; secondarySubtitleBitmaps = []
+        } else {
+            let secondary = player.subtitles(secondary: true, delay: subtitleDelay)
+            if !secondarySubtitleStyledParts.isEmpty { secondarySubtitleStyledParts = [] }
+            let lines = SubtitleStyle.lines(secondary.lines)
+            if lines != secondarySubtitleLines { secondarySubtitleLines = lines }
+            let pictures = bitmaps(secondary.bitmaps, previous: secondarySubtitleBitmaps)
+            if pictures != secondarySubtitleBitmaps { secondarySubtitleBitmaps = pictures; secondarySubtitleImages = pictures.map(\.image) }
+        }
+    }
     func shutdown() {
         audioServicesGate.clearPending()
         PictureInPicture.shared.stop(engine: self)
@@ -409,6 +575,8 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         pipPresenter?.reset(); pipPresenter = nil
         core?.applicationPictureInPictureController = nil
         clock?.cancel(); clock = nil
+        aether?.stop(); aether = nil; usingAether = false
+        aetherReadyDelivered = false; appliedAetherSubtitles = nil
         thumbnailReader?.cancel(); thumbnailReader = nil
         let cancelled = [currentSeek, pendingSeek].compactMap { $0 }
         currentSeek = nil; pendingSeek = nil; seekSequence += 1; renderingTimeline &+= 1
@@ -441,13 +609,14 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             return
         }
         guard !failedVideo else { return }
+        if aether?.ended == true { onReplayRequested?(); return }
         wantsPlaying = true; paused = false
         if isReady, duration > 0, position >= duration - 0.1 {
             seek(to: 0)
-        } else if currentSeek == nil { core?.play() }
+        } else if currentSeek == nil { core?.play(); if isReady { aether?.play(rate: speed) } }
         synchronizePictureInPictureClock()
     }
-    func pause() { wantsPlaying = false; paused = true; core?.pause(); synchronizePictureInPictureClock() }
+    func pause() { wantsPlaying = false; paused = true; core?.pause(); aether?.pause(); synchronizePictureInPictureClock() }
     func suspendForAudioServices(available: Bool) {
         let context = audioServicesGate.context ?? mediaID.map {
             KSAudioServicesResumeContext(mediaID: $0, position: position, duration: duration, selections: selections)
@@ -464,6 +633,11 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         }
     }
     func resumeAfterForeground() {
+        if let aether {
+            aether.view.setNeedsLayout()
+            if aetherReadyDelivered { sampleAether(aether) }
+            return
+        }
         guard let core else { return }
         core.enterForeground()
         core.view?.setNeedsLayout()
@@ -472,8 +646,9 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     }
     func attachPictureInPicture(to view: UIView) { pipPresenter?.attach(to: view) }
     func detachPictureInPicture(from view: UIView) { pipPresenter?.detach(from: view) }
-    func retainPictureInPictureSource() { pipPresenter?.retainSource() }
+    func retainPictureInPictureSource() { if let aether { aether.retainPiPSurface() } else { pipPresenter?.retainSource() } }
     func setPictureInPictureActive(_ active: Bool) {
+        aether?.setPiPActive(active)
         (core?.videoOutput as? MetalPlayView)?.pictureInPictureActive = active
         pipPresenter?.refresh(active: active)
     }
@@ -490,11 +665,11 @@ struct KSPlaybackChapter: Identifiable, Equatable {
                 values?.secondary ?? PlayerSubtitlePresentation(lines: secondarySubtitleLines, styledParts: secondarySubtitleStyledParts,
                     sourceTime: secondarySubtitleSourceTime, bitmaps: secondarySubtitleBitmaps), SubtitleStyle.load())
     }
-    func setMuted(_ value: Bool) { muted = value; core?.isMuted = value || audioOff }
-    func setVolume(_ value: Float) { volume = min(1, max(0, value)); core?.playbackVolume = volume }
+    func setMuted(_ value: Bool) { muted = value; core?.isMuted = value || audioOff; aether?.setVolume(value || audioOff ? 0 : volume) }
+    func setVolume(_ value: Float) { volume = min(1, max(0, value)); core?.playbackVolume = volume; aether?.setVolume(muted || audioOff ? 0 : volume) }
     func setAudioDelay(_ value: Double) {
         guard value.isFinite else { return }
-        audioDelay = min(10, max(-10, value)); options?.videoDelay = -audioDelay
+        audioDelay = min(10, max(-10, value)); options?.videoDelay = -audioDelay; aether?.setAudioDelay(audioDelay)
     }
     func setSubtitleDelay(_ value: Double) {
         guard value.isFinite else { return }
@@ -506,11 +681,11 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         guard decoder != next else { return }
         decoder = next; onReopenRequested?()
     }
-    func setContentMode(_ mode: UIView.ContentMode) { core?.contentMode = mode }
+    func setContentMode(_ mode: UIView.ContentMode) { core?.contentMode = mode; aether?.setContentMode(mode) }
     func showOnExternalDisplay(_ host: UIView?) {
         guard externalHost !== host else { return }
-        core?.view?.removeFromSuperview(); externalHost = host
-        if let host, let picture = core?.view {
+        backendView?.removeFromSuperview(); externalHost = host
+        if let host, let picture = backendView {
             picture.frame = host.bounds; picture.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             host.addSubview(picture)
         }
@@ -521,7 +696,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         seek(to: time, completion: completion)
     }
     func seek(to requested: Double, completion: @escaping (Bool) -> Void = { _ in }) {
-        guard requested.isFinite, let core, isReady, core.seekable else { completion(false); return }
+        guard requested.isFinite, isReady, seekable else { completion(false); return }
         seekSequence += 1
         renderingTimeline &+= 1
         let target = min(max(0, requested), duration > 0 ? max(0, duration - 0.05) : max(0, requested))
@@ -534,6 +709,18 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         if currentSeek == nil { performNextSeek() }
     }
     private func performNextSeek() {
+        if let aether, let request = pendingSeek {
+            pendingSeek = nil; currentSeek = request
+            aether.seek(to: request.time) { [weak self, weak aether] ok in
+                guard let self, let aether, self.aether === aether, self.currentSeek?.sequence == request.sequence else { return }
+                self.currentSeek = nil
+                let superseded = self.pendingSeek != nil
+                if !superseded { self.position = Self.finite(aether.time); self.renderingTimeline &+= 1 }
+                request.completion(ok && !superseded)
+                if self.aether === aether, self.currentSeek == nil { self.performNextSeek() }
+            }
+            return
+        }
         guard let request = pendingSeek, let player = core, let identity = mediaID else { return }
         let opening = openID, playerIdentity = ObjectIdentifier(player), sequence = request.sequence
         pendingSeek = nil; currentSeek = request
@@ -568,12 +755,16 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     func selectVideo(id: String?) { select(.video, id: id) }
     func selectAudio(id: String?) { select(.audio, id: id) }
     func resolvedSubtitleSelection(_ target: SubtitleTrackSelection.Target) -> String? {
+        if let aether {
+            let pair = aetherSubtitlePair(aether)
+            return target == .primary ? pair.primary : pair.secondary
+        }
         guard let core else { return nil }
         let pair = resolvedSubtitleTracks(core)
         return target == .primary ? pair.primary : pair.secondary
     }
     func registerExternalSubtitle(_ document: SubtitleDocument, timing: SubtitleTiming) {
-        guard core != nil else { return }
+        guard core != nil || usingAether else { return }
         if externalSubtitleDocuments[document.id] == nil { externalSubtitleOrder.append(document.id) }
         externalSubtitleDocuments[document.id] = KSExternalSubtitleDocument(document, timing: timing)
         clearSubtitleOutput(); refreshTracks(); onTick?()
@@ -594,7 +785,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         clearSubtitleOutput(); onTick?()
     }
     func selectSubtitle(id: String?) {
-        guard core != nil else { return }
+        guard core != nil || usingAether else { return }
         subtitlePolicy.selectPrimary(id)
         subtitleSelection = subtitlePolicy.primary
         secondarySubtitleSelection = subtitlePolicy.secondary
@@ -602,7 +793,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         select(.subtitle, id: subtitleSelection)
     }
     func selectSecondarySubtitle(id: String?) {
-        guard core != nil else { return }
+        guard core != nil || usingAether else { return }
         subtitlePolicy.selectSecondary(id)
         subtitleSelection = subtitlePolicy.primary
         secondarySubtitleSelection = subtitlePolicy.secondary
@@ -610,6 +801,18 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         select(.subtitle, id: subtitleSelection)
     }
     private func select(_ kind: KSPlaybackTrack.Kind, id: String?) {
+        if let aether {
+            switch kind {
+            case .video:
+                if id == "no" { videoSelection = id; onReopenRequested?() }
+            case .audio:
+                audioSelection = id; audioOff = id == "no"; setMuted(muted)
+                if !audioOff, let index = id.flatMap(Int.init) ?? aether.audioTracks.first(where: \.preferred)?.id ?? aether.audioTracks.first?.id { aether.selectAudio(index) }
+            case .subtitle: break
+            }
+            if self.aether === aether { refreshTracks() }
+            return
+        }
         guard core != nil else { return }
         pendingTrackSelections.removeAll { $0.0 == kind }
         pendingTrackSelections.append((kind, id))
@@ -843,6 +1046,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         secondarySubtitleLines = []; secondarySubtitleImages = []; secondarySubtitleBitmaps = []; secondarySubtitleStyledParts = []
     }
     private func refreshTracks() {
+        if let aether { refreshAetherTracks(aether); return }
         guard let player = core else { return }
         nextPlaybackInfoSample = 0
         let subtitleTracks = player.tracks(mediaType: .subtitle)

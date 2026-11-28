@@ -100,6 +100,11 @@
           "name": "Embed on-device Node runtime",
           "script": "\"$SRCROOT/Scripts/embed-node-mobile.sh\"",
           "basedOnDependencyAnalysis": false
+        },
+        {
+          "name": "Embed Aether playback libraries",
+          "script": "python3 -B \"$SRCROOT/Scripts/aether_frameworks.py\"",
+          "basedOnDependencyAnalysis": false
         }
       ],
       "settings": {
@@ -135,11 +140,36 @@
         {
           "framework": "Vendor/NativeASR/TVASR.xcframework",
           "embed": false
+        },
+        {
+          "target": "YingxiaAether",
+          "embed": true
         }
       ],
       "templates": [
         "SharedApp"
       ]
+    },
+    "YingxiaAether": {
+      "type": "framework",
+      "platform": "iOS",
+      "sources": [
+        "Packages/YingxiaAether",
+        { "path": "Config/Aether/PrivacyInfo.xcprivacy", "buildPhase": "resources" }
+      ],
+      "dependencies": [
+        {
+          "package": "AetherEngine",
+          "product": "AetherEngine"
+        }
+      ],
+      "settings": {
+        "base": {
+          "PRODUCT_BUNDLE_IDENTIFIER": "com.jo32.yingxia.aether",
+          "DEFINES_MODULE": "YES",
+          "SKIP_INSTALL": "YES"
+        }
+      }
     }
   },
   "options": {
@@ -162,6 +192,10 @@
     },
     "TVCore": {
       "path": "Packages/TVCore"
+    },
+    "AetherEngine": {
+      "url": "https://github.com/superuser404notfound/AetherEngine",
+      "exactVersion": "6.89.1"
     }
   },
   "targetTemplates": {

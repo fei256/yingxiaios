@@ -80,9 +80,15 @@ struct LocalAdSettingsView: View {
 
 #if os(iOS)
 struct LocalPlayerSettingsView: View {
+    @AppStorage(PlaybackKernel.preferenceKey) private var kernel = PlaybackKernel.ksPlayer.rawValue
     @AppStorage(PlaybackInfo.key) private var showsPlaybackInfo = false
     var body: some View {
         SettingsPage(title: "播放器", symbol: "play.rectangle") {
+            SettingsGroup(title: "默认播放内核", footer: "从下次播放起生效。Aether 无法播放的片源会自动使用 KSPlayer。") {
+                Picker("播放内核", selection: $kernel) {
+                    ForEach(PlaybackKernel.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+                }
+            }
             SettingsGroup(title: "播放信息") {
                 Toggle("显示视频技术信息", isOn: $showsPlaybackInfo)
             }

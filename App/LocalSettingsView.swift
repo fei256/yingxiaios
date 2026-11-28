@@ -21,7 +21,7 @@ struct LocalSettingsView: View {
                         LocalSettingsMenuRow(symbol: "house", title: "首页设置", detail: "启动时显示的页面", identifier: "首页", last: true) { LocalHomeSettingsView() }
                     }
                     LocalSettingsMenuSection(title: "播放与显示") {
-                        LocalSettingsMenuRow(symbol: "play.rectangle", title: "播放器", detail: "播放信息") { LocalPlayerSettingsView() }
+                        LocalSettingsMenuRow(symbol: "play.rectangle", title: "播放器", detail: "播放内核与播放信息") { LocalPlayerSettingsView() }
                         LocalSettingsMenuRow(symbol: "text.bubble", title: "弹幕", detail: danmaku ? "已开启" : "已关闭") { LocalDanmakuSettingsView() }
                         LocalSettingsMenuRow(symbol: "tag", title: "媒体徽章", detail: badges ? "已开启" : "已关闭") { LocalMediaBadgeSettingsView() }
                         LocalSettingsMenuRow(symbol: "paintpalette", title: "界面显示", detail: appearance.title) { LocalAppearanceSettingsView() }

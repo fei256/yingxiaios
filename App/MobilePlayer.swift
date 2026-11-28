@@ -1022,7 +1022,7 @@ struct MobilePlayerView: View {
 
     private var speedPanel: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
-            ForEach(Self.speeds, id: \.self) { value in
+            ForEach(Self.speeds.filter { !session.engine.usingAether || $0 <= 2 }, id: \.self) { value in
                 WithPerceptionTracking {
                     Button { speed = value; session.setSpeed(value); localPanel = nil; poke() } label: {
                         Text(Self.speedLabel(value)).font(.system(size: 13, weight: .medium).monospacedDigit())
@@ -1051,16 +1051,25 @@ struct MobilePlayerView: View {
     private var decoderChoices: some View {
         WithPerceptionTracking {
             VStack(alignment: .leading, spacing: 12) {
-                Text("视频解码").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
-                ForEach(["auto", "software"], id: \.self) { decoder in
-                    WithPerceptionTracking {
-                        selectionRow(decoder == "auto" ? "KS 自动（优先硬解）" : "KS 软件解码", selected: session.engine.decoder == decoder) {
-                            session.engine.setDecoder(decoder)
+                Text("播放内核").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+                ForEach(PlaybackKernel.allCases, id: \.self) { kernel in
+                    selectionRow(kernel.title, selected: kernel == (session.engine.usingAether ? .aether : .ksPlayer)) {
+                        session.chooseKernel(kernel)
+                        localPanel = nil
+                    }
+                }
+                if !session.engine.usingAether {
+                    Text("视频解码").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
+                    ForEach(["auto", "software"], id: \.self) { decoder in
+                        WithPerceptionTracking {
+                            selectionRow(decoder == "auto" ? "KS 自动（优先硬解）" : "KS 软件解码", selected: session.engine.decoder == decoder) {
+                                session.engine.setDecoder(decoder)
+                            }
                         }
                     }
                 }
                 Text("当前解码：" + session.engine.currentDecoder).font(.caption).foregroundStyle(.secondary)
-                if session.engine.videoSelection != "no" {
+                if !session.engine.usingAether && session.engine.videoSelection != "no" {
                     Text(String(format: "送显 %.1f FPS · 同步累计跳过 %u 帧 / %u 包",
                                 session.engine.frameRate, session.engine.droppedVideoFrames, session.engine.droppedVideoPackets))
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)

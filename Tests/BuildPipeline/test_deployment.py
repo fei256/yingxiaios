@@ -1,5 +1,6 @@
 from pathlib import Path
 import struct
+import plistlib
 import sys
 import tempfile
 import unittest
@@ -23,6 +24,35 @@ def archive(members):
 
 
 class NativeDeploymentTests(unittest.TestCase):
+    def test_aether_metadata_follows_verified_binary_minimum(self):
+        from aether_frameworks import LIBRARIES, embed
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout, frameworks = root / "checkout", root / "app/Frameworks"
+            for name in LIBRARIES:
+                original = checkout / "Sources" / (name + ".xcframework") / "ios-arm64" / (name + ".framework")
+                original.mkdir(parents=True)
+                (original / name).write_bytes(image((16, 0)))
+                (original / "Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": name, "MinimumOSVersion": "26.0"}))
+            embed(frameworks, checkout)
+            embed(frameworks, checkout)
+            for name in LIBRARIES:
+                bundle = frameworks / (name + ".framework")
+                self.assertEqual(plistlib.loads((bundle / "Info.plist").read_bytes())["MinimumOSVersion"], "16.1")
+                self.assertEqual((bundle / name).read_bytes(), image((16, 0)))
+                self.assertTrue((bundle / "PrivacyInfo.xcprivacy").is_file())
+
+            name = LIBRARIES[0]
+            bundle = frameworks / (name + ".framework")
+            original_info = plistlib.dumps({"CFBundleExecutable": name, "MinimumOSVersion": "26.0"})
+            (bundle / "Info.plist").write_bytes(original_info)
+            for incompatible in [image((16, 2)), image(platform=7)]:
+                (bundle / name).write_bytes(incompatible)
+                with self.assertRaises(ValueError):
+                    embed(frameworks, checkout)
+                self.assertEqual((bundle / "Info.plist").read_bytes(), original_info)
+
     def test_every_duplicate_archive_member_is_checked(self):
         data = archive([("same.o/", image()), ("same.o/", image((16, 2)))])
         records = inspect_bytes(data)
