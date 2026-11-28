@@ -58,14 +58,7 @@ struct DetailPlaybackControls: View {
     private func action(_ mode: PlaybackResumeMode, title: String, subtitle: String, symbol: String) -> some View {
         Button { start(mode) } label: {
             VStack(spacing: 5) {
-                HStack(spacing: 8) {
-                    if busy && loadingMode == mode { ProgressView().controlSize(.small).tint(.black) }
-                    else { Image(systemName: symbol).font(.system(size: 19, weight: .semibold)) }
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
-                        if !subtitle.isEmpty { Text(subtitle).font(.system(size: 11)).foregroundStyle(.black.opacity(0.58)).lineLimit(1) }
-                    }
-                }
+                CatalogPlaybackLabel(title: title, subtitle: subtitle, symbol: symbol, loading: busy && loadingMode == mode)
                 if canResume {
                     ProgressView(value: progress).progressViewStyle(.linear).tint(Brand.amber)
                         .padding(.horizontal, 10)

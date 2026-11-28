@@ -7,9 +7,52 @@ import SwiftUI
     }
     var body: some Scene {
         WindowGroup {
-            DetailHarness().preferredColorScheme(.dark)
-                .environment(\.dynamicTypeSize, CommandLine.arguments.contains("accessibility") ? .accessibility3 : .large)
+            if CommandLine.arguments.contains("episodeHeader") {
+                EpisodeHeaderHarness().preferredColorScheme(.dark)
+            } else {
+                DetailHarness().preferredColorScheme(.dark)
+                    .environment(\.dynamicTypeSize, CommandLine.arguments.contains("accessibility") ? .accessibility3 : .large)
+            }
         }
+    }
+}
+
+private struct EpisodeHeaderHarness: View {
+    @State private var narrow = false
+    @State private var lastAction = "none"
+    @State private var episodeCount = 205
+
+    var body: some View {
+        GeometryReader { geometry in
+            VStack(spacing: 16) {
+                Button { lastAction = "play" } label: {
+                    CatalogPlaybackLabel(title: "继续播放", subtitle: "第 201 集 · 片名与文件信息 · 00:17", symbol: "play.fill", loading: false)
+                        .foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 48).background(.white, in: Capsule())
+                }
+                .accessibilityIdentifier("play").centeredCatalogPlaybackRow(in: geometry.size.width)
+                CatalogEpisodeHeader(count: episodeCount, sources: ScrollView(.horizontal, showsIndicators: false) {
+                    HStack {
+                        Button("百度无限") { episodeCount = 205 }
+                        Button("夸克无限") { episodeCount = 202 }
+                    }
+                }, detailTools: icons(["rectangle.stack", "arrow.down.circle", "calendar", "ellipsis"]),
+                   episodeTools: icons(["number", "arrow.up.arrow.down", "list.bullet"]))
+                    .frame(width: narrow ? 280 : nil)
+                Button("缩小窗口") { narrow = true }
+                Text(lastAction).accessibilityIdentifier("lastAction")
+            }
+            .padding(20)
+        }
+    }
+
+    private func icons(_ symbols: [String]) -> some View {
+        HStack(spacing: 4) {
+            ForEach(symbols, id: \.self) { symbol in
+                Button { lastAction = symbol } label: {
+                    Image(systemName: symbol).frame(width: 44, height: 44).contentShape(Rectangle())
+                }.accessibilityIdentifier(symbol)
+            }
+        }.buttonStyle(.plain)
     }
 }
 

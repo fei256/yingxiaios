@@ -48,6 +48,42 @@ final class DetailHarnessTests: XCTestCase {
             app.buttons["fixture." + name].tap(); XCTAssertEqual(app.staticTexts["fixture.action"].label, name)
         }
     }
+
+    @MainActor func testCenteredPlaybackAndEpisodeToolbar() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let app = XCUIApplication()
+        app.launchArguments = ["episodeHeader"]
+        app.launch()
+        let play = app.buttons["play"]
+        XCTAssertTrue(play.waitForExistence(timeout: 15))
+        XCTAssertEqual(play.frame.midX, app.windows.firstMatch.frame.midX, accuracy: 2)
+        play.tap()
+        XCTAssertEqual(app.staticTexts["lastAction"].label, "play")
+        let title = app.staticTexts["剧集 · 205"]
+        let source = app.buttons["夸克无限"]
+        XCTAssertEqual(title.frame.midY, source.frame.midY, accuracy: 2)
+        XCTAssertLessThan(title.frame.maxX, source.frame.minX)
+        let symbols = ["rectangle.stack", "arrow.down.circle", "calendar", "ellipsis", "number", "arrow.up.arrow.down", "list.bullet"]
+        var previous = source.frame.maxX
+        for symbol in symbols {
+            let tool = app.buttons[symbol]
+            XCTAssertEqual(tool.frame.midY, title.frame.midY, accuracy: 2)
+            XCTAssertGreaterThan(tool.frame.minX, previous)
+            previous = tool.frame.maxX
+        }
+        source.tap()
+        XCTAssertTrue(app.staticTexts["剧集 · 202"].exists)
+        attach("episode-header-landscape", app: app)
+        app.buttons["缩小窗口"].tap()
+        XCTAssertGreaterThan(app.buttons["number"].frame.minY, app.buttons["ellipsis"].frame.maxY)
+        for symbol in symbols {
+            let tool = app.buttons[symbol]
+            XCTAssertTrue(tool.isHittable)
+            tool.tap()
+            XCTAssertEqual(app.staticTexts["lastAction"].label, symbol)
+        }
+        attach("episode-header-narrow", app: app)
+    }
     @MainActor func testPortraitHeaderKeepsEveryActionVisible() {
         let app = launch(orientation: .portrait)
         checkTargets(app)

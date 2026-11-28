@@ -114,6 +114,48 @@ struct CatalogDetailHero<Identity: View, Actions: View>: View {
     }
 }
 
+struct CatalogEpisodeHeader<Sources: View, DetailTools: View, EpisodeTools: View>: View {
+    let count: Int
+    let sources: Sources
+    let detailTools: DetailTools
+    let episodeTools: EpisodeTools
+
+    var body: some View {
+        let titleAndSources = HStack(spacing: 12) {
+            Text("剧集 · \(count)").font(.system(size: 17, weight: .semibold)).monospacedDigit()
+                .fixedSize(horizontal: true, vertical: false)
+            sources.frame(minWidth: 110, idealWidth: 110, maxWidth: .infinity)
+        }
+        let tools = HStack(spacing: 4) { detailTools; episodeTools }.fixedSize()
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) { titleAndSources; tools }
+            VStack(alignment: .trailing, spacing: 4) { titleAndSources; tools }
+            VStack(alignment: .trailing, spacing: 4) { titleAndSources; detailTools; episodeTools }
+        }
+        .foregroundStyle(.white.opacity(0.85))
+    }
+}
+
+struct CatalogPlaybackLabel: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let loading: Bool
+
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 8) {
+                if loading { ProgressView().controlSize(.small).tint(.black) }
+                else { Image(systemName: symbol).font(.system(size: 19, weight: .semibold)) }
+                Text(title).font(.system(size: 15, weight: .semibold)).lineLimit(1)
+            }
+            if !subtitle.isEmpty {
+                Text(subtitle).font(.system(size: 11)).foregroundStyle(.black.opacity(0.58)).lineLimit(1)
+            }
+        }
+    }
+}
+
 struct CatalogDetailToolStrip<Content: View>: View {
     @Environment(\.accessibilityReduceTransparency) private var opaque
     @ViewBuilder let content: () -> Content
@@ -154,6 +196,11 @@ struct CatalogDetailActionRow<Primary: View, Tools: View>: View {
 }
 
 extension View {
+    func centeredCatalogPlaybackRow(in width: CGFloat) -> some View {
+        frame(width: CatalogDetailLayout.actionsWidth(in: width, wide: true))
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
     func catalogDetailToolTarget() -> some View {
         frame(width: 44, height: 48).contentShape(Rectangle())
     }

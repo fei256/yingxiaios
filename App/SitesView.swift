@@ -2874,13 +2874,11 @@ struct VideoDetailView: View {
                                                     selectedEpisode: selectedEpisode, history: watchHistories)
             if let first = selection.episode {
                 #if os(iOS)
-                CatalogDetailActionRow {
-                    DetailPlaybackControls(selection: selection, busy: busy, loadingMode: loadingMode,
-                                           showsBeginningButton: false) { mode in
-                        selectedEpisode = first
-                        requestPlayback(first, mode: mode)
-                    }
-                } tools: { mobileDetailTools }
+                DetailPlaybackControls(selection: selection, busy: busy, loadingMode: loadingMode,
+                                       showsBeginningButton: false) { mode in
+                    selectedEpisode = first
+                    requestPlayback(first, mode: mode)
+                }
                 #else
                 let continues = first == watchHistory?.continuation(in: activeEpisodes)
                 ViewThatFits(in: .horizontal) {
@@ -3049,9 +3047,8 @@ struct VideoDetailView: View {
             WithPerceptionTracking {
                 let width = geometry.size.width
                 let height = CatalogDetailLayout.heroHeight(in: geometry.size)
-                let alignActionsWithLines = CatalogDetailLayout.usesWideHero(in: geometry.size)
+                let showsPlaybackRow = CatalogDetailLayout.usesWideHero(in: geometry.size)
                     && !detailTypeSize.isAccessibilitySize && detail?.episodes.isEmpty == false
-                let actionWidth = alignActionsWithLines ? CatalogDetailLayout.actionsWidth(in: width, wide: true) : nil
                 ZStack(alignment: .top) {
                     (detailArtworkPaint?.color ?? Color(white: 0.22)).ignoresSafeArea()
                     LocalCatalogArtworkCarousel(video: currentVideo(), images: mobileDetailArtwork,
@@ -3063,17 +3060,12 @@ struct VideoDetailView: View {
                     ScrollView {
                         WithPerceptionTracking {
                             VStack(alignment: .leading, spacing: 20) {
-                                mobileDetailHeader(size: geometry.size, lineActionWidth: actionWidth)
-                                if let detail {
+                                mobileDetailHeader(size: geometry.size, showsPlaybackRow: showsPlaybackRow)
+                                if detail != nil {
                                     VStack(alignment: .leading, spacing: 24) {
                                         VStack(alignment: .leading, spacing: 12) {
-                                            if !detail.episodes.isEmpty {
-                                                if let actionWidth {
-                                                    HStack(alignment: .center, spacing: 24) {
-                                                        mobileFlagPicker
-                                                        playControl.frame(width: actionWidth)
-                                                    }
-                                                } else { mobileFlagPicker }
+                                            if showsPlaybackRow {
+                                                playControl.centeredCatalogPlaybackRow(in: width)
                                             }
                                             episodePanel
                                         }
@@ -3101,7 +3093,7 @@ struct VideoDetailView: View {
         .ignoresSafeArea(edges: .top)
     }
 
-    private func mobileDetailHeader(size: CGSize, lineActionWidth: CGFloat?) -> some View {
+    private func mobileDetailHeader(size: CGSize, showsPlaybackRow: Bool) -> some View {
         WithPerceptionTracking {
             let centered = CatalogDetailLayout.usesWideHero(in: size)
             let identity = VStack(alignment: centered ? .center : .leading, spacing: 10) {
@@ -3116,10 +3108,9 @@ struct VideoDetailView: View {
                     .accessibilityValue(mobileTMDBStatus)
             }.detailReadableContent()
             VStack(alignment: .leading, spacing: 16) {
-                if let lineActionWidth {
+                if showsPlaybackRow {
                     identity
                         .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.trailing, lineActionWidth + 24)
                         .padding(.top, CatalogDetailLayout.identityTopInset(in: size))
                 } else {
                     CatalogDetailHero(size: size) { identity } actions: { playControl }
@@ -3129,20 +3120,25 @@ struct VideoDetailView: View {
             }
         }
     }
+    private func mobileToolIcon(_ symbol: String) -> some View {
+        Image(systemName: symbol).font(.system(size: 20))
+            .frame(width: 44, height: 44).contentShape(Rectangle())
+    }
+
     private var mobileDetailTools: some View {
-        CatalogDetailToolStrip {
+        HStack(spacing: 4) {
             let saved = store.favorites.contains(videoFavorite())
             Button { store.favorites.toggle(videoFavorite()) } label: {
-                Image(systemName: saved ? "rectangle.stack.fill" : "rectangle.stack").foregroundStyle(saved ? Brand.rose : .white.opacity(0.85))
-                    .catalogDetailToolTarget()
+                mobileToolIcon(saved ? "rectangle.stack.fill" : "rectangle.stack")
+                    .foregroundStyle(saved ? Brand.rose : .white.opacity(0.85))
             }.accessibilityLabel(saved ? "取消收藏" : "收藏影片").accessibilityIdentifier("detail.favorite")
-            Button { choosingDownloads = true } label: { Image(systemName: "arrow.down.circle").catalogDetailToolTarget() }
+            Button { choosingDownloads = true } label: { mobileToolIcon("arrow.down.circle") }
                 .disabled(detail?.episodes.isEmpty != false).accessibilityLabel("下载剧集").accessibilityIdentifier("detail.download")
             if tmdb.details?.mediaType == .tv {
-                Button { showingDetailCalendar = true } label: { Image(systemName: "calendar").catalogDetailToolTarget() }
+                Button { showingDetailCalendar = true } label: { mobileToolIcon("calendar") }
                     .accessibilityLabel("播出日历").accessibilityIdentifier("detail.calendar")
             } else if let link = tmdb.details?.link {
-                ShareLink(item: link) { Image(systemName: "link").catalogDetailToolTarget() }
+                ShareLink(item: link) { mobileToolIcon("link") }
                     .accessibilityLabel("分享影片")
             }
             Menu {
@@ -3184,9 +3180,11 @@ struct VideoDetailView: View {
                     if let link = tmdb.details?.link { ShareLink(item: link) { Label("分享影片", systemImage: "square.and.arrow.up") } }
                     Text(mobileTMDBStatus)
                 }
-            } label: { Image(systemName: "ellipsis").catalogDetailToolTarget() }
+            } label: { mobileToolIcon("ellipsis") }
                 .accessibilityLabel("更多影片操作").accessibilityIdentifier("detail.more")
         }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white.opacity(0.85))
     }
     private var mobileTMDBStatus: String {
         if detail == nil { return "正在读取影片详情…" }
@@ -3217,10 +3215,6 @@ struct VideoDetailView: View {
                 mobileEpisodePanel(items)
                 #else
                 VStack(alignment: .leading, spacing: 12) {
-                    #if os(iOS)
-                    Text("线路").font(.headline)
-                    mobileFlagPicker
-                    #endif
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         #if os(tvOS)
                         if items.count > 1 {
@@ -3261,9 +3255,7 @@ struct VideoDetailView: View {
         let visible = LocalCatalogDetailRules.page(ordered, group: group, descending: reversesEpisodes).map { entries[$0.index] }
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 4) {
-                    Text("剧集 · \(items.count)").font(.system(size: 17, weight: .semibold)).monospacedDigit()
-                    Spacer(minLength: 8)
+                let episodeTools = HStack(spacing: 4) {
                     if count > 1 {
                         Menu {
                             ForEach(0..<count, id: \.self) { index in
@@ -3278,25 +3270,25 @@ struct VideoDetailView: View {
                                 .accessibilityAddTraits(index == group ? .isSelected : [])
                                 .accessibilityIdentifier("detail.episodeGroup.\(index)")
                             }
-                        } label: { Image(systemName: "number").font(.system(size: 20)).frame(width: 44, height: 44).contentShape(Rectangle()) }
+                        } label: { mobileToolIcon("number") }
                             .accessibilityLabel("选择剧集分段").accessibilityIdentifier("detail.episodeGroups")
                             .accessibilityValue("\(group * LocalCatalogDetailRules.groupSize + 1) 到 \(min((group + 1) * LocalCatalogDetailRules.groupSize, entries.count))")
                     }
                     if items.count > 1 {
                         Button { reversesEpisodes.toggle() } label: {
-                            Image(systemName: "arrow.up.arrow.down").font(.system(size: 20))
+                            mobileToolIcon("arrow.up.arrow.down")
                                 .foregroundStyle(reversesEpisodes ? Brand.amber : .white.opacity(0.8))
-                                .frame(width: 44, height: 44).contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityLabel(reversesEpisodes ? "切换为正序" : "切换为倒序")
                             .accessibilityIdentifier("episodes.reverse")
                     }
                     Button { mobileEpisodeList.toggle() } label: {
-                        Image(systemName: mobileEpisodeList ? "rectangle.grid.1x2" : "list.bullet").font(.system(size: 20))
+                        mobileToolIcon(mobileEpisodeList ? "rectangle.grid.1x2" : "list.bullet")
                             .foregroundStyle(mobileEpisodeList ? Brand.amber : .white.opacity(0.8))
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityLabel(mobileEpisodeList ? "显示剧集缩略图" : "显示剧集列表")
                         .accessibilityIdentifier("detail.episodes.layout")
-                }.foregroundStyle(.white.opacity(0.85))
+                }.fixedSize(horizontal: true, vertical: false)
+                CatalogEpisodeHeader(count: items.count, sources: mobileFlagPicker,
+                                     detailTools: mobileDetailTools, episodeTools: episodeTools)
                 if tmdb.phase == .looking {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.mini)
@@ -3402,8 +3394,8 @@ struct VideoDetailView: View {
                             .accessibilityAddTraits(flag == activeFlag ? .isSelected : [])
                         }
                     }
-                }.padding(.horizontal, 20)
-            }.scrollIndicators(.hidden).padding(.horizontal, -20)
+                }
+            }.scrollIndicators(.hidden)
         }
     }
     #endif
