@@ -27,7 +27,8 @@ private struct EpisodeHeaderHarness: View {
             VStack(spacing: 16) {
                 Button { lastAction = "play" } label: {
                     CatalogPlaybackLabel(title: "继续播放", subtitle: "第 201 集 · 片名与文件信息 · 00:17", symbol: "play.fill", loading: false)
-                        .foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 48).background(.white, in: Capsule())
+                        .foregroundStyle(.black).frame(maxWidth: .infinity, minHeight: 48)
+                        .background { CatalogPlaybackBackground() }
                 }
                 .accessibilityIdentifier("play").centeredCatalogPlaybackRow(in: geometry.size.width)
                 CatalogEpisodeHeader(count: episodeCount, sources: ScrollView(.horizontal, showsIndicators: false) {
@@ -36,7 +37,7 @@ private struct EpisodeHeaderHarness: View {
                         Button("夸克无限") { episodeCount = 202 }
                     }
                 }, detailTools: icons(["rectangle.stack", "arrow.down.circle", "calendar", "ellipsis"]),
-                   episodeTools: icons(["number", "arrow.up.arrow.down", "list.bullet"]))
+                   episodeTools: icons(["list.bullet", "arrow.up.arrow.down"]))
                     .frame(width: narrow ? 280 : nil)
                 Button("缩小窗口") { narrow = true }
                 Text(lastAction).accessibilityIdentifier("lastAction")

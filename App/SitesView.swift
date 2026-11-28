@@ -2359,7 +2359,6 @@ struct VideoDetailView: View {
     @State private var detailSectionsPresented = false
     @State private var mobileEpisodeGroup = 0
     @State private var mobileEpisodeGroupFlag: String?
-    @State private var mobileEpisodeList = false
     @State private var detailScrollY: CGFloat = 0
     #endif
     /// TMDB's backdrop once its picture has loaded. The source's cover stays until then, and when it never does
@@ -3270,7 +3269,7 @@ struct VideoDetailView: View {
                                 .accessibilityAddTraits(index == group ? .isSelected : [])
                                 .accessibilityIdentifier("detail.episodeGroup.\(index)")
                             }
-                        } label: { mobileToolIcon("number") }
+                        } label: { mobileToolIcon("list.bullet") }
                             .accessibilityLabel("选择剧集分段").accessibilityIdentifier("detail.episodeGroups")
                             .accessibilityValue("\(group * LocalCatalogDetailRules.groupSize + 1) 到 \(min((group + 1) * LocalCatalogDetailRules.groupSize, entries.count))")
                     }
@@ -3281,11 +3280,6 @@ struct VideoDetailView: View {
                         }.buttonStyle(.plain).accessibilityLabel(reversesEpisodes ? "切换为正序" : "切换为倒序")
                             .accessibilityIdentifier("episodes.reverse")
                     }
-                    Button { mobileEpisodeList.toggle() } label: {
-                        mobileToolIcon(mobileEpisodeList ? "rectangle.grid.1x2" : "list.bullet")
-                            .foregroundStyle(mobileEpisodeList ? Brand.amber : .white.opacity(0.8))
-                    }.buttonStyle(.plain).accessibilityLabel(mobileEpisodeList ? "显示剧集缩略图" : "显示剧集列表")
-                        .accessibilityIdentifier("detail.episodes.layout")
                 }.fixedSize(horizontal: true, vertical: false)
                 CatalogEpisodeHeader(count: items.count, sources: mobileFlagPicker,
                                      detailTools: mobileDetailTools, episodeTools: episodeTools)
@@ -3303,46 +3297,36 @@ struct VideoDetailView: View {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("正在解析播放地址…").font(.system(size: 12)).foregroundStyle(.secondary) }
                     .accessibilityElement(children: .combine)
             }
-            if mobileEpisodeList {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10, alignment: .top)], spacing: 10) {
-                    ForEach(visible) { value in WithPerceptionTracking { mobileEpisodeButton(value, list: true, selection: selection, history: histories[value.id]) } }
+            ScrollViewReader { rail in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(alignment: .top, spacing: 14) {
+                        ForEach(visible) { value in WithPerceptionTracking { mobileEpisodeButton(value, selection: selection, history: histories[value.id]).id(value.id) } }
+                    }.padding(.horizontal, 20).padding(.vertical, 2)
                 }
-            } else {
-                ScrollViewReader { rail in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(alignment: .top, spacing: 14) {
-                            ForEach(visible) { value in WithPerceptionTracking { mobileEpisodeButton(value, list: false, selection: selection, history: histories[value.id]).id(value.id) } }
-                        }.padding(.horizontal, 20).padding(.vertical, 2)
-                    }
-                    .onAppear {
-                        if let id = selection.episode?.id, visible.contains(where: { $0.id == id }) { rail.scrollTo(id, anchor: .center) }
-                    }
-                    .appOnChange(of: selection.episode?.id) { _, id in
-                        if let id, visible.contains(where: { $0.id == id }) { rail.scrollTo(id, anchor: .center) }
-                    }
-                }.padding(.horizontal, -20).id("\(activeFlag):\(group):\(reversesEpisodes)")
-            }
+                .onAppear {
+                    if let id = selection.episode?.id, visible.contains(where: { $0.id == id }) { rail.scrollTo(id, anchor: .center) }
+                }
+                .appOnChange(of: selection.episode?.id) { _, id in
+                    if let id, visible.contains(where: { $0.id == id }) { rail.scrollTo(id, anchor: .center) }
+                }
+            }.padding(.horizontal, -20).id("\(activeFlag):\(group):\(reversesEpisodes)")
         }
         .appOnChange(of: activeFlag) { _, _ in mobileEpisodeGroupFlag = nil; mobileEpisodeGroup = 0 }
         .accessibilityIdentifier("detail.episodes")
     }
 
-    private func mobileEpisodeButton(_ value: LocalCatalogDetailEpisode, list: Bool, selection: DetailPlaybackSelection,
+    private func mobileEpisodeButton(_ value: LocalCatalogDetailEpisode, selection: DetailPlaybackSelection,
                                      history: PlaybackHistoryEntry?) -> some View {
         let episode = value.episode
         let saved = download(episode)
-        let movie = tmdb.details?.mediaType == .movie
         return Button { selectedEpisode = episode; requestPlayback(episode) } label: {
-            if list { LocalCatalogDetailEpisodeRow(value: value, movie: movie, loading: loadingEpisode == episode.id, selected: selection.episode?.id == episode.id) }
-            else {
-                LocalCatalogDetailEpisodeCard(value: value, video: currentVideo(),
-                                              backdrop: tmdb.details?.backdrop,
-                                              loading: loadingEpisode == episode.id,
-                                              width: CatalogDetailLayout.cardWidth(in: containerWidth),
-                                              selected: selection.episode?.id == episode.id,
-                                              progress: history?.progress,
-                                              watched: history.map { $0.completed || $0.position > 0 } ?? false)
-            }
+            LocalCatalogDetailEpisodeCard(value: value, video: currentVideo(),
+                                          backdrop: tmdb.details?.backdrop,
+                                          loading: loadingEpisode == episode.id,
+                                          width: CatalogDetailLayout.cardWidth(in: containerWidth),
+                                          selected: selection.episode?.id == episode.id,
+                                          progress: history?.progress,
+                                          watched: history.map { $0.completed || $0.position > 0 } ?? false)
         }
         .buttonStyle(.plain).disabled(loadingEpisode != nil)
         .accessibilityLabel("播放 \(episode.name)").accessibilityIdentifier("detail.episode." + episode.id)

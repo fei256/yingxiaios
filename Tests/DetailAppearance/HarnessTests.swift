@@ -63,7 +63,7 @@ final class DetailHarnessTests: XCTestCase {
         let source = app.buttons["夸克无限"]
         XCTAssertEqual(title.frame.midY, source.frame.midY, accuracy: 2)
         XCTAssertLessThan(title.frame.maxX, source.frame.minX)
-        let symbols = ["rectangle.stack", "arrow.down.circle", "calendar", "ellipsis", "number", "arrow.up.arrow.down", "list.bullet"]
+        let symbols = ["rectangle.stack", "arrow.down.circle", "calendar", "ellipsis", "list.bullet", "arrow.up.arrow.down"]
         var previous = source.frame.maxX
         for symbol in symbols {
             let tool = app.buttons[symbol]
@@ -75,7 +75,7 @@ final class DetailHarnessTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["剧集 · 202"].exists)
         attach("episode-header-landscape", app: app)
         app.buttons["缩小窗口"].tap()
-        XCTAssertGreaterThan(app.buttons["number"].frame.minY, app.buttons["ellipsis"].frame.maxY)
+        XCTAssertGreaterThan(app.buttons["list.bullet"].frame.minY, app.buttons["ellipsis"].frame.maxY)
         for symbol in symbols {
             let tool = app.buttons[symbol]
             XCTAssertTrue(tool.isHittable)

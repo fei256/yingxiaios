@@ -37,7 +37,7 @@ struct DetailPlaybackControls: View {
             }
             action(.resume, title: reading == nil ? (canResume ? "继续播放" : "开始播放") : (finishedReading ? "重新阅读" : "继续阅读"),
                    subtitle: context, symbol: reading == nil ? "play.fill" : "book.fill")
-                .background(.white, in: Capsule())
+                .background { CatalogPlaybackBackground() }
                 .clipShape(Capsule())
         }
         .frame(maxWidth: .infinity)

@@ -136,6 +136,14 @@ struct CatalogEpisodeHeader<Sources: View, DetailTools: View, EpisodeTools: View
     }
 }
 
+struct CatalogPlaybackBackground: View {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        Capsule().fill(Color.white.opacity(reduceTransparency ? 1 : 0.8))
+    }
+}
+
 struct CatalogPlaybackLabel: View {
     let title: String
     let subtitle: String

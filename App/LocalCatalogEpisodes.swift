@@ -151,26 +151,4 @@ struct LocalCatalogEpisodeArtwork: View {
             }
     }
 }
-
-struct LocalCatalogDetailEpisodeRow: View {
-    let value: LocalCatalogDetailEpisode
-    let movie: Bool
-    let loading: Bool
-    var selected = false
-    var body: some View {
-        HStack(spacing: 8) {
-            if loading { ProgressView().controlSize(.small) } else { Image(systemName: "play.fill").font(.system(size: 12)) }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(movie ? value.title : value.numberLabel ?? value.episode.name).font(.system(size: 13, weight: .medium)).lineLimit(2)
-                if value.episode.name != (movie ? value.title : value.numberLabel ?? value.episode.name) {
-                    Text(value.episode.name).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
-                }
-            }
-            Spacer(minLength: 0)
-        }.padding(12).frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-            .background(.white.opacity(selected ? 0.10 : 0.045), in: RoundedRectangle(cornerRadius: 11))
-            .overlay { RoundedRectangle(cornerRadius: 11).strokeBorder(selected ? Brand.amber.opacity(0.65) : .white.opacity(0.08), lineWidth: 0.75).allowsHitTesting(false) }
-            .contentShape(Rectangle())
-    }
-}
 #endif
