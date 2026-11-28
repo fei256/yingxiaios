@@ -129,13 +129,9 @@ private final class Locked<Value>: @unchecked Sendable {
             try require(group.wait(timeout: .now() + 15) == .success, "Budget ownership remained blocked")
             try require(budget.bytes == 0 && maximum.snapshot <= 4096, "Concurrent accounting lost packet lifetime")
         }
-        try check("high-resolution frame queues shrink while small video retains its prebuffer") {
-            let memory: UInt64 = 4 * 1024 * 1024 * 1024
-            try require(PlaybackPacketBudget.videoFrames(width: 640, height: 360, live: false, physicalMemory: memory) == 16, "Small video unnecessarily lost queue depth")
-            try require(PlaybackPacketBudget.videoFrames(width: 3840, height: 2160, live: false, physicalMemory: memory) == 2, "UHD retained sixteen large frames")
-            try require(PlaybackPacketBudget.videoFrames(width: 1920, height: 1080, live: false, physicalMemory: 8 * 1024 * 1024 * 1024) == 8,
-                        "The ring rounded an estimated frame budget upward")
-            try require(PlaybackPacketBudget.videoFrames(width: .nan, height: 2160, live: true, physicalMemory: memory) == 4, "Invalid dimensions overflowed queue capacity")
+        try check("build11 decoded picture capacities for on-demand and live playback") {
+            try require(DecodedFramePolicy.capacity(live: false) == 16, "Unexpected on-demand capacity")
+            try require(DecodedFramePolicy.capacity(live: true) == 4, "Unexpected live capacity")
         }
         try check("media service loss blocks user resume until the reset notification") {
             var gate = PlaybackUserResumeGate<String>()

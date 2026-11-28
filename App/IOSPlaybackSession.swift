@@ -14,13 +14,13 @@ private final class AudioServiceObservation: @unchecked Sendable {
 }
 
 /// iPhone and iPad share one playback session, including while its PiP window owns the picture.
-/// KSPlaybackEngine owns the active backend. Shared helpers retain a separate idle AVQueuePlayer.
+/// The movie is owned by KS. Shared platform helpers construct their AVKit objects on demand.
 @MainActor @Perceptible final class PlaybackSession {
     static let sharedLocal = PlaybackSession()
     static weak var current: PlaybackSession?
     let engine = KSPlaybackEngine()
-    let player = AVQueuePlayer()
-    let enhancer: VideoEnhancer
+    @PerceptionIgnored lazy var player = AVQueuePlayer()
+    @PerceptionIgnored lazy var enhancer = VideoEnhancer(player: player)
     let catalogDanmaku = CatalogDanmakuModel()
     @PerceptionIgnored lazy var mediaEnhancements = NativeMediaEnhancements(catalog: catalogDanmaku)
     let remoteSkip = NativeRemoteSkip()
@@ -180,7 +180,6 @@ private final class AudioServiceObservation: @unchecked Sendable {
             ? catalogDanmaku.renderedRevision : (engine.mediaID ?? "") + "|source"
     }
     init() {
-        enhancer = VideoEnhancer(player: player)
         externalSubtitles.cues = subtitles
         subtitles.externalStyledParts = { [weak engine] id, time in engine?.externalStyledParts(id, at: time) ?? [] }
         catalogDanmaku.nativeSourceReload = { [weak self] in await self?.loadSourceDanmaku() }
@@ -330,7 +329,6 @@ private final class AudioServiceObservation: @unchecked Sendable {
         if sourceDanmakuGeneration == active { sourceDanmakuLoading = nil }
     }
     private func begin(_ channel: Channel) {
-        engine.beginPlaybackRoute()
         watchSampler.reset()
         startupWork = PlaybackStartupWork()
         if DanmakuSource.has(channel.url), LocalDanmakuPreferences.enabled(), LocalDanmakuPreferences.builtinEnabled() {
@@ -790,7 +788,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         currentPrepared = nil; automatic = nil
         aiSubtitles.stop()
         remoteSkip.stop(); mediaEnhancements.stop(); externalSubtitles.stop(); subtitles.resetKS()
-        engine.shutdown(); player.pause(); player.removeAllItems()
+        engine.shutdown()
         watchSampler.reset()
         catalogDanmaku.clear(); sourceDanmaku = []; chatGeneration = UUID(); chat?.stop(); chat = nil
         sourceDanmakuGeneration = UUID()

@@ -1403,7 +1403,15 @@ extension MEPlayerItem: OutputRenderSourceDelegate {
         case .remain:
             break
         case .next:
-            break
+            // One or two missed display ticks leave a high-FPS stream behind
+            // even after the UI recovers: showing one old frame on each new
+            // tick never closes that gap. Within the normal clock tolerance,
+            // select the newest already-due frame using the same bounded queue
+            // snapshot as severe-delay recovery. Forced paused seeks keep their
+            // exact requested picture and future frames remain queued.
+            guard !force, let current = frame, recoveryFrameCount > 0,
+                  DecodedFramePolicy.canCatchUpOnNormalTick(diff: dynamicInfo.audioVideoSyncDiff, fps: current.fps) else { break }
+            fallthrough
         case .dropNextFrame:
             // Catch up by replacing the stale picture with a newer due one.
             // Dropping the next picture while showing the old one reverses

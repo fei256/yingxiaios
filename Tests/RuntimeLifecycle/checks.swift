@@ -55,22 +55,6 @@ private func cancelled<T>(_ result: Result<T, Error>) -> Bool {
         let healthy = NodeHostControl(port: 8123, token: "fixture-token")
         let fallback = "runtime stopped"
         do {
-            let mp4 = URL(fileURLWithPath: "/episode.MP4")
-            func systemRoute(_ format: String? = nil, live: Bool = false, separateAudio: Bool = false,
-                             disc: Bool = false, url: URL? = nil) -> Bool {
-                SystemPlaybackRoute.accepts(url: url ?? mp4, format: format, live: live, separateAudio: separateAudio, disc: disc)
-            }
-            try require(systemRoute() && systemRoute(" VIDEO/MP4 ; profile=main"), "compatible MP4 transport")
-            try require(!systemRoute("m3u8") && !systemRoute(live: true) && !systemRoute(separateAudio: true)
-                        && !systemRoute(disc: true), "complex transports must stay on KS")
-            try require(systemRoute("mp4", url: URL(string: "https://example.invalid/video")!)
-                        && !systemRoute(url: URL(string: "ftp://example.invalid/video.mp4")!), "transport and container gating")
-            let opaque = URL(string: "https://example.invalid/play?id=1")!
-            try require(SystemPlaybackRoute.accepts(url: opaque, format: nil, live: false, separateAudio: false,
-                                                     disc: false, demuxer: "mov,mp4,m4a,3gp,3g2,mj2"), "already-probed MP4 without file extension")
-            try require(!SystemPlaybackRoute.accepts(url: mp4, format: "mp4", live: false, separateAudio: false,
-                                                      disc: false, demuxer: "matroska,webm"), "use probed container over misleading suffix")
-            record("system playback selects only progressive file transports")
             var startup = PlaybackStartupWork()
             let kinds: [PlaybackStartupWork.Kind] = [.subtitles, .remoteSkip, .danmaku]
             try require(kinds.allSatisfy { !startup.allows($0, now: 100) }, "Network work ran before a picture")

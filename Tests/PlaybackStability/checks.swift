@@ -128,26 +128,23 @@ private final class Resource: @unchecked Sendable {
             _ = reader.close()
         }
 
-        try check("tablet UHD queue covers a 100 ms decoder delivery gap at 60 fps") {
-            let memory: UInt64 = 8 * 1024 * 1024 * 1024
-            func missedPictures(tablet: Bool) -> Int {
-                let capacity = PlaybackPacketBudget.videoFrames(width: 3840, height: 2160, live: false,
-                                                               physicalMemory: memory, tablet: tablet)
-                let queue = CircularBuffer<QueueItem>(initialCapacity: Int(capacity), sorted: true, expanding: false)
-                for index in 0..<Int(capacity) { queue.push(QueueItem(timestamp: Int64(index))) }
-                // Six display deadlines elapse before the decoder delivers its next batch.
-                return (0..<6).filter { _ in queue.pop() == nil }.count
+        try check("build11 decoded queue absorbs six display deadlines") {
+            let capacity = Int(DecodedFramePolicy.capacity(live: false))
+            let queue = CircularBuffer<QueueItem>(initialCapacity: capacity, sorted: true, expanding: false)
+            for index in 0..<capacity { queue.push(QueueItem(timestamp: Int64(index))) }
+            for index in 0..<6 { try require(queue.pop()?.timestamp == Int64(index), "Missing queued picture") }
+            try require(queue.count == 10, "Unexpected remaining presentation runway")
+        }
+        try check("normal catch-up preserves on-time and future frames") {
+            for fps: Float in [25, 60] {
+                let interval = 1 / Double(fps)
+                for diff in [0, interval, -interval, -4.1 * interval] {
+                    try require(!DecodedFramePolicy.canCatchUpOnNormalTick(diff: diff, fps: fps), "Unexpected normal catch-up")
+                }
+                for diff in [-1.5 * interval, -4 * interval] {
+                    try require(DecodedFramePolicy.canCatchUpOnNormalTick(diff: diff, fps: fps), "Missed decoded-frame catch-up")
+                }
             }
-            try require(missedPictures(tablet: false) == 4, "Two-frame control did not exercise starvation")
-            try require(missedPictures(tablet: true) == 0, "Tablet VOD ran out of decoded frames")
-            try require(PlaybackPacketBudget.videoFrames(width: 2160, height: 3840, live: false,
-                        physicalMemory: memory, tablet: true) == 16, "Portrait UHD lost its display runway")
-            try require(PlaybackPacketBudget.videoFrames(width: 3840, height: 2160, live: true,
-                        physicalMemory: memory, tablet: true) == 4, "Live playback inherited the VOD queue")
-            try require(PlaybackPacketBudget.videoFrames(width: 7680, height: 4320, live: false,
-                        physicalMemory: memory, tablet: true) == 2, "8K bypassed the large-frame memory limit")
-            try require(PlaybackPacketBudget.videoFrames(width: 3840, height: 2160, live: false,
-                        physicalMemory: memory / 2, tablet: true) == 2, "Lower-memory tablets bypassed their budget")
         }
         try check("bounded frame queue waits before writing a full slot") {
             let queue = CircularBuffer<QueueItem>(initialCapacity: 2, expanding: false)
