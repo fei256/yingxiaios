@@ -64,6 +64,7 @@ private struct DetailHarness: View {
     @State private var paint: DiscoverPaint?
     @State private var imagesReady = false
     @State private var complete = true
+    @State private var cachedRanges: [ClosedRange<Double>] = []
     @State private var action = "none"
     @State private var portraitAspect: CGFloat?
     @State private var portraitRequests = 0
@@ -98,13 +99,16 @@ private struct DetailHarness: View {
                         Text("详情组件回归：原生背景、片名、操作胶囊与缓存进度。").font(.footnote).opacity(0.65)
                         VStack(alignment: .leading, spacing: 10) {
                             Text(complete ? "缓存完成" : "部分缓存").font(.headline).accessibilityIdentifier("fixture.cacheStatus")
-                            let fraction = PlaybackCacheProgress.bufferedPosition(duration: 1095, decodedThrough: 180, cacheComplete: complete) / 1095
-                            ZStack { PlayerTimelineTrack(played: 0.05, buffered: fraction, thickness: 6) }
+                            let ranges = PlaybackCacheProgress.bufferedRanges(duration: 1095, position: 55,
+                                decodedThrough: 180, cacheComplete: complete, cachedRanges: cachedRanges)
+                            ZStack { PlayerTimelineTrack(played: 0.05, buffered: ranges, thickness: 6) }
                                 .frame(height: 28).accessibilityElement(children: .ignore)
                                 .accessibilityLabel("缓存进度").accessibilityValue(complete ? "complete" : "partial")
                                 .accessibilityIdentifier("fixture.cacheTrack")
                             HStack {
-                                Button("清理缓存") { complete = false }.accessibilityIdentifier("fixture.clearCache")
+                                Button("清理缓存") { complete = false; cachedRanges = [] }.accessibilityIdentifier("fixture.clearCache")
+                                Button("分段缓存") { complete = false; cachedRanges = [0...0.6, 0.8...0.85] }
+                                    .accessibilityIdentifier("fixture.partialCache")
                                 Button("完成缓存") { complete = true }.accessibilityIdentifier("fixture.completeCache")
                             }.buttonStyle(.bordered).frame(minHeight: 44)
                         }.padding(18).background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))

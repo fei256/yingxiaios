@@ -438,30 +438,38 @@ test('cache completion counts unique stored bytes instead of overlapping probe b
   let statistics = cache.statistics(owner.id);
   assert.equal(statistics.bytes, 2 * blockBytes);
   assert.equal(statistics.cachedMediaBytes, 1.5 * blockBytes);
+  assert.deepEqual(statistics.cachedRanges, [[0, 0.15]]);
   assert.equal(statistics.mediaBytes, media.length);
   assert.equal(statistics.complete, false);
+  await cache.put(resource, 7 * blockBytes, media.subarray(7 * blockBytes, 8 * blockBytes));
+  assert.deepEqual(cache.statistics(owner.id).cachedRanges, [[0, 0.15], [0.7, 0.8]]);
   for (let offset = blockBytes; offset < media.length; offset += blockBytes)
     await cache.put(resource, offset, media.subarray(offset, offset + blockBytes));
   statistics = cache.statistics(owner.id);
   assert.equal(statistics.cachedMediaBytes, media.length);
   assert.equal(statistics.complete, true);
+  assert.deepEqual(statistics.cachedRanges, [[0, 1]]);
 });
 
 test('separate audio must be fully acquired before the playback cache is complete', { timeout: 5000 }, async t => {
   const { cache, owner, resource, media } = await fixture(t);
   const sound = cache.resource(owner, 'https://media.example/audio.m4a');
   sound.forwardCache = true;
-  async function store(target, bytes) {
+  async function store(target, bytes, firstBlock = 0, endBlock = bytes.length / blockBytes) {
     cache.accept(target, new Response(null, { status: 206, headers: {
       'content-range': `bytes 0-${bytes.length - 1}/${bytes.length}`,
       'content-length': String(bytes.length), etag: '"fixture-v1"',
     } }));
-    for (let start = 0; start < bytes.length; start += blockBytes)
+    for (let start = firstBlock * blockBytes; start < endBlock * blockBytes; start += blockBytes)
       await cache.put(target, start, bytes.subarray(start, start + blockBytes));
   }
-  await store(resource, media);
+  await store(resource, media, 0, 6);
   assert.equal(cache.statistics(owner.id).complete, false);
   assert.equal(cache.statistics(owner.id).mediaBytes, null);
+  assert.deepEqual(cache.statistics(owner.id).cachedRanges, []);
+  await store(sound, media.subarray(0, 4 * blockBytes), 2, 4);
+  assert.deepEqual(cache.statistics(owner.id).cachedRanges, [[0.5, 0.6]]);
+  await store(resource, media, 6);
   await store(sound, media.subarray(0, 4 * blockBytes));
   const statistics = cache.statistics(owner.id);
   assert.equal(statistics.complete, true);
@@ -481,6 +489,7 @@ test('clearing a fully cached file removes the completion state', { timeout: 500
   await cache.clearVideos();
   assert.equal(cache.statistics(owner.id).complete, false);
   assert.equal(cache.statistics(owner.id).cachedMediaBytes, 0);
+  assert.deepEqual(cache.statistics(owner.id).cachedRanges, []);
 });
 
 test('cache size changes and disabling affect the active playback session', { timeout: 5000 }, async t => {
@@ -503,6 +512,7 @@ test('a cached manifest never claims that all media segments are complete', { ti
   await cache.put(resource, 0, Buffer.from('#EXTM3U\n#EXT-X-ENDLIST\n'));
   const statistics = cache.statistics(owner.id);
   assert.ok(statistics.cachedMediaBytes > 0);
+  assert.deepEqual(statistics.cachedRanges, []);
   assert.equal(statistics.mediaBytes, null);
   assert.equal(statistics.complete, false);
 });

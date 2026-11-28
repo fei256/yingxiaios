@@ -106,6 +106,16 @@ final class DetailHarnessTests: XCTestCase {
         let after = brightness(XCUIScreen.main.screenshot(), at: point, window: app.windows.firstMatch.frame)
         XCTAssertGreaterThan(before, after + 0.08, "The far end of a complete cache must actually be painted")
         attach("cache-cleared-track", app: app)
+        let cleared = XCUIScreen.main.screenshot()
+        app.buttons["fixture.partialCache"].tap()
+        let partial = XCUIScreen.main.screenshot()
+        for (fraction, cached) in [(0.5, true), (0.7, false), (0.825, true)] {
+            let sample = CGPoint(x: track.frame.minX + track.frame.width * fraction, y: track.frame.midY)
+            let change = brightness(partial, at: sample, window: app.windows.firstMatch.frame)
+                - brightness(cleared, at: sample, window: app.windows.firstMatch.frame)
+            if cached { XCTAssertGreaterThan(change, 0.08) }
+            else { XCTAssertLessThan(abs(change), 0.04) }
+        }
         app.buttons["fixture.completeCache"].tap()
         XCTAssertEqual(track.value as? String, "complete")
     }

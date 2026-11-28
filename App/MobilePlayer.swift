@@ -1571,7 +1571,7 @@ private struct SeekBar<Accessory: View>: View {
     private func bar(_ position: Double) -> some View {
         let duration = clock.duration
         let value = min(max(0, position), duration)
-        let buffered = duration > 0 ? clock.bufferedPosition / duration : 0
+        let buffered = clock.bufferedRanges
         let held = drag != nil
         return HStack(spacing: 8) {
             Text(Self.format(value)).frame(minWidth: 40, alignment: .leading).accessibilityHidden(true)
@@ -2062,9 +2062,11 @@ private struct KSPlayerSurface: UIViewRepresentable {
     private(set) var scrubbing: Double?
     var position: Double { engine?.position ?? 0 }
     var duration: Double { engine?.duration ?? 0 }
-    var bufferedPosition: Double {
-        PlaybackCacheProgress.bufferedPosition(duration: duration, decodedThrough: engine?.bufferedPosition ?? 0,
-            cacheComplete: session?.transfer.cacheComplete == true)
+    var bufferedRanges: [ClosedRange<Double>] {
+        let transfer = session?.transfer
+        return PlaybackCacheProgress.bufferedRanges(duration: duration, position: position,
+            decodedThrough: engine?.bufferedPosition ?? 0, cacheComplete: transfer?.cacheComplete == true,
+            cachedRanges: transfer?.cachedRanges ?? [])
     }
     var presentationSize: CGSize { engine?.presentationSize ?? .zero }
     private(set) var preview: CGImage?

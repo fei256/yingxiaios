@@ -49,6 +49,18 @@ export function videoCacheSettings(value = {}) {
   return { enabled: typeof value.enabled === 'boolean' ? value.enabled : true,
     sizeGB: [1, 2, 3, 4].includes(value.sizeGB) ? value.sizeGB : 1 };
 }
+// Each file uses its own byte offsets. Split tracks share only the estimated
+// timeline intervals for which both files have data.
+function intersectCoverage(left, right) {
+  const common = [];
+  for (let i = 0, j = 0; i < left.length && j < right.length;) {
+    const start = Math.max(left[i][0], right[j][0]), end = Math.min(left[i][1], right[j][1]);
+    if (start < end) common.push([start, end]);
+    if (left[i][1] < right[j][1]) i++;
+    else j++;
+  }
+  return common;
+}
 function span(range, total) {
   if (!Number.isSafeInteger(total) || total <= 0) return null;
   if (!range) return { start: 0, end: total - 1 };
@@ -872,7 +884,8 @@ export class MediaCache {
   }
   fileStatistics(owner) {
     const resources = [...owner.resources.values()].filter(resource => resource.forwardCache && !resource.manifestURL);
-    if (!resources.length) return { cachedMediaBytes: owner.bytes, mediaBytes: null, complete: false };
+    if (!resources.length) return { cachedMediaBytes: owner.bytes, mediaBytes: null, complete: false, cachedRanges: [] };
+    let cachedRanges;
     let cachedMediaBytes = 0, mediaBytes = 0, known = true, complete = true;
     for (const resource of resources) {
       const total = resource.meta?.total;
@@ -880,17 +893,22 @@ export class MediaCache {
       mediaBytes += total;
       // Probe, seek and retry blocks can overlap. Count their byte union rather
       // than disk usage so repeated headers cannot falsely report a full file.
-      const ranges = this.storedRanges(resource, total);
-      let cursor = 0, acquired = 0;
-      for (const range of ranges) {
-        acquired += Math.max(0, range.end - Math.max(cursor, range.start));
-        cursor = Math.max(cursor, range.end);
+      const merged = [];
+      for (const { start, end } of this.storedRanges(resource, total)) {
+        if (start >= end) continue;
+        const last = merged.at(-1);
+        if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+        else merged.push([start, end]);
       }
+      const acquired = merged.reduce((sum, [start, end]) => sum + (end - start), 0);
+      const fractions = merged.map(([start, end]) => [start / total, end / total]);
+      cachedRanges = cachedRanges === undefined ? fractions : intersectCoverage(cachedRanges, fractions);
       cachedMediaBytes += acquired;
       complete &&= acquired === total;
     }
     known &&= Number.isSafeInteger(mediaBytes);
-    return { cachedMediaBytes, mediaBytes: known ? mediaBytes : null, complete: known && complete };
+    return { cachedMediaBytes, mediaBytes: known ? mediaBytes : null, complete: known && complete,
+      cachedRanges: known && owner.enabled ? cachedRanges : [] };
   }
   videoStatistics() {
     const owners = [...this.owners.values()].filter(owner => !owner.music && !owner.speculative);

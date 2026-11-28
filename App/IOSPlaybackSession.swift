@@ -153,6 +153,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         var cachedBytes: Int64?
         var totalBytes: Int64?
         var cacheComplete = false
+        var cachedRanges: [ClosedRange<Double>] = []
     }
     var cacheStatus: String? {
         guard let bytes = transfer.cachedBytes else { return nil }
@@ -240,6 +241,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
                 else {
                     self.cachePreparationID = UUID(); self.cachePreparation?.cancel(); self.cachePreparation = nil
                     self.transfer.cachedBytes = nil; self.transfer.totalBytes = nil; self.transfer.cacheComplete = false
+                    self.transfer.cachedRanges = []
                 }
             }
         }
@@ -533,6 +535,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
                 self.transfer.cachedBytes = cacheStatistics.flatMap { $0.cacheEnabled ? $0.cachedMediaBytes : nil }
                 self.transfer.totalBytes = cacheStatistics?.mediaBytes
                 self.transfer.cacheComplete = cacheStatistics.map { $0.cacheEnabled && $0.complete } ?? false
+                self.transfer.cachedRanges = cacheStatistics.flatMap { $0.cacheEnabled ? $0.cachedRanges : nil } ?? []
                 self.transfer.bytesPerSecond = rate.sample(bytes: bytes, at: ProcessInfo.processInfo.systemUptime,
                     identity: rateIdentity)
                 try? await Task.sleep(for: .seconds(1))

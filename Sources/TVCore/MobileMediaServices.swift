@@ -16,6 +16,7 @@ public enum MobileMediaServices {
         public let nativeFallback: Bool
         public let cachedMediaBytes: Int64
         public let mediaBytes: Int64?
+        public let cachedRanges: [ClosedRange<Double>]
         public let complete: Bool
         public let cacheEnabled: Bool
     }
@@ -127,9 +128,15 @@ public enum MobileMediaServices {
         let enabled: Bool
         if case .bool(let value) = values["cacheEnabled"] { enabled = value } else { enabled = true }
         let total = count("mediaBytes")
+        let ranges = values["cachedRanges"]?.array?.compactMap { item -> ClosedRange<Double>? in
+            guard let pair = item.array, pair.count == 2,
+                  case .number(let start) = pair[0], case .number(let end) = pair[1],
+                  start >= 0, start < end, end <= 1 else { return nil }
+            return start...end
+        } ?? []
         return VideoCacheStatistics(networkBytes: count("networkBytes"), hits: count("hits"), bytes: count("bytes"),
             nativeFallback: fallback, cachedMediaBytes: count("cachedMediaBytes"), mediaBytes: total > 0 ? total : nil,
-            complete: complete, cacheEnabled: enabled)
+            cachedRanges: ranges, complete: complete, cacheEnabled: enabled)
     }
     /// Cancelling this call stops speculative I/O while completed cache blocks remain reusable.
     public static func prefetchPlayback(_ ownerID: String, maxBytes: Int = 15 * 1024 * 1024) async throws -> Bool {
