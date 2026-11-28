@@ -223,6 +223,8 @@ export class MobileServices {
               if (block.start > start) break;
               start = Math.max(start, block.end);
             }
+            // A previously interrupted prefix belongs to another HTTP response.
+            if (start > 0 && !resource.meta?.validator) continue;
             upstream = await this.cache.open(resource, 'GET', `bytes=${start}-${limit-1}`,
               resource.meta?.validator || '', combined, { episodeWarm: true });
             if (!upstream) return { bytes: received, deferred: true };
@@ -230,6 +232,10 @@ export class MobileServices {
             if (upstream.response.status !== 206 || !meta || meta.start !== start) continue;
             received += start;
             for await (const data of this.cache.body(resource, upstream, meta, upstream.signal, limit - start)) received += data.length;
+            if (meta.validator && meta.end + 1 < Math.min(limit, meta.total)) {
+              await this.cache.tail;
+              return { bytes: received, deferred: true };
+            }
           } finally {
             upstream?.controller.abort();await upstream?.response.body?.cancel().catch(()=>{});upstream?.releaseBudget?.();
           }

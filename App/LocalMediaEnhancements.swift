@@ -512,19 +512,20 @@ import TVCore
                 let result = try await MobileMediaServices.call("danmaku.window", params)
                 let fields = result.object
                 let tooDense = fields?["tooDense"] == .bool(true)
-                let incoming = await Self.windowComments(fields?["items"]?.array ?? [], offset: offset)
+                let incoming = await Self.changedWindow(fields?["items"]?.array ?? [], offset: offset, previous: comments)
                 guard active == generation, sourceRevision == source, catalog.selection.ticket == ticket,
                       catalog.enabled, catalog.offset == offset, !Task.isCancelled else { return }
                 #if os(iOS)
                 guard engine?.timelineRevision == timeline, engine?.seeking != true else { return }
                 #endif
                 let retimed = lastOffset != offset
-                if incoming != comments || retimed {
-                    comments = incoming; revision = UUID()
-                    if retimed { sourceRevision = UUID() }
-                }
+                if let incoming { comments = incoming }
+                if incoming != nil || retimed { revision = UUID() }
+                if retimed { sourceRevision = UUID() }
                 lastWindow = position; lastOffset = offset
-                if tooDense { setStatus("当前时段弹幕过密，后续时段将自动恢复", kind: .warning) }
+                let denseNotice = "当前时段弹幕过密，后续时段将自动恢复"
+                if tooDense { setStatus(denseNotice, kind: .warning) }
+                else if status == denseNotice { setStatus("弹幕已恢复") }
             }
         } catch {
             if active == generation, catalog.selection.ticket == ticket, !Task.isCancelled {
@@ -534,11 +535,12 @@ import TVCore
         }
     }
 
-    nonisolated private static func windowComments(_ items: [JSONValue], offset: Double) async -> [Danmaku] {
-        items.compactMap { item in
+    nonisolated private static func changedWindow(_ items: [JSONValue], offset: Double, previous: [Danmaku]) async -> [Danmaku]? {
+        let incoming = items.compactMap { item -> Danmaku? in
             guard let value = NativeDanmakuDecoder.comment(item) else { return nil }
             return Danmaku(time: max(0, value.time + offset), position: value.position, color: value.color,
                            scale: value.scale, text: value.text, effect: value.effect)
         }
+        return incoming == previous ? nil : incoming
     }
 }

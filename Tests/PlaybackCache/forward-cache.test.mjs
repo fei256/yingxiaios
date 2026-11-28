@@ -101,6 +101,20 @@ test('next episode yields both before and during a current episode read', { time
   assert.ok((await warm()).bytes > 0);
 });
 
+test('episode warm resumes a capped prefix only with an entity validator', async t => {
+  for (const validator of [false, '"stable"']) {
+    const { cache, owner, requests } = await fixture(t, {
+      request: ({ start }) => ({ rangeEnd: start + blockBytes - 1, validator })
+    });
+    const service = Object.assign(Object.create(MobileServices.prototype), { cache });
+    const warm = () => service.call('playback.prefetch', { id: owner.id, maxBytes: blockBytes * 2 }, owner.controller.signal);
+    const first = await warm();
+    assert.equal(first.deferred === true, !!validator);
+    await warm();
+    assert.deepEqual(requests.map(r => [r.start, r.ifRange]), validator ? [[0, null], [blockBytes, validator]] : [[0, null]]);
+  }
+});
+
 test('dense danmaku shortens lookahead, signals an overfull interval and recovers', async t => {
   const { cache } = await fixture(t);
   const service = Object.assign(Object.create(MobileServices.prototype), {
