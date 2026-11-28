@@ -85,6 +85,7 @@ struct LocalAppNavigation: View {
         _ = htmlHomeData
         return current == .home && LocalHTMLHomeStore.load().active != nil
     }
+    private var coveredByPlayer: Bool { store.playing != nil && !PictureInPicture.shared.hidesPlayer }
     private var dockVisible: Bool { !keyboardVisible && !(htmlHomeSelected && htmlDockHidden) }
 
     var body: some View {
@@ -105,7 +106,7 @@ struct LocalAppNavigation: View {
                                     }
                                 }
                                 .frame(width: viewport.size.width, height: viewport.size.height)
-                                .environment(\.isLocalPageActive, current == section && !sourcePanelBlocksInput)
+                                .environment(\.isLocalPageActive, current == section && !sourcePanelBlocksInput && !coveredByPlayer)
                                 .environment(\.localDockInset, keyboardVisible ? 0 : dockInset)
                                 .id(stackIdentity(section))
                                 .opacity(current == section ? 1 : 0)

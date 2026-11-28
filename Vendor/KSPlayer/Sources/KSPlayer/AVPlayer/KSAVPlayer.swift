@@ -227,13 +227,16 @@ public class KSAVPlayer {
 extension KSAVPlayer {
     public var player: AVQueuePlayer { playerView.player }
     public var playerLayer: AVPlayerLayer { playerView.playerLayer }
-    @objc private func moviePlayDidEnd(notification _: Notification) {
-        if !options.isLoopPlay {
-            playbackState = .finished
+    @objc nonisolated private func moviePlayDidEnd(notification: Notification) {
+        guard let item = notification.object as? AVPlayerItem else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.player.currentItem === item, !self.options.isLoopPlay else { return }
+            self.playbackState = .finished
         }
     }
 
-    @objc private func playerItemFailedToPlayToEndTime(notification: Notification) {
+    @objc nonisolated private func playerItemFailedToPlayToEndTime(notification: Notification) {
+        guard let item = notification.object as? AVPlayerItem else { return }
         var playError: Error?
         if let userInfo = notification.userInfo {
             if let error = userInfo["error"] as? Error {
@@ -244,7 +247,11 @@ extension KSAVPlayer {
                 playError = NSError(domain: "AVMoviePlayer", code: errorCode, userInfo: nil)
             }
         }
-        delegate?.finish(player: self, error: playError)
+        let failure = playError ?? NSError(errorCode: .readFrame)
+        Task { @MainActor [weak self] in
+            guard let self, self.player.currentItem === item else { return }
+            self.delegate?.finish(player: self, error: failure)
+        }
     }
 
     private func updateStatus(item: AVPlayerItem) {
@@ -272,7 +279,7 @@ extension KSAVPlayer {
                 loadState = .playable
             }
         } else if item.status == .failed {
-            error = item.error
+            error = item.error ?? NSError(errorCode: .readFrame)
         }
     }
 
@@ -329,8 +336,8 @@ extension KSAVPlayer {
     }
 
     private func observer(playerItem: AVPlayerItem?) {
-        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: playerItem)
-        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: playerItem)
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: nil)
         statusObservation?.invalidate()
         loadedTimeRangesObservation?.invalidate()
         bufferEmptyObservation?.invalidate()

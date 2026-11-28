@@ -7,6 +7,17 @@ import AudioToolbox
 import TVCore
 import KSPlayer
 
+/// AVFoundation can wait inside accessLog(). Only copy its counters on the worker.
+private final class NativePlaybackLog: @unchecked Sendable {
+    let item: AVPlayerItem
+    init(_ item: AVPlayerItem) { self.item = item }
+    func counters() -> (drops: Int?, bytes: Int64) {
+        let events = item.accessLog()?.events ?? []
+        let drops = events.map(\.numberOfDroppedVideoFrames).filter { $0 >= 0 }
+        return (drops.isEmpty ? nil : drops.reduce(0, +), events.reduce(Int64(0)) { $0 + max(0, $1.numberOfBytesTransferred) })
+    }
+}
+
 struct KSPlaybackFailure: LocalizedError {
     let message: String
     var errorDescription: String? { message }
@@ -172,6 +183,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     @PerceptionIgnored private var previousSamplePictureTime: Double?
     private(set) var decoder = "auto"
     private(set) var currentDecoder = "准备中"
+    private(set) var usingSystemPlayer = false
     private(set) var videoSelection: String?
     private(set) var audioSelection: String?
     private(set) var subtitleSelection: String?
@@ -216,6 +228,12 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             case .subtitle: snapshot.subtitle = id
             }
         }
+        // The native route accepts one audio and one video track. Their AV track IDs
+        // do not identify the corresponding FFmpeg streams after a fallback.
+        if native != nil {
+            if snapshot.video != "no" { snapshot.video = nil }
+            if snapshot.audio != "no" { snapshot.audio = nil }
+        }
         return snapshot
     }
     var startupMediaTime: Double? {
@@ -224,7 +242,9 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         let time = audioOnly ? position : (ffmpeg?.displayedVideoTime ?? (hasPicture ? core.currentPlaybackTime : .nan))
         return time.isFinite && time >= 0 ? time : nil
     }
-    var seekable: Bool { core?.seekable == true }
+    var seekable: Bool {
+        core?.seekable == true || (native?.isReadyToPlay == true && duration > 0)
+    }
     /// Direct picture time avoids a prefilling audio queue advancing danmaku ahead of the frame.
     var displayPosition: Double {
         guard videoSelection != "no", let core else { return position }
@@ -238,10 +258,13 @@ struct KSPlaybackChapter: Identifiable, Equatable {
     private(set) var nativeDropCount: Int?
     private(set) var longestSubmissionGap = 0.0
     private(set) var longestSourceGap = 0.0
+    @PerceptionIgnored private var readingNativeMetrics = false
     @PerceptionIgnored private var nativeStarted: TimeInterval?
-    var usingSystemPlayer: Bool { currentDecoder == "系统 AVPlayer" }
 
-    func beginPlaybackRoute() { systemFallback = nil }
+    @PerceptionIgnored private var routeURL: URL?
+    @PerceptionIgnored private var detectedContainer: String?
+
+    func beginPlaybackRoute() { systemFallback = nil; routeURL = nil; detectedContainer = nil }
 
     private func fallbackToKS(_ reason: String) {
         guard native != nil, systemFallback == nil else { return }
@@ -295,6 +318,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
               discPlaylist: Int? = nil, startTime: Double = 0, isLive: Bool = false,
               audioURL: URL? = nil, audioHeaders: [String: String] = [:],
               cacheIOURL: URL? = nil, audioCacheIOURL: URL? = nil, selections: KSPlaybackSelections? = nil) {
+        if routeURL != url { routeURL = url; detectedContainer = nil; systemFallback = nil }
         let previousVideoTracks = selections?.video == "no" ? tracks.filter { $0.kind == .video } : []
         shutdown()
         detachedVideoTracks = previousVideoTracks.map { value in
@@ -371,7 +395,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         if let discPlaylist { options.formatContextOptions["playlist"] = String(discPlaylist) }
         self.options = options
         let systemCandidate = SystemPlaybackRoute.accepts(url: url, format: format, live: isLive,
-                                                          separateAudio: audioURL != nil, disc: discPlaylist != nil)
+                                                          separateAudio: audioURL != nil, disc: discPlaylist != nil, demuxer: detectedContainer)
         let useNative = systemCandidate && decoder == "system" && systemFallback == nil && audioDelay == 0
             && selections?.video == nil && selections?.audio == nil
             && [nil, "no"].contains(selections?.subtitle) && [nil, "no"].contains(selections?.secondarySubtitle)
@@ -383,6 +407,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             systemOptions.isAccurateSeek = true
             let system = KSAVPlayer(url: cacheIOURL ?? url, options: systemOptions)
             player = system
+            usingSystemPlayer = true
             currentDecoder = "系统 AVPlayer"
             nativeStarted = ProcessInfo.processInfo.systemUptime
         } else {
@@ -456,7 +481,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         core?.shutdown(); core?.view?.removeFromSuperview(); core = nil; options = nil
         failedVideo = false; decoderDiagnosticCount = 0; pictureWatchdog = PlaybackPictureWatchdog(); startupStages = []
         nextPlaybackInfoSample = 0
-        nativeStarted = nil; nativeDropCount = nil
+        nativeStarted = nil; nativeDropCount = nil; usingSystemPlayer = false
         longestSubmissionGap = 0; longestSourceGap = 0
         videoBitDepth = nil
         mediaID = nil; position = 0; duration = 0; bufferedPosition = 0
@@ -562,7 +587,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         seek(to: time, completion: completion)
     }
     func seek(to requested: Double, completion: @escaping (Bool) -> Void = { _ in }) {
-        guard requested.isFinite, let core, isReady, core.seekable else { completion(false); return }
+        guard requested.isFinite, core != nil, isReady, seekable else { completion(false); return }
         seekSequence += 1
         renderingTimeline &+= 1
         let target = min(max(0, requested), duration > 0 ? max(0, duration - 0.05) : max(0, requested))
@@ -811,11 +836,18 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         }
         if now >= nextPlaybackInfoSample {
             nextPlaybackInfoSample = now + 1
-            let events = player.player.currentItem?.accessLog()?.events ?? []
-            let drops = events.map(\.numberOfDroppedVideoFrames).filter { $0 >= 0 }
-            nativeDropCount = drops.isEmpty ? nil : drops.reduce(0, +)
-            bytesRead = events.reduce(Int64(0)) { $0 + max(0, $1.numberOfBytesTransferred) }
-            refreshPlaybackInfo()
+            if !readingNativeMetrics, let item = player.player.currentItem {
+                readingNativeMetrics = true
+                let reader = NativePlaybackLog(item), opening = openID
+                Task { [weak self] in
+                    let counts = await Task.detached(priority: .utility) { reader.counters() }.value
+                    guard let self else { return }
+                    self.readingNativeMetrics = false
+                    guard self.openID == opening else { return }
+                    self.nativeDropCount = counts.drops
+                    self.bytesRead = counts.bytes
+                }
+            }
         }
         if hasPicture { sampleStoppedPicture(position) }
         onTick?()
@@ -857,7 +889,8 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         var primaryTime = time, secondaryTime = time
         // Drain every decoded text stream, including hidden tracks. Retaining active cues in
         // the timed queue lets a newly selected track show its current line immediately.
-        for info in player.subtitleDataSouce?.infos ?? [] {
+        for track in subtitleTracks {
+            guard let info = track as? any SubtitleInfo else { continue }
             let parts = info.search(for: time - info.delay)
             if info.subtitleID == pair.primary { primary = parts; primaryTime = time - info.delay }
             else if info.subtitleID == pair.secondary { secondary = parts; secondaryTime = time - info.delay }
@@ -1020,7 +1053,7 @@ struct KSPlaybackChapter: Identifiable, Equatable {
             let audioType = audio.first?.formatDescription.map(CMFormatDescriptionGetMediaSubType)
             let asset = native.player.currentItem?.asset
             guard video.count == 1, audio.count == 1,
-                  videoType == kCMVideoCodecType_HEVC || videoType == kCMVideoCodecType_H264,
+                  videoType == kCMVideoCodecType_HEVC || videoType == kCMVideoCodecType_H264 || videoType == 0x6865_7631, // hev1
                   audioType == kAudioFormatMPEG4AAC,
                   asset?.availableMediaCharacteristicsWithMediaSelectionOptions.contains(.legible) != true,
                   asset?.availableChapterLocales.isEmpty == true,
@@ -1029,9 +1062,12 @@ struct KSPlaybackChapter: Identifiable, Equatable {
                 return
             }
         }
+        if ffmpeg != nil { detectedContainer = options?.formatName }
         isReady = true; refreshTracks()
         for track in tracks where track.selected && track.kind != .subtitle { defaultTracks[track.kind.rawValue] = track.id }
-        sample(); renderingRevision = UUID(); onReady?()
+        sample()
+        if usingSystemPlayer { refreshPlaybackInfo() }
+        renderingRevision = UUID(); onReady?()
         if wantsPlaying, !seeking { core?.play() }
     }
     func changeLoadState(player: some MediaPlayerProtocol) { if owns(player) { sample() } }

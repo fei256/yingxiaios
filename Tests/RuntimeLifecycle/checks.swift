@@ -65,6 +65,11 @@ private func cancelled<T>(_ result: Result<T, Error>) -> Bool {
                         && !systemRoute(disc: true), "complex transports must stay on KS")
             try require(systemRoute("mp4", url: URL(string: "https://example.invalid/video")!)
                         && !systemRoute(url: URL(string: "ftp://example.invalid/video.mp4")!), "transport and container gating")
+            let opaque = URL(string: "https://example.invalid/play?id=1")!
+            try require(SystemPlaybackRoute.accepts(url: opaque, format: nil, live: false, separateAudio: false,
+                                                     disc: false, demuxer: "mov,mp4,m4a,3gp,3g2,mj2"), "already-probed MP4 without file extension")
+            try require(!SystemPlaybackRoute.accepts(url: mp4, format: "mp4", live: false, separateAudio: false,
+                                                      disc: false, demuxer: "matroska,webm"), "use probed container over misleading suffix")
             record("system playback selects only progressive file transports")
             var startup = PlaybackStartupWork()
             let kinds: [PlaybackStartupWork.Kind] = [.subtitles, .remoteSkip, .danmaku]
