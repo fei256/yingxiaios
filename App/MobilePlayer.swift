@@ -1052,18 +1052,30 @@ struct MobilePlayerView: View {
         WithPerceptionTracking {
             VStack(alignment: .leading, spacing: 12) {
                 Text("视频解码").font(.caption).foregroundStyle(.secondary).padding(.top, 4)
-                ForEach(["auto", "software"], id: \.self) { decoder in
+                ForEach(["auto", "system", "software"], id: \.self) { decoder in
                     WithPerceptionTracking {
-                        selectionRow(decoder == "auto" ? "自动（优先硬解）" : "软件解码", selected: session.engine.decoder == decoder) {
+                        selectionRow(decoder == "system" ? "系统原生（MP4 对照）" : decoder == "auto" ? "KS 自动（优先硬解）" : "KS 软件解码", selected: session.engine.decoder == decoder) {
                             session.engine.setDecoder(decoder)
                         }
                     }
                 }
                 Text("当前解码：" + session.engine.currentDecoder).font(.caption).foregroundStyle(.secondary)
-                if session.engine.videoSelection != "no" {
+                if session.engine.decoder == "system", !session.engine.usingSystemPlayer {
+                    Text(session.engine.systemFallback ?? "当前片源或轨道设置使用 KS")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if session.engine.usingSystemPlayer {
+                    Text(session.engine.nativeDropCount.map { "系统报告累计掉帧 \($0)" } ?? "系统掉帧统计不可用")
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                } else if session.engine.videoSelection != "no" {
                     Text(String(format: "送显 %.1f FPS · 同步累计跳过 %u 帧 / %u 包",
                                 session.engine.frameRate, session.engine.droppedVideoFrames, session.engine.droppedVideoPackets))
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    if session.engine.longestSubmissionGap > 0 {
+                        Text(String(format: "本段最长提交间隔 %.0f ms · 片源时间间隔峰值 %.0f ms",
+                                    session.engine.longestSubmissionGap * 1000, session.engine.longestSourceGap * 1000))
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
                 }
             }
         }

@@ -44,6 +44,15 @@ public final class MetalPlayView: UIView, VideoOutput {
     }
     private var pictureInPictureTimer: DispatchSourceTimer?
     private var outputPlaying = false
+    private var lastSubmission: (host: CFTimeInterval, media: Double)?
+    public private(set) var longestSubmissionGap: TimeInterval = 0
+    public private(set) var longestSourceGap: TimeInterval = 0
+
+    private func resetSubmissionIntervals() {
+        lastSubmission = nil
+        longestSubmissionGap = 0
+        longestSourceGap = 0
+    }
     public var displayLayer: AVSampleBufferDisplayLayer {
         displayView.displayLayer
     }
@@ -116,6 +125,7 @@ public final class MetalPlayView: UIView, VideoOutput {
     }
 
     public func play() {
+        if !outputPlaying { resetSubmissionIntervals() }
         outputPlaying = true
         cancelForcedPictureRetry()
         metalView.invalidateDrawable()
@@ -211,6 +221,7 @@ public final class MetalPlayView: UIView, VideoOutput {
     }
 
     public func discardPendingFrame() {
+        resetSubmissionIntervals()
         cancelForcedPictureRetry()
         pendingFrame = nil; pendingForcedPicture = false; forcedPictureAccepted = false
         metalView.invalidateDrawable()
@@ -371,6 +382,14 @@ extension MetalPlayView {
             pendingForcedPicture = false
             cancelForcedPictureRetry()
             self.pixelBuffer = pixelBuffer
+            if outputPlaying && !force && !pictureInPictureActive {
+                let now = CACurrentMediaTime(), pts = cmtime.seconds
+                if let previous = lastSubmission, pts.isFinite, pts > previous.media {
+                    longestSubmissionGap = max(longestSubmissionGap, now - previous.host)
+                    longestSourceGap = max(longestSourceGap, pts - previous.media)
+                }
+                lastSubmission = pts.isFinite ? (now, pts) : nil
+            } else { lastSubmission = nil }
             renderSource?.setVideo(time: cmtime, position: frame.position)
             if !pictureInPictureActive { _ = pictureInPictureFrame?(pixelBuffer, cmtime) }
             return true

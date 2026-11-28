@@ -216,8 +216,10 @@ public class KSAVPlayer {
         urlAsset = AVURLAsset(url: url, options: options.avOptions)
         self.options = options
         itemObservation = player.observe(\.currentItem) { [weak self] player, _ in
-            guard let self else { return }
-            self.observer(playerItem: player.currentItem)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.observer(playerItem: player.currentItem)
+            }
         }
     }
 }
@@ -266,6 +268,9 @@ extension KSAVPlayer {
             let estimatedDataRates = item.tracks.compactMap { $0.assetTrack?.estimatedDataRate }
             fileSize = Double(estimatedDataRates.reduce(0, +)) * duration / 8
             isReadyToPlay = true
+            if urlAsset.url.isFileURL || item.isPlaybackLikelyToKeepUp || item.isPlaybackBufferFull {
+                loadState = .playable
+            }
         } else if item.status == .failed {
             error = item.error
         }
@@ -334,23 +339,27 @@ extension KSAVPlayer {
         guard let playerItem else { return }
         NotificationCenter.default.addObserver(self, selector: #selector(moviePlayDidEnd), name: .AVPlayerItemDidPlayToEndTime, object: playerItem)
         NotificationCenter.default.addObserver(self, selector: #selector(playerItemFailedToPlayToEndTime), name: .AVPlayerItemFailedToPlayToEndTime, object: playerItem)
-        statusObservation = playerItem.observe(\.status) { [weak self] item, _ in
-            guard let self else { return }
-            self.updateStatus(item: item)
+        statusObservation = playerItem.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.player.currentItem === item else { return }
+                self.updateStatus(item: item)
+            }
         }
-        loadedTimeRangesObservation = playerItem.observe(\.loadedTimeRanges) { [weak self] item, _ in
-            guard let self else { return }
-            // 计算缓冲进度
-            self.updatePlayableDuration(item: item)
+        loadedTimeRangesObservation = playerItem.observe(\.loadedTimeRanges, options: [.initial, .new]) { [weak self] item, _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.player.currentItem === item else { return }
+                self.updatePlayableDuration(item: item)
+            }
         }
 
-        let changeHandler: (AVPlayerItem, NSKeyValueObservedChange<Bool>) -> Void = { [weak self] _, _ in
-            guard let self else { return }
-            // 在主线程更新进度
-            if playerItem.isPlaybackBufferEmpty {
-                self.loadState = .loading
-            } else if playerItem.isPlaybackLikelyToKeepUp || playerItem.isPlaybackBufferFull {
-                self.loadState = .playable
+        let changeHandler: (AVPlayerItem, NSKeyValueObservedChange<Bool>) -> Void = { [weak self] item, _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.player.currentItem === item else { return }
+                if item.isPlaybackBufferEmpty {
+                    self.loadState = .loading
+                } else if item.isPlaybackLikelyToKeepUp || item.isPlaybackBufferFull {
+                    self.loadState = .playable
+                }
             }
         }
         bufferEmptyObservation = playerItem.observe(\.isPlaybackBufferEmpty, changeHandler: changeHandler)
@@ -419,6 +428,7 @@ extension KSAVPlayer: MediaPlayerProtocol {
             guard let self else { return }
             self.bufferingProgress = 0
             let playerItem = AVPlayerItem(asset: self.urlAsset)
+            playerItem.preferredForwardBufferDuration = self.options.preferredForwardBufferDuration
             self.options.openTime = CACurrentMediaTime()
             self.replaceCurrentItem(playerItem: playerItem)
             self.player.actionAtItemEnd = .pause

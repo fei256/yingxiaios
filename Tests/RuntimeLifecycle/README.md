@@ -9,7 +9,7 @@ On macOS with the build's Xcode selected:
 
 ```sh
 xcrun swiftc -swift-version 6 -parse-as-library \
-  Sources/TVCore/EpisodeSkip.swift Sources/TVCore/RemoteEpisodeSkip.swift Sources/TVCore/PlaybackOperationScope.swift Sources/TVCore/NodeSourceCompletion.swift Sources/TVCore/RuntimeStartupRegistry.swift \
+  Sources/TVCore/EpisodeSkip.swift Sources/TVCore/RemoteEpisodeSkip.swift Sources/TVCore/SystemPlaybackRoute.swift Sources/TVCore/PlaybackOperationScope.swift Sources/TVCore/NodeSourceCompletion.swift Sources/TVCore/RuntimeStartupRegistry.swift \
   Tests/RuntimeLifecycle/checks.swift -o build/ci/runtime-lifecycle-checks
 build/ci/runtime-lifecycle-checks build/ci/runtime-lifecycle-checks.json
 ```

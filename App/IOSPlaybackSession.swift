@@ -14,8 +14,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
 }
 
 /// iPhone and iPad share one playback session, including while its PiP window owns the picture.
-/// Every operation below targets KSPlaybackEngine; AVQueuePlayer is retained idle only for
-/// source compatibility with helpers compiled for other platforms.
+/// KSPlaybackEngine owns the active backend. Shared helpers retain a separate idle AVQueuePlayer.
 @MainActor @Perceptible final class PlaybackSession {
     static let sharedLocal = PlaybackSession()
     static weak var current: PlaybackSession?
@@ -331,6 +330,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         if sourceDanmakuGeneration == active { sourceDanmakuLoading = nil }
     }
     private func begin(_ channel: Channel) {
+        engine.beginPlaybackRoute()
         watchSampler.reset()
         startupWork = PlaybackStartupWork()
         if DanmakuSource.has(channel.url), LocalDanmakuPreferences.enabled(), LocalDanmakuPreferences.builtinEnabled() {
@@ -685,7 +685,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
         cancelDiscSelection()
         recovery?.cancel(); recovery = nil
         preparation?.cancel(); preparation = nil
-        saveHistory(); pendingResume = position; keepPausedAfterRestore = paused
+        saveHistory(); pendingResume = pendingResume ?? position; keepPausedAfterRestore = keepPausedAfterRestore || paused
         let selections = engine.selections
         externalSubtitles.prepareForReopen()
         generation = UUID()
