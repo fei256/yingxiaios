@@ -218,10 +218,18 @@ export class MobileServices {
           if (this.cache.covers(resource,0,limit-1)) { received += limit; continue; }
           let upstream;
           try {
-            upstream=await this.cache.open(resource,'GET',`bytes=0-${limit-1}`,'',combined);
-            const meta=this.cache.accept(resource,upstream.response);
-            if (upstream.response.status !== 206 || !meta || meta.start !== 0) continue;
-            for await (const data of this.cache.body(resource,upstream,meta,combined,limit)) received+=data.length;
+            let start = 0;
+            for (const block of this.cache.storedRanges(resource, limit)) {
+              if (block.start > start) break;
+              start = Math.max(start, block.end);
+            }
+            upstream = await this.cache.open(resource, 'GET', `bytes=${start}-${limit-1}`,
+              resource.meta?.validator || '', combined, { episodeWarm: true });
+            if (!upstream) return { bytes: received, deferred: true };
+            const meta = this.cache.accept(resource, upstream.response);
+            if (upstream.response.status !== 206 || !meta || meta.start !== start) continue;
+            received += start;
+            for await (const data of this.cache.body(resource, upstream, meta, upstream.signal, limit - start)) received += data.length;
           } finally {
             upstream?.controller.abort();await upstream?.response.body?.cancel().catch(()=>{});upstream?.releaseBudget?.();
           }
@@ -323,14 +331,21 @@ export class MobileServices {
         // 8 seconds / the minimum 0.25 scrolling speed = 32 seconds. A seek
         // must retain every still-visible ordinary cue as well as long effects.
         const position = Math.max(0, Number(params.position) || 0);
-        const start = Math.max(0, position - 32), end = position + Math.min(120, Math.max(20, Number(params.duration) || 60));
-        const chunks = document.manifest.chunks.filter(x => x.end >= start && x.time <= end);
+        const start = Math.max(0, position - 32);
+        let end = position + Math.min(120, Math.max(20, Number(params.duration) || 60));
+        let chunks = document.manifest.chunks.filter(x => x.end >= start && x.time <= end);
+        if (chunks.reduce((sum, chunk) => sum + chunk.count, 0) > 10000 ||
+            chunks.reduce((sum, chunk) => sum + chunk.bytes, 0) > 16 * 1024 ** 2) {
+          end = Math.min(end, position + 20);
+          chunks = chunks.filter(x => x.time <= end);
+        }
+        const dense = { items: [], count: document.manifest.count, tooDense: true };
         const file = await fs.open(document.file); const items = [];
         let retainedBytes = 0;
         try {
           for (const chunk of chunks) {
             if (items.length + chunk.count > 13000 || retainedBytes + chunk.bytes > 16 * 1024 ** 2)
-              throw new Error('当前时间段弹幕过于密集，超过安全窗口预算；未截断弹幕');
+              return dense;
             retainedBytes += chunk.bytes;
             signal?.throwIfAborted(); const buffer = Buffer.alloc(chunk.bytes);
             await file.read(buffer, 0, chunk.bytes, document.headerLength + chunk.offset);
@@ -342,7 +357,7 @@ export class MobileServices {
           if (event.time < start && event.time + lifetime >= start) items.push(event);
         }
         items.sort((a, b) => a.time - b.time);
-        if (items.length > 10000) throw new Error('当前时间段弹幕超过 10000 条；未截断弹幕');
+        if (items.length > 10000) return dense;
         this.assertSession(params); return { items, count: document.manifest.count };
       }
       case 'subtitle.search': return await this.subtitles.search(params, signal);

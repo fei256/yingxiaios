@@ -73,6 +73,15 @@ public struct SubtitleDocument: Sendable, Identifiable, Equatable {
         return showing.reversed()
     }
 
+    public func upcomingCues(at time: Int64, limit: Int) -> [Cue] {
+        var low = 0, high = reach.count
+        while low < high {
+            let middle = (low + high) / 2
+            if reach[middle] < time { low = middle + 1 } else { high = middle }
+        }
+        return Array(cues[low...].lazy.filter { $0.end >= time }.prefix(max(0, limit)))
+    }
+
     /// WebVTT cue text (what `RemuxPlan.cueText` makes) as plain text.
     static func plain(_ text: String) -> String {
         text.replacing(/<[^>]*>/, with: "")

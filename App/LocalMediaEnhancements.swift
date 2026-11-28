@@ -43,6 +43,7 @@ import TVCore
     @PerceptionIgnored private var builtinEnabled = LocalDanmakuPreferences.builtinEnabled()
     @PerceptionIgnored private var busy = false
     @PerceptionIgnored private var lastWindow = -1000.0
+    @PerceptionIgnored private var windowRetryAfter = 0.0
     @PerceptionIgnored private var lastPosition = -1.0
     @PerceptionIgnored private var lastOffset = 0.0
     @PerceptionIgnored private var lastTimelineRevision = -1
@@ -282,7 +283,7 @@ import TVCore
         generation = UUID(); loading?.cancel(); loading = nil; ready = false; serviceReady = false; indexed = false
         comments = []; revision = UUID(); sourceRevision = UUID(); isLive = false; nativeManual = false; descriptor = nil; busy = false
         usesBuiltinSource = false; selectedCatalogSource = nil; pendingCatalogSelection = nil; builtinEnabled = LocalDanmakuPreferences.builtinEnabled()
-        lastWindow = -1000; lastPosition = -1; timelineVersion = 0
+        lastWindow = -1000; windowRetryAfter = 0; lastPosition = -1; timelineVersion = 0
         lastTimelineRevision = -1; lastSampleWall = 0; liveSequence = 0; rawLiveComments = []; status = ""; notice = nil
         sessionID = ""; player = nil; channel = nil
         #if os(iOS)
@@ -386,7 +387,7 @@ import TVCore
             // Commit the track and its source together before fetching the first window.
             // Later callbacks may validate the transaction, but never restore its identity.
             selectedCatalogSource = source; usesBuiltinSource = builtin; pendingCatalogSelection = nil
-            nativeManual = manual; indexed = true; isLive = false; lastWindow = -1000; comments = []; rawLiveComments = []; revision = UUID(); sourceRevision = UUID()
+            nativeManual = manual; indexed = true; isLive = false; lastWindow = -1000; windowRetryAfter = 0; comments = []; rawLiveComments = []; revision = UUID(); sourceRevision = UUID()
             committed = true
             let count = prepared.object?["count"]?.int ?? 0
             setStatus(count > 0 ? (manual ? "已选择弹幕" : "已加载订阅弹幕") + " · \(count) 条" : "所选来源没有返回弹幕",
@@ -428,7 +429,7 @@ import TVCore
                 (position < lastPosition - 1 || position > lastPosition + max(5, (elapsed + 1) * max(1, speed)))
             if timelineChanged || clockJump {
                 timelineVersion += 1
-                lastWindow = -1000
+                lastWindow = -1000; windowRetryAfter = 0
                 _ = try await MobileMediaServices.call("session.set", sessionDefinition())
                 guard active == generation, catalog.selection.ticket == ticket else { return }
                 #if os(iOS)
@@ -504,27 +505,40 @@ import TVCore
                     }
                 }
             } else if indexed && (abs(position - lastWindow) > 15 || catalog.offset != lastOffset) {
+                guard now >= windowRetryAfter else { return }
                 let offset = catalog.offset
+                let source = sourceRevision
                 var params = serviceParams; params["position"] = .number(max(0, position - offset)); params["duration"] = .number(90)
                 let result = try await MobileMediaServices.call("danmaku.window", params)
-                guard active == generation, catalog.selection.ticket == ticket, catalog.offset == offset else { return }
+                let fields = result.object
+                let tooDense = fields?["tooDense"] == .bool(true)
+                let incoming = await Self.windowComments(fields?["items"]?.array ?? [], offset: offset)
+                guard active == generation, sourceRevision == source, catalog.selection.ticket == ticket,
+                      catalog.enabled, catalog.offset == offset, !Task.isCancelled else { return }
                 #if os(iOS)
                 guard engine?.timelineRevision == timeline, engine?.seeking != true else { return }
                 #endif
-                let incoming = (result.object?["items"]?.array ?? []).compactMap { NativeDanmakuDecoder.comment($0) }.map {
-                    Danmaku(time: max(0, $0.time + offset), position: $0.position, color: $0.color, scale: $0.scale, text: $0.text, effect: $0.effect)
-                }
                 let retimed = lastOffset != offset
                 if incoming != comments || retimed {
                     comments = incoming; revision = UUID()
                     if retimed { sourceRevision = UUID() }
                 }
                 lastWindow = position; lastOffset = offset
+                if tooDense { setStatus("当前时段弹幕过密，后续时段将自动恢复", kind: .warning) }
             }
         } catch {
             if active == generation, catalog.selection.ticket == ticket, !Task.isCancelled {
+                if indexed && !isLive { windowRetryAfter = ProcessInfo.processInfo.systemUptime + 5 }
                 setStatus(isLive ? "实时弹幕暂不可用，正在等待连接恢复" : "弹幕窗口加载失败，将重试", kind: .warning)
             }
+        }
+    }
+
+    nonisolated private static func windowComments(_ items: [JSONValue], offset: Double) async -> [Danmaku] {
+        items.compactMap { item in
+            guard let value = NativeDanmakuDecoder.comment(item) else { return nil }
+            return Danmaku(time: max(0, value.time + offset), position: value.position, color: value.color,
+                           scale: value.scale, text: value.text, effect: value.effect)
         }
     }
 }

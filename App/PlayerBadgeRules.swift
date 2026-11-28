@@ -5,7 +5,7 @@ import TVCore
 
 /// Ordered rules and artwork are copied from the installed MacCat. One match per group,
 /// with probed media fields taking priority over release-name guesses.
-struct PlayerBadgeRules {
+struct PlayerBadgeRules: Sendable {
     struct Row: Codable, Identifiable, Sendable {
         let id: String
         let name: String
@@ -16,7 +16,7 @@ struct PlayerBadgeRules {
         let flags: String?
     }
     struct Document: Decodable { let filters: [Row] }
-    struct Compiled {
+    struct Compiled: Sendable {
         let row: Row
         let expression: NSRegularExpression
     }

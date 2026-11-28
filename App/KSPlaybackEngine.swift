@@ -42,19 +42,48 @@ struct KSPlaybackSubtitleBitmap: Identifiable, Equatable {
 
 
 /// Cached parts keep stable identities between clock ticks, including overlapping ASS cues.
-private final class KSExternalSubtitleDocument {
+@MainActor private final class KSExternalSubtitleDocument {
     let document: SubtitleDocument
     var timing: SubtitleTiming
-    private let cues: [SubtitlePart]
-    private let reach: [Double]
+    private var index: KSExternalSubtitleIndex?
+    private var preparation: Task<Void, Never>?
     init(_ document: SubtitleDocument, timing: SubtitleTiming) {
         self.document = document; self.timing = timing
+    }
+    deinit { preparation?.cancel() }
+    func parts(at time: Double, styledOnly: Bool = false) -> [SubtitlePart] {
+        if styledOnly && !document.format.isStyled { return [] }
+        if let index { return styledOnly && !index.styled ? [] : index.parts(at: time) }
+        if preparation == nil {
+            preparation = Task.detached(priority: .utility) { [weak self, document] in
+                guard let index = KSExternalSubtitleIndex(document), !Task.isCancelled else { return }
+                await self?.install(index)
+            }
+        }
+        return []
+    }
+    private func install(_ value: KSExternalSubtitleIndex) { index = value; preparation = nil }
+}
+
+// The worker constructs the cue objects privately, then transfers them to the main actor.
+private final class KSExternalSubtitleIndex: @unchecked Sendable {
+    private let cues: [SubtitlePart]
+    private let reach: [Double]
+    let styled: Bool
+    init?(_ document: SubtitleDocument) {
         var parts: [SubtitlePart] = []
         if document.format.isStyled, let text = document.sourceText {
             let parser = AssParse(), scanner = Scanner(string: text)
             _ = scanner.scanCharacters(from: .controlCharacters)
-            if parser.canParse(scanner: scanner) { parts = parser.parse(scanner: scanner) }
+            if parser.canParse(scanner: scanner) {
+                while !scanner.isAtEnd {
+                    guard !Task.isCancelled else { return nil }
+                    if let part = parser.parsePart(scanner: scanner) { parts.append(part) }
+                }
+            }
         }
+        styled = !parts.isEmpty
+        guard !Task.isCancelled else { return nil }
         if parts.isEmpty {
             parts = document.cues.map { SubtitlePart(Double($0.start) / 1_000_000, Double($0.end) / 1_000_000, $0.text) }
         }
@@ -546,6 +575,9 @@ struct KSPlaybackChapter: Identifiable, Equatable {
         if externalSubtitleDocuments[document.id] == nil { externalSubtitleOrder.append(document.id) }
         externalSubtitleDocuments[document.id] = KSExternalSubtitleDocument(document, timing: timing)
         clearSubtitleOutput(); refreshTracks(); onTick?()
+    }
+    func externalStyledParts(_ id: String, at time: Double) -> [SubtitlePart] {
+        externalSubtitleDocuments[id]?.parts(at: time, styledOnly: true) ?? []
     }
     func removeExternalSubtitle(_ id: String) {
         guard externalSubtitleDocuments.removeValue(forKey: id) != nil else { return }

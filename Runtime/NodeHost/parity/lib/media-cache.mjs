@@ -141,6 +141,7 @@ export class MediaCache {
     Object.assign(this, { blockBytes, reserveBytes, idleTimeoutMs, writeBufferBytes, request });
     this.pendingBytes = 0; this.videoMaxBytes = GiB; this.useOrder = 0;
     this.foregroundReads = 0; this.filePrefetchActive = null; this.prefetchOwner = null;
+    this.episodeWarmRead = null;
     // libavformat opens a seek/tail request before closing its previous read.
     // One slot deadlocks that handover on moov-at-end MP4 and resume/seek.
     this.requestBudget = new RequestBudget({ perResource: 2 });
@@ -464,14 +465,19 @@ export class MediaCache {
       this.wakeForward();
     });
   }
-  async open(resource, method, range, ifRange, signal, { speculative = false } = {}) {
+  async open(resource, method, range, ifRange, signal, { episodeWarm = false, speculative = episodeWarm } = {}) {
     const headers = new Headers(resource.headers);
     headers.set('accept-encoding', 'identity'); headers.delete('range'); headers.delete('if-range');
     if (range) headers.set('range', range);
     if (ifRange) headers.set('if-range', ifRange);
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
+    if (episodeWarm) {
+      if (this.foregroundReads || this.filePrefetchActive || this.episodeWarmRead) return null;
+      this.episodeWarmRead = controller;
+    }
     if (!speculative) {
+      this.episodeWarmRead?.abort();
       resource.owner.prefetchReady = false;
       this.stopFilePrefetch();
       this.foregroundReads++;
@@ -480,6 +486,7 @@ export class MediaCache {
     const releaseBudget = () => {
       if (released) return;
       released = true; lease?.release();
+      if (this.episodeWarmRead === controller) this.episodeWarmRead = null;
       if (!speculative) { this.foregroundReads--; this.drainFilePrefetch(); }
     };
     let result;

@@ -132,8 +132,9 @@ public enum MobileMediaServices {
             complete: complete, cacheEnabled: enabled)
     }
     /// Cancelling this call stops speculative I/O while completed cache blocks remain reusable.
-    public static func prefetchPlayback(_ ownerID: String, maxBytes: Int = 15 * 1024 * 1024) async throws {
-        _ = try await call("playback.prefetch", ["id": .string(ownerID), "maxBytes": .number(Double(maxBytes))])
+    public static func prefetchPlayback(_ ownerID: String, maxBytes: Int = 15 * 1024 * 1024) async throws -> Bool {
+        let result = try await call("playback.prefetch", ["id": .string(ownerID), "maxBytes": .number(Double(maxBytes))])
+        return result.object?["deferred"] != .bool(true)
     }
     public static func call(_ method: String, _ params: [String: JSONValue] = [:]) async throws -> JSONValue {
         #if os(iOS) || os(tvOS)

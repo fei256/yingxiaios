@@ -1,8 +1,6 @@
 import Foundation
 
-/// What the player's info panel shows (Settings → Show Video Info, off by default): the picture, the sound and the
-/// stream's rate, one line each, from what AVFoundation reports about the playing item; and the short tags over the
-/// seek bar (`badges`), which show with the controls. Only the wording lives here; the app reads the values.
+/// Media measurements and display strings used by the player overlay, detail panel and badges.
 public struct PlaybackInfo: Equatable, Sendable {
     public static let key = "showsPlaybackInfo"
 
@@ -62,10 +60,20 @@ public struct PlaybackInfo: Equatable, Sendable {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    public var videoWithBitrate: String? {
+        guard let rate = formattedBitrate(language: nil) else { return video }
+        return video.map { $0 + " · " + rate } ?? rate
+    }
+
+    private func formattedBitrate(language: String?) -> String? {
+        guard let bitrate, bitrate.isFinite, bitrate > 0 else { return nil }
+        return L10n.text("Bitrate %@", Self.bits(bitrate), language: language)
+    }
+
     /// "Bitrate 4.2 Mb/s · Download 1.3 MB/s"
     public func network(language: String? = nil) -> String? {
         var parts: [String] = []
-        if let bitrate, bitrate.isFinite, bitrate > 0 { parts.append(L10n.text("Bitrate %@", Self.bits(bitrate), language: language)) }
+        if let rate = formattedBitrate(language: language) { parts.append(rate) }
         if let download, download.isFinite, download >= 0, bitrate != nil || download > 0 {
             parts.append(L10n.text("Download %@", Self.bytes(download), language: language))
         }

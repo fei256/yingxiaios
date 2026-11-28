@@ -28,8 +28,7 @@ import KSPlayer
     #if os(iOS)
     private(set) var styledParts: [SubtitlePart] = []
     private(set) var styledSourceTime = 0.0
-    @PerceptionIgnored private var documentStyledParts: [SubtitlePart] = []
-    @PerceptionIgnored private var documentStyledReach: [Double] = []
+    @PerceptionIgnored var externalStyledParts: ((String, Double) -> [SubtitlePart])?
     #endif
     @PerceptionIgnored var timing = SubtitleTiming() {
         didSet { if let lastAdvanced, document != nil { advance(to: lastAdvanced) } }
@@ -90,7 +89,7 @@ import KSPlayer
     }
     func resetKS() {
         lines = []; pictureSize = .zero; document = nil
-        styledParts = []; documentStyledParts = []; documentStyledReach = []
+        styledParts = []
         lastDocumentTexts = nil
         schedule.reset(); lastAdvanced = nil
     }
@@ -132,7 +131,7 @@ import KSPlayer
             }
             #if os(iOS)
             let sourceTime = Double(source) / 1_000_000
-            let styled = styledDocumentParts(at: sourceTime)
+            let styled = document.format.isStyled ? externalStyledParts?(document.id, sourceTime) ?? [] : []
             let changed = !styledParts.elementsEqual(styled, by: { $0 === $1 })
             if changed || styled.contains(where: { $0.animation.requiresContinuousTime }) {
                 if styledSourceTime != sourceTime { styledSourceTime = sourceTime }
@@ -158,17 +157,7 @@ import KSPlayer
         self.document = document
         lastDocumentTexts = nil
         #if os(iOS)
-        documentStyledParts = []; documentStyledReach = []; styledParts = []
-        if let document, document.format.isStyled, let text = document.sourceText {
-            let parser = AssParse()
-            let scanner = Scanner(string: text)
-            _ = scanner.scanCharacters(from: .controlCharacters)
-            if parser.canParse(scanner: scanner) {
-                documentStyledParts = parser.parse(scanner: scanner)
-                var reach = -Double.infinity
-                documentStyledReach = documentStyledParts.map { reach = max(reach, $0.end); return reach }
-            }
-        }
+        styledParts = []
         #endif
         schedule.reset()
         lines = []
@@ -176,22 +165,6 @@ import KSPlayer
     }
 
     @objc private func styleChanged() { style = SubtitleStyle.load() }
-
-    #if os(iOS)
-    private func styledDocumentParts(at time: Double) -> [SubtitlePart] {
-        var low = 0, high = documentStyledParts.count
-        while low < high {
-            let middle = (low + high) / 2
-            if documentStyledParts[middle].start <= time { low = middle + 1 } else { high = middle }
-        }
-        var index = low - 1, active: [SubtitlePart] = []
-        while index >= 0, documentStyledReach[index] > time {
-            if documentStyledParts[index].end > time { active.append(documentStyledParts[index]) }
-            index -= 1
-        }
-        return active.reversed()
-    }
-    #endif
 
     @objc private func delayChanged() {
         let next = SubtitleDelay.load()

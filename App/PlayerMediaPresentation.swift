@@ -115,8 +115,8 @@ struct PlayerTitleLogo: View {
 /// text labels while a network image is loading or unavailable.
 struct PlayerMediaBadges: View {
     @AppStorage(LocalMediaBadgeStore.enabledKey) private var enabled = true
-    @State private var selected = LocalMediaBadgeStore.load().active
-    @State private var catalog = LocalMediaBadgeStore.load().active.rules
+    @State private var catalog: (rules: PlayerBadgeRules?, builtin: Bool) = (nil, true)
+    @State private var rulesRevision = 0
     let session: PlaybackSession
     let channel: Channel
     private var badges: [PlayerBadgeRules.Row] {
@@ -149,20 +149,27 @@ struct PlayerMediaBadges: View {
         }
         if let channels = info.channels, channels > 0 { overrides["gc"] = [2:"2.0",6:"5.1",7:"6.1",8:"7.1"][channels] ?? "" }
         if let depth = session.engine.videoBitDepth, depth > 0 { overrides["bit-depth"] = "\(depth)bit" }
-        return catalog?.matches(title: title, overrides: overrides) ?? []
+        return catalog.rules?.matches(title: title, overrides: overrides) ?? []
     }
     var body: some View {
         WithPerceptionTracking {
             PlayerBadgeFlow(spacing: 7) {
                 ForEach(enabled ? badges : []) { badge in
-                    LocalMediaBadgeImage(badge: badge, builtin: selected.isBuiltin)
+                    LocalMediaBadgeImage(badge: badge, builtin: catalog.builtin)
                 }
             }
             .shadow(color: .black.opacity(0.6), radius: 3, y: 1)
             .accessibilityElement(children: .combine).accessibilityLabel("媒体规格")
             .accessibilityIdentifier("player.badges")
-            .onReceive(NotificationCenter.default.publisher(for: LocalMediaBadgeStore.changed)) { _ in
-                selected = LocalMediaBadgeStore.load().active; catalog = selected.rules
+            .onReceive(NotificationCenter.default.publisher(for: LocalMediaBadgeStore.changed)) { _ in rulesRevision &+= 1 }
+            .task(id: enabled ? rulesRevision : nil) {
+                guard enabled else { return }
+                let loaded = await Task.detached(priority: .utility) {
+                    let source = LocalMediaBadgeStore.load().active
+                    return (source.rules, source.isBuiltin)
+                }.value
+                guard !Task.isCancelled else { return }
+                catalog = loaded
             }
         }
     }

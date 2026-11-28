@@ -27,6 +27,7 @@ import TVCore
     @PerceptionIgnored private var retryAfter = Date.distantPast
     @PerceptionIgnored private var translating = false
     @PerceptionIgnored private var recognitionSettings: AISubtitleRecognitionSettings?
+    @PerceptionIgnored private var nextSettingsCheck = 0.0
     private(set) var generationError: String?
 
     init(session: PlaybackSession) { self.session = session }
@@ -87,7 +88,14 @@ import TVCore
     /// Called at the actual KS clock. Seeks, decoder/media changes, and audio selection cancel in-flight work.
     func tick() {
         guard generate || translate, let session else { return }
-        let settings = currentSettings
+        let uptime = ProcessInfo.processInfo.systemUptime
+        let settings: AISubtitleRecognitionSettings
+        if uptime < nextSettingsCheck, let recognitionSettings {
+            settings = recognitionSettings
+        } else {
+            settings = currentSettings
+            nextSettingsCheck = uptime + 1
+        }
         if recognitionSettings != settings {
             recognitionSettings = settings; generationError = nil
             generate = generate && settings.canGenerate; translate = translate && settings.canTranslate
@@ -124,6 +132,7 @@ import TVCore
         guard !session.paused || (generated.isEmpty && translate && !session.subtitles.lines.isEmpty) else { return }
         let ticket = epoch
         if generate && now + 6 >= sampledUntil && current.audioID != "no", let url = session.currentAudioSamplingURL {
+            guard !session.buffering else { return }
             let length = min(settings.isLocal ? 12 : 20, max(0, session.duration - now))
             guard length >= 0.5 else { return }
             let headers = session.currentAudioSamplingHeaders
@@ -190,8 +199,8 @@ import TVCore
         var candidates: [AISubtitleTimeline.Cue] = []
         if !generate, let document = session.externalSubtitles.document {
             let timing = session.externalSubtitles.timing
-            candidates = document.cues.filter { Double($0.end) / 1_000_000 * timing.scale + timing.delay >= now }
-                .prefix(12).map { .init(start: max(0, Double($0.start) / 1_000_000 * timing.scale + timing.delay),
+            candidates = document.upcomingCues(at: timing.source(at: now), limit: 12)
+                .map { .init(start: max(0, Double($0.start) / 1_000_000 * timing.scale + timing.delay),
                     end: Double($0.end) / 1_000_000 * timing.scale + timing.delay, text: $0.text) }
         } else if !generate, let nativeCue {
             // Native text arrives at its actual decoded cue boundary. A text change clears the previous result.

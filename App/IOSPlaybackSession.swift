@@ -183,6 +183,7 @@ private final class AudioServiceObservation: @unchecked Sendable {
     init() {
         enhancer = VideoEnhancer(player: player)
         externalSubtitles.cues = subtitles
+        subtitles.externalStyledParts = { [weak engine] id, time in engine?.externalStyledParts(id, at: time) ?? [] }
         catalogDanmaku.nativeSourceReload = { [weak self] in await self?.loadSourceDanmaku() }
         externalSubtitles.waitForAutomaticLoad = { [weak self] in
             guard let self else { throw CancellationError() }
@@ -1006,9 +1007,9 @@ private final class AudioServiceObservation: @unchecked Sendable {
         prefetchWarmID = warmID
         prefetchWarm = Task { [weak self] in
             do {
-                try await MobileMediaServices.prefetchPlayback(owner)
+                let complete = try await MobileMediaServices.prefetchPlayback(owner)
                 guard let self, self.generation == active, self.prefetchWarmID == warmID, !Task.isCancelled else { return }
-                self.prefetchComplete = true
+                self.prefetchComplete = complete
             } catch {}
             if let self, self.generation == active, self.prefetchWarmID == warmID { self.prefetchWarm = nil }
         }

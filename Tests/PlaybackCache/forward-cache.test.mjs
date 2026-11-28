@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 import { MediaCache } from '../../Runtime/NodeHost/parity/lib/media-cache.mjs';
+import { MobileServices } from '../../Runtime/NodeHost/mobile-services.mjs';
 
 const blockBytes = 1024;
 
@@ -75,6 +76,45 @@ async function consume(iterator, first) {
   for await (const bytes of { [Symbol.asyncIterator]: () => iterator }) chunks.push(bytes);
   return Buffer.concat(chunks);
 }
+
+test('next episode yields both before and during a current episode read', { timeout: 5000 }, async t => {
+  const { cache, resource, owner, requests } = await fixture(t, { request: () => ({ delayMs: 15 }) });
+  const service = Object.assign(Object.create(MobileServices.prototype), { cache });
+  const next = cache.createSession('next', { enabled: true, sizeGB: 2 });
+  cache.resource(next, 'https://media.example/next.mp4');
+  const warm = () => service.call('playback.prefetch', { id: next.id }, next.controller.signal);
+  const foreground = () => cache.open(resource, 'GET', 'bytes=0-1023', '', owner.controller.signal);
+  async function release(read) {
+    read.controller.abort(); await read.response.body.cancel(); read.releaseBudget();
+  }
+
+  const first = await foreground();
+  assert.equal((await warm()).deferred, true);
+  assert.equal(requests.length, 1);
+  await release(first);
+  const interrupted = assert.rejects(warm());
+  await waitFor(() => requests.length === 2, 'next episode should acquire the idle transport');
+  const second = await foreground();
+  await interrupted;
+  assert.equal(requests[1].signal.aborted, true);
+  await release(second);
+  assert.ok((await warm()).bytes > 0);
+});
+
+test('dense danmaku shortens lookahead, signals an overfull interval and recovers', async t => {
+  const { cache } = await fixture(t);
+  const service = Object.assign(Object.create(MobileServices.prototype), {
+    directory: cache.directory, danmakuRevision: 0, session: { id: 'episode' }
+  });
+  const comments = Array.from({ length: 10001 }, (_, i) => ({ time: 60 + i / 10000, text: String(i), mode: 1 }));
+  comments.unshift({ time: 1, text: 'start', mode: 1 });
+  comments.push({ time: 150, text: 'end', mode: 1 });
+  await service.call('danmaku.prepare', { sessionId: 'episode', text: JSON.stringify(comments) });
+  const windowAt = position => service.call('danmaku.window', { sessionId: 'episode', position, duration: 90 });
+  assert.deepEqual((await windowAt(0)).items.map(item => item.text), ['start']);
+  assert.equal((await windowAt(60)).tooDense, true);
+  assert.deepEqual((await windowAt(150)).items.map(item => item.text), ['end']);
+});
 
 test('finite file ranges fill disk ahead of a paused decoder', { timeout: 5000 }, async t => {
   const { owner, media, open } = await fixture(t);

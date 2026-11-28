@@ -208,8 +208,16 @@ struct MobilePlayerView: View {
 
     private var playbackInformation: some View {
         WithPerceptionTracking {
-            if controlsVisible && showsPlaybackInfo && session.showsPicture && session.error == nil && !pip.active && playingOn == nil {
-                PlaybackInfoPanel(session: session)
+            if controlsVisible && showsPlaybackInfo && session.showsPicture && session.error == nil && !pip.active && playingOn == nil,
+               let summary = session.engine.playbackInfo.videoWithBitrate {
+                Text(verbatim: summary)
+                    .font(.system(size: 11.5, weight: .medium)).monospacedDigit()
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("player.info")
+                    .padding(.top, inline ? 0 : 8)
             }
         }
     }
@@ -429,7 +437,7 @@ struct MobilePlayerView: View {
         switch phase {
         case .began(.seek):
             guard showsTransport, seekable, clock.duration > 0, playingOn == nil, !pip.active else { return }
-            let start = clock.currentPosition
+            let start = clock.position
             swipeStart = start
             clock.scrub(to: start)
             hideChrome()
@@ -664,18 +672,14 @@ struct MobilePlayerView: View {
             }
             .playerBleed(!inline)
             .allowsHitTesting(false)
-            VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 0) {
                 topRow
-                    .overlay(alignment: .bottomLeading) {
-                        if !inline {
-                            playbackInformation.alignmentGuide(.bottom) { $0[.top] - 12 }
-                        }
-                    }
+                if !inline { playbackInformation }
                 Spacer(minLength: 0)
                 if showsTransport {
                     VStack(spacing: 0) {
                         infoRow
-                        bottomRow
+                        if controlsVisible { bottomRow }
                         localBottomControls
                     }
                     .playerControlHitRegion()
@@ -707,13 +711,13 @@ struct MobilePlayerView: View {
                             .foregroundStyle(.white.opacity(0.8)).lineLimit(1)
                             .accessibilityIdentifier("player.episodeTitle")
                     }
-                    if playerSize.width <= 600, let status = session.cacheStatus {
+                    if controlsVisible, playerSize.width <= 600, let status = session.cacheStatus {
                         Text(status).font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
                             .accessibilityIdentifier("player.cacheStatus")
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading)
                 if inline { playbackInformation }
-                if playerSize.width > 600 {
+                if controlsVisible && playerSize.width > 600 {
                     VStack(alignment: .trailing, spacing: 3) {
                         if let status = session.cacheStatus {
                             Text(status).font(.caption2.monospacedDigit()).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
@@ -872,7 +876,7 @@ struct MobilePlayerView: View {
             }
         } else if session.hasTimeline {
             // Dragging holds the controls up itself (`hold`); a tap gesture here would compete with the scrubber's drag.
-            SeekBar(clock: clock, moving: controlsVisible && !session.paused && !pip.active && scenePhase == .active, hold: hold, sought: sought) { EmptyView() }
+            SeekBar(clock: clock, hold: hold, sought: sought) { EmptyView() }
         }
     }
 
@@ -1533,8 +1537,6 @@ private struct SeekBar<Accessory: View>: View {
     /// The time row leaves room for accessible episode-button targets.
     static var timeRow: CGFloat { 44 }
     let clock: PlayerClock
-    /// Playing with the controls showing: the bar follows the player every frame.
-    let moving: Bool
     let hold: (Bool) -> Void
     let sought: () -> Void
     /// At the right of the time: the episode buttons.
@@ -1548,13 +1550,7 @@ private struct SeekBar<Accessory: View>: View {
 
     var body: some View {
         WithPerceptionTracking {
-            // Every display frame while it plays, as AVKit's bar does; paused, held or hidden, only when the clock changes.
-            let follows = moving && clock.scrubbing == nil
-            TimelineView(.animation(paused: !follows)) { _ in
-                WithPerceptionTracking {
-                    bar(clock.scrubbing ?? (follows ? clock.currentPosition : clock.position))
-                }
-            }
+            bar(clock.scrubbing ?? clock.position)
             // Outside the bar, which is one accessibility element. Gone while scrubbing, when the time grows with the
             // scrubbing speed's label and the finger is there to scrub.
             .overlay(alignment: .topTrailing) {
@@ -1570,6 +1566,7 @@ private struct SeekBar<Accessory: View>: View {
     private func bar(_ position: Double) -> some View {
         let duration = clock.duration
         let value = min(max(0, position), duration)
+        let buffered = duration > 0 ? clock.bufferedPosition / duration : 0
         let held = drag != nil
         return HStack(spacing: 8) {
             Text(Self.format(value)).frame(minWidth: 40, alignment: .leading).accessibilityHidden(true)
@@ -1578,7 +1575,7 @@ private struct SeekBar<Accessory: View>: View {
                 let x = duration > 0 ? trackWidth * value / duration : 0
                 ZStack(alignment: .leading) {
                     PlayerTimelineTrack(played: duration > 0 ? value / duration : 0,
-                                        buffered: duration > 0 ? clock.bufferedPosition / duration : 0,
+                                        buffered: buffered,
                                         thickness: held ? 6 : 4)
                     Circle().fill(.white)
                         .frame(width: held ? 24 : 14, height: held ? 24 : 14)
@@ -2065,7 +2062,6 @@ private struct KSPlayerSurface: UIViewRepresentable {
             cacheComplete: session?.transfer.cacheComplete == true)
     }
     var presentationSize: CGSize { engine?.presentationSize ?? .zero }
-    var currentPosition: Double { engine?.position ?? 0 }
     private(set) var preview: CGImage?
     @PerceptionIgnored private var previewTask: Task<Void, Never>?
     @PerceptionIgnored private var previewScope = UUID()

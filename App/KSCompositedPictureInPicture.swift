@@ -21,7 +21,10 @@ import UIKit
     private var format: CMVideoFormatDescription?
     private var lastFrame: PixelBufferProtocol?
     private var lastTime = 0.0
-    private var lastPrimed = -Double.infinity
+    private var nextPrimeCheck = -Double.infinity
+    private var primeInterval = 0.5
+    private var lastClockRate: Double?
+    private var nextClockCheck = -Double.infinity
     private var lastPausedRefresh = -Double.infinity
     private var hasPresented = false
 
@@ -87,13 +90,19 @@ import UIKit
         layer.frame = sourceView.bounds
     }
 
-    /// A bounded warm-up keeps AVKit possible without compositing every inline video frame.
+    /// Keep the latest frame for the start transition. A ready standby layer needs no new composition.
     /// During PiP, every accepted decoded frame uses its own media time and selected cues.
     func submit(_ original: PixelBufferProtocol, time: Double, active: Bool, force: Bool = false) -> Bool {
         lastFrame = original
         lastTime = time
-        let now = ProcessInfo.processInfo.systemUptime
-        guard force || active || !hasPresented || now - lastPrimed >= 0.5 else { return true }
+        if !active && !force {
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now >= nextPrimeCheck else { return true }
+            nextPrimeCheck = now + primeInterval
+            if hasPresented && controller.isPictureInPicturePossible && layer.status == .rendering
+                && !layer.requiresFlushToResumeDecoding { primeInterval = 0.5; return true }
+            primeInterval = min(4, primeInterval * 2)
+        }
         guard original.width > 0, original.height > 0, time.isFinite else { return false }
         if layer.status == .failed || layer.requiresFlushToResumeDecoding { layer.flush() }
         guard layer.isReadyForMoreMediaData else { return !active }
@@ -136,8 +145,7 @@ import UIKit
            let entry = entries.first { entry[kCMSampleAttachmentKey_DisplayImmediately] = true }
         layer.enqueue(sample)
         guard layer.status != .failed else { return false }
-        synchronizeClock(time: time, rate: engine.map { $0.paused || $0.buffering || $0.seeking ? 0 : Double($0.speed) } ?? 0)
-        lastPrimed = now
+        synchronizeClock(time: time, rate: engine.map { $0.paused || $0.buffering || $0.seeking ? 0 : Double($0.speed) } ?? 0, force: force)
         hasPresented = true
         return true
     }
@@ -155,15 +163,25 @@ import UIKit
     }
 
     func invalidatePicture(at time: Double) {
-        lastFrame = nil; hasPresented = false; lastPrimed = -Double.infinity
+        lastFrame = nil; hasPresented = false; nextPrimeCheck = -Double.infinity
         lastTime = time
         layer.flushAndRemoveImage()
         subtitles.reset()
-        synchronizeClock(time: time, rate: 0)
+        primeInterval = 0.5
+        synchronizeClock(time: time, rate: 0, force: true)
     }
 
-    func synchronizeClock(time: Double, rate: Double) {
+    func synchronizeClock(time: Double, rate: Double, force: Bool = false) {
         guard time.isFinite, rate.isFinite, let timebase = layer.controlTimebase else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if !force && rate == lastClockRate {
+            guard now >= nextClockCheck else { return }
+            nextClockCheck = now + 0.5
+            let drift = CMTimebaseGetTime(timebase).seconds - max(0, time)
+            if drift.isFinite && abs(drift) < 0.15 * max(1, rate) { return }
+        }
+        lastClockRate = rate
+        nextClockCheck = now + 0.5
         CMTimebaseSetTime(timebase, time: CMTime(seconds: max(0, time), preferredTimescale: 60_000))
         CMTimebaseSetRate(timebase, rate: min(8, max(0, rate)))
     }
@@ -174,7 +192,7 @@ import UIKit
         layer.removeFromSuperlayer()
         sourceView.removeFromSuperview(); inlineHost = nil; parkedFrom = nil
         pool = nil; format = nil; poolSize = .zero
-        lastFrame = nil; hasPresented = false
+        lastFrame = nil; hasPresented = false; nextPrimeCheck = -Double.infinity
         subtitles.reset()
     }
 
